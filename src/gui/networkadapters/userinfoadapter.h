@@ -14,9 +14,11 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 #include <QUrl>
 
 class QNetworkAccessManager;
+class QNetworkReply;
 
 namespace OCC {
 
@@ -58,10 +60,12 @@ public:
      * @return the results from the reply, cleanly bundled in the result struct
      */
     UserInfoResult getResult();
+    void cancel();
 
 private:
     QNetworkAccessManager *_nam;
     QUrl _url;
     QString _authorizationHeader;
+    QPointer<QNetworkReply> _reply;
 };
 }

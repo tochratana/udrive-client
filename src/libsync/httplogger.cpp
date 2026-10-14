@@ -20,9 +20,12 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QLoggingCategory>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QSet>
+#include <QUrlQuery>
 
 #include <memory>
 
@@ -39,10 +42,67 @@ bool isTextBody(const QString &s)
     return regexp.match(s).hasMatch();
 }
 
+QString safeUrl(const QUrl &url)
+{
+    // Credentials can also be carried by URL userinfo or query parameters.
+    return QString::fromUtf8(url.adjusted(QUrl::RemoveUserInfo | QUrl::RemoveQuery | QUrl::RemoveFragment).toEncoded());
+}
+
+bool sensitiveField(const QString &name)
+{
+    static const QSet<QString> fields{QStringLiteral("access_token"), QStringLiteral("refresh_token"), QStringLiteral("id_token"),
+        QStringLiteral("client_secret"), QStringLiteral("code"), QStringLiteral("code_verifier"), QStringLiteral("password"), QStringLiteral("token"),
+        QStringLiteral("secret"), QStringLiteral("authorization")};
+    return fields.contains(name.toLower());
+}
+
+QJsonValue sanitizedJson(const QJsonValue &value)
+{
+    if (value.isObject()) {
+        auto object = value.toObject();
+        for (auto it = object.begin(); it != object.end(); ++it)
+            it.value() = sensitiveField(it.key()) ? QJsonValue(QStringLiteral("[redacted]")) : sanitizedJson(it.value());
+        return object;
+    }
+    if (value.isArray()) {
+        QJsonArray array;
+        for (const auto &item : value.toArray())
+            array.append(sanitizedJson(item));
+        return array;
+    }
+    return value;
+}
+
+QString safeBody(const QByteArray &bytes, const QString &contentType)
+{
+    const auto mime = contentType.section(QLatin1Char(';'), 0, 0).trimmed().toLower();
+    if (mime == QStringLiteral("application/x-www-form-urlencoded")) {
+        // Decode names before checking them, including percent-encoded aliases.
+        QUrlQuery input(QString::fromUtf8(bytes));
+        QUrlQuery output;
+        for (const auto &item : input.queryItems(QUrl::FullyDecoded)) {
+            output.addQueryItem(QString::fromUtf8(QUrl::toPercentEncoding(item.first)),
+                QString::fromUtf8(QUrl::toPercentEncoding(sensitiveField(item.first) ? QStringLiteral("[redacted]") : item.second)));
+        }
+        return output.query(QUrl::FullyEncoded);
+    }
+    const auto trimmed = bytes.trimmed();
+    if (mime.contains(QStringLiteral("json")) || trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        QJsonParseError error;
+        const auto document = QJsonDocument::fromJson(bytes, &error);
+        if (error.error != QJsonParseError::NoError)
+            return QStringLiteral("[unparseable body omitted]");
+        const auto sanitized = sanitizedJson(document.isObject() ? QJsonValue(document.object()) : QJsonValue(document.array()));
+        const auto result = sanitized.isObject() ? QJsonDocument(sanitized.toObject()) : QJsonDocument(sanitized.toArray());
+        return QString::fromUtf8(result.toJson(QJsonDocument::Compact));
+    }
+    return QString::fromUtf8(bytes);
+}
+
 struct HttpContext
 {
     HttpContext(const QNetworkRequest &request)
-        : originalUrl(QString::fromUtf8(request.url().toEncoded())) // Encoded URL as it is passed "over the wire"
+        : originalUrl(safeUrl(request.url()))
         , lastUrl(request.url())
         , id(QString::fromUtf8(request.rawHeader(QByteArrayLiteral("X-Request-ID"))))
     {
@@ -51,7 +111,7 @@ struct HttpContext
     void addRedirect(const QUrl &url)
     {
         lastUrl = url;
-        redirectUrls.append(url.toString());
+        redirectUrls.append(safeUrl(url));
     }
 
     const QString originalUrl;
@@ -65,15 +125,16 @@ struct HttpContext
 
 void logHttp(const QByteArray &verb, HttpContext *ctx, QJsonObject &&header, QIODevice *device, bool cached = false)
 {
-    static const bool redact = !qEnvironmentVariableIsSet("OWNCLOUD_HTTPLOGGER_NO_REDACT");
     const auto reply = qobject_cast<QNetworkReply *>(device);
 
-    if (redact) {
-        const QString authKey = QStringLiteral("Authorization");
-        const QString auth = header.value(authKey).toString();
-        if (!auth.isEmpty()) {
-            header.insert(authKey, auth.startsWith(QStringLiteral("Bearer ")) ? QStringLiteral("Bearer [redacted]") : QStringLiteral("Basic [redacted]"));
-        }
+    // Credential redaction is mandatory, including the legacy no-redact mode.
+    for (auto it = header.begin(); it != header.end(); ++it) {
+        const auto name = it.key().toLower();
+        if (name == QStringLiteral("authorization") || name == QStringLiteral("proxy-authorization") || name == QStringLiteral("cookie")
+            || name == QStringLiteral("set-cookie") || name == QStringLiteral("x-auth-token") || name == QStringLiteral("x-access-token"))
+            it.value() = QStringLiteral("[redacted]");
+        else if (name == QStringLiteral("location"))
+            it.value() = safeUrl(QUrl(it.value().toString()));
     }
 
     QJsonObject info{{QStringLiteral("method"), QString::fromUtf8(verb)}, {QStringLiteral("id"), ctx->id}, {QStringLiteral("url"), ctx->originalUrl}};
@@ -93,7 +154,8 @@ void logHttp(const QByteArray &verb, HttpContext *ctx, QJsonObject &&header, QIO
                 QStringLiteral("HTTP %1").arg(
                     reply->attribute(QNetworkRequest::Http2WasUsedAttribute).toBool() ? QStringLiteral("1.1") : QStringLiteral("2"))}};
         if (reply->error() != QNetworkReply::NoError) {
-            replyInfo.insert(QStringLiteral("error"), reply->errorString());
+            // Native error strings can repeat credential-bearing request URLs.
+            replyInfo.insert(QStringLiteral("error"), static_cast<int>(reply->error()));
         }
         info.insert(QStringLiteral("reply"), replyInfo);
     } else {
@@ -114,12 +176,11 @@ void logHttp(const QByteArray &verb, HttpContext *ctx, QJsonObject &&header, QIO
                 device->open(QIODevice::ReadOnly);
             }
             Q_ASSERT(device->pos() == 0);
-            QString data = QString::fromUtf8(device->peek(PeekSize));
-            if (PeekSize < contentLength)
-            {
-                data += QStringLiteral("...(%1 bytes elided)").arg(QString::number(contentLength - PeekSize));
-            }
-            body[QStringLiteral("data")] = data;
+            // A truncated JSON/form value cannot be safely filtered. Read one
+            // extra byte to detect unknown-length sequential responses too.
+            const auto bytes = device->peek(PeekSize + 1);
+            body[QStringLiteral("data")] =
+                contentLength > PeekSize || bytes.size() > PeekSize ? QStringLiteral("[large body omitted]") : safeBody(bytes, contentType);
         } else {
             body[QStringLiteral("data")] = QStringLiteral("%1 bytes of %2 data").arg(QString::number(contentLength), contentType);
         }
@@ -146,8 +207,8 @@ void HttpLogger::logRequest(QNetworkReply *reply, QNetworkAccessManager::Operati
 
     const auto logError = [reply, operation, id = ctx->id]() {
         auto url = reply->request().url();
-        qCInfo(lcNetworkHttp).noquote().nospace() << "An error occurred for " << url.toDisplayString() << ": " << reply->errorString() << " (" << reply->error()
-                                                  << ", " << operation << "), request-id: " << id;
+        qCInfo(lcNetworkHttp).noquote().nospace() << "An error occurred for " << safeUrl(url) << " (" << reply->error() << ", " << operation
+                                                  << "), request-id: " << id;
     };
 
     // device should still exist, lets still use a qpointer to ensure we have valid data

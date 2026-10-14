@@ -103,7 +103,9 @@ void GeneralSettings::loadMiscSettings()
     // the dropdown has to be populated before we can can pick an entry below based on the stored setting
     loadLanguageNamesIntoDropdown();
 
-    const auto &locale = cfgFile.uiLanguage();
+    QString locale = cfgFile.uiLanguage();
+    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive"))
+        locale = Translations::udriveLocale(locale.isEmpty() ? QLocale::system().uiLanguages().value(0, QLocale::system().name()) : locale);
     const auto index = _ui->languageDropdown->findData(locale);
     _ui->languageDropdown->setCurrentIndex(index < 0 ? 0 : index);
 }
@@ -123,7 +125,7 @@ void GeneralSettings::saveMiscSettings()
     Theme::instance()->setSystrayUseMonoIcons(isChecked);
     cfgFile.setCrashReporter(_ui->crashreporterCheckBox->isChecked());
 
-    // the first entry, identified by index 0, means "use default", which is a special case handled below
+    // UDrive stores an explicit supported locale; upstream can also store its default entry.
     const QString pickedLocale = _ui->languageDropdown->currentData().toString();
     cfgFile.setUiLanguage(pickedLocale);
 }
@@ -171,6 +173,15 @@ void GeneralSettings::loadLanguageNamesIntoDropdown()
 {
     // allow method to be called more than once
     _ui->languageDropdown->clear();
+
+    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+        _ui->languageDropdown->setProperty("udriveCombo", true);
+        // Keep native language names recognizable regardless of the active translation.
+        _ui->languageDropdown->addItem(QStringLiteral("English"), QStringLiteral("en_US"));
+        _ui->languageDropdown->addItem(QStringLiteral("ភាសាខ្មែរ - Khmer"), QStringLiteral("km"));
+        _ui->languageDropdown->addItem(QStringLiteral("中文 - Chinese"), QStringLiteral("zh_CN"));
+        return;
+    }
 
     // if no option has been chosen explicitly by the user, the first entry shall be used
     _ui->languageDropdown->addItem(tr("(use default)"));

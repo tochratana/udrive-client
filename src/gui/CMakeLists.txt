@@ -45,6 +45,9 @@ set(client_SRCS
     activitysettings.cpp
     selectivesyncwidget.cpp
     settingsdialog.cpp
+    udrivefilebrowser.cpp
+    udrivethumbnails.cpp
+    udriveicons.qrc
     tlserrordialog.cpp
     syncrunfilelog.cpp
     accountstate.cpp
@@ -87,7 +90,7 @@ set_target_properties(owncloudGui PROPERTIES AUTOUIC ON AUTORCC ON)
 target_include_directories(owncloudGui PRIVATE models spaces creds)
 target_link_libraries(owncloudGui
     PUBLIC
-        Qt::Widgets Qt::Network Qt::Xml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
+        Qt::Concurrent Qt::Widgets Qt::Network Qt::Xml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
         folderwizard
         libsync
         Qt6Keychain::Qt6Keychain
@@ -102,6 +105,8 @@ ecm_add_qml_module(owncloudGui
         QML_FILES
             qml/AccountBar.qml
             qml/AccountButton.qml
+            qml/UDriveSidebar.qml
+            qml/UDriveNavigationButton.qml
 
             spaces/qml/SpaceDelegate.qml
             spaces/qml/SpacesView.qml
@@ -125,7 +130,10 @@ target_include_directories(owncloudGui PUBLIC
 )
 
 IF( APPLE )
+    target_link_libraries(owncloudGui PRIVATE "-framework CoreGraphics")
     target_sources(owncloudGui PRIVATE
+            udrivepdfpreview.cpp
+            udrivepdfdocument_mac.mm
             settingsdialog_mac.mm
             guiutility_mac.mm
             folderwatcher_mac.cpp)
@@ -161,6 +169,19 @@ set_target_properties(owncloud PROPERTIES
 apply_common_target_settings(owncloud)
 target_link_libraries(owncloud PUBLIC owncloudGui owncloudResources KDAB::kdsingleapplication )
 target_link_libraries(owncloud PRIVATE Qt6::Core)
+
+if(APPLE)
+    add_executable(udrivePdfRenderer udrivepdfrenderer.cpp udrivepdfdocument_mac.mm)
+    set_target_properties(udrivePdfRenderer PROPERTIES OUTPUT_NAME "udrive-pdf-renderer" MACOSX_BUNDLE FALSE
+        BUILD_RPATH "@executable_path/../Frameworks" INSTALL_RPATH "@executable_path/../Frameworks")
+    apply_common_target_settings(udrivePdfRenderer)
+    target_link_libraries(udrivePdfRenderer PRIVATE Qt::Core Qt::Gui "-framework CoreGraphics" "-framework CoreFoundation")
+    add_dependencies(owncloud udrivePdfRenderer)
+    set_property(TARGET owncloud APPEND PROPERTY LINK_DEPENDS "$<TARGET_FILE:udrivePdfRenderer>")
+    add_custom_command(TARGET owncloud POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:udrivePdfRenderer> "$<TARGET_FILE_DIR:owncloud>/udrive-pdf-renderer")
+    install(TARGETS udrivePdfRenderer RUNTIME DESTINATION "${KDE_INSTALL_BUNDLEDIR}/${APPLICATION_EXECUTABLE}.app/Contents/MacOS")
+endif()
 
 MESSAGE(STATUS "OWNCLOUD_SIDEBAR_ICONS: ${APPLICATION_ICON_NAME}: ${OWNCLOUD_SIDEBAR_ICONS}")
 

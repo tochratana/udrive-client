@@ -95,10 +95,10 @@ CommandLineOptions parseOptions(const QStringList &arguments)
     QTextStream descriptionTextStream(&descriptionText);
 
     descriptionTextStream << QApplication::translate("CommandLine", "%1 version %2\r\nFile synchronization desktop utility.")
-                                 .arg(Theme::instance()->appName(), OCC::Version::displayString())
+                                 .arg(Theme::instance()->appNameGUI(), OCC::Version::displayString())
                           << Qt::endl;
 
-    if (Theme::instance()->appName() == QLatin1String("ownCloud")) {
+    if (Theme::instance()->appNameGUI() == QLatin1String("ownCloud")) {
         descriptionTextStream
             << Qt::endl
             << Qt::endl
@@ -264,6 +264,12 @@ QString setupTranslations(QApplication *app)
         uiLanguages.prepend(enforcedLocale);
     }
 
+    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+        const QString preferred = enforcedLocale.isEmpty() ? uiLanguages.value(0, QStringLiteral("en_US")) : enforcedLocale;
+        uiLanguages = {Translations::udriveLocale(preferred), QStringLiteral("en_US")};
+        uiLanguages.removeDuplicates();
+    }
+
     QString displayLanguage;
 
     auto substLang = [](const QString &lang) {
@@ -368,6 +374,7 @@ int main(int argc, char **argv)
         QApplication app(argc, argv);
         app.setOrganizationDomain(Theme::instance()->orgDomainName());
         app.setApplicationName(Theme::instance()->appName());
+        app.setApplicationDisplayName(Theme::instance()->appNameGUI());
         app.setWindowIcon(Theme::instance()->applicationIcon());
         app.setApplicationVersion(Theme::instance()->versionSwitchOutput());
 

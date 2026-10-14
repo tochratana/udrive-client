@@ -126,9 +126,9 @@ public:
      *
      * @return QString with app name.
      */
-    QString appName() const;
+    virtual QString appName() const;
 
-    QString orgDomainName() const;
+    virtual QString orgDomainName() const;
 
     QString vendor() const;
 

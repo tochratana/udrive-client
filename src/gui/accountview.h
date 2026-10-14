@@ -69,6 +69,7 @@ protected slots:
     void slotAccountStateChanged(AccountState::State state);
     void slotDeleteAccount();
     void slotOpenAccountInBrowser();
+    void slotOpenLocalFolder();
     void slotToggleSignInState();
     void slotFolderWizardAccepted();
     void onRequestShowModalWidget(QWidget *widget) { addModalLegacyDialog(widget, ModalWidgetSizePolicy::Expanding); }
@@ -88,6 +89,7 @@ private:
 
 
     void buildManageAccountMenu();
+    void updateFolderShortcut();
 
     Ui::AccountView *ui;
 

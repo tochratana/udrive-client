@@ -12,6 +12,7 @@
  * for more details.
  */
 #include "credentials.h"
+#include "localdevelopment.h"
 
 #include "accessmanager.h"
 #include "account.h"
@@ -49,6 +50,32 @@ QString refreshTokenKeyC()
 
 namespace OCC {
 
+namespace {
+    class RejectedRequestReply final : public QNetworkReply
+    {
+    public:
+        RejectedRequestReply(QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QObject *parent)
+            : QNetworkReply(parent)
+        {
+            setOperation(operation);
+            setRequest(request);
+            setUrl(request.url());
+            open(QIODevice::ReadOnly);
+            setError(QNetworkReply::ProtocolInvalidOperationError,
+                QObject::tr("Authenticated requests require HTTPS. HTTP is only available in local development mode."));
+            QTimer::singleShot(0, this, [this] {
+                setFinished(true);
+                Q_EMIT errorOccurred(error());
+                Q_EMIT finished();
+            });
+        }
+        void abort() override { }
+
+    protected:
+        qint64 readData(char *, qint64) override { return -1; }
+    };
+}
+
 class CredentialsAccessManager : public AccessManager
 {
     Q_OBJECT
@@ -64,7 +91,18 @@ protected:
     QNetworkReply *createRequest(Operation op, const QNetworkRequest &request, QIODevice *outgoingData) override
     {
         QNetworkRequest req(request);
+        // Includes explicitly supplied Basic/Bearer credentials and cookies:
+        // DontAddCredentialsAttribute only suppresses automatic insertion.
+        if (!_cred || !_cred->_account || !LocalDevelopment::allowsAuthenticatedUrl(req.url(), _cred->_account->url())) {
+            return new RejectedRequestReply(op, req, this);
+        }
+        // Redirects are validated by the account machinery, never internally
+        // forwarded by QNAM to another transport without rechecking policy.
+        req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
         if (!req.attribute(DontAddCredentialsAttribute).toBool()) {
+            // A retried request may still carry the old injected header.
+            // Always replace it, including when logout cleared our token.
+            req.setRawHeader("Authorization", QByteArray());
             if (_cred && !_cred->_accessToken.isEmpty()) {
                 req.setRawHeader("Authorization", "Bearer " + _cred->_accessToken.toUtf8());
             }
@@ -141,12 +179,16 @@ void Credentials::handleKeychainError(const QString &message)
 
 void Credentials::fetchCredentialsFromKeychain()
 {
-    auto job = _account->credentialManager()->get(refreshTokenKeyC());
+    const auto generation = _authenticationGeneration;
+    auto job = createKeychainReadJob();
     if (!job) {
         handleKeychainError("get credentials job is null - most likely the key does not exist in the credentials manager");
         return;
     }
-    connect(job, &CredentialJob::finished, this, [job, this] {
+    connect(job, &CredentialJob::finished, this, [guard = QPointer<CredentialJob>(job), this, generation] {
+        auto *job = guard.data();
+        if (!job || generation != _authenticationGeneration)
+            return;
         if (job->error() != QKeychain::NoError) {
             handleKeychainError(job->errorString());
             return;
@@ -159,6 +201,11 @@ void Credentials::fetchCredentialsFromKeychain()
             handleKeychainError("get credentials data is empty");
         }
     });
+}
+
+CredentialJob *Credentials::createKeychainReadJob()
+{
+    return _account ? _account->credentialManager()->get(refreshTokenKeyC()) : nullptr;
 }
 
 // Lisa todo: this is called periodically, find the trigger. it's coming mostly from the jobs :(
@@ -205,7 +252,9 @@ void Credentials::handleRefreshError(QNetworkReply::NetworkError error, const QS
 {
     Q_UNUSED(message);
 
-    _oAuthJob->deleteLater();
+    if (_oAuthJob)
+        _oAuthJob->deleteLater();
+    _oAuthJob.clear();
     _tokenRefreshRetriesCount++;
     std::chrono::seconds timeout = {};
 
@@ -242,13 +291,19 @@ void Credentials::handleRefreshError(QNetworkReply::NetworkError error, const QS
         _tokenRefreshRetriesCount = 0;
         return;
     }
-    QTimer::singleShot(timeout, this, [this] { refreshAccessTokenInternal(); });
+    const auto generation = _authenticationGeneration;
+    QTimer::singleShot(timeout, this, [this, generation] {
+        if (generation == _authenticationGeneration)
+            refreshAccessTokenInternal();
+    });
     Q_EMIT authenticationFailed();
 }
 
 void Credentials::handleRefreshSuccess(const QString &accessToken, const QString &refreshToken)
 {
-    _oAuthJob->deleteLater();
+    if (_oAuthJob)
+        _oAuthJob->deleteLater();
+    _oAuthJob.clear();
     _tokenRefreshRetriesCount = 0;
     if (refreshToken.isEmpty()) {
         qCWarning(lcCredentials) << "Refresh job succeeded but refreshToken is empty -> log out";
@@ -285,17 +340,26 @@ bool Credentials::networkAvailable()
 
 void Credentials::refreshAccessTokenInternal()
 {
-    if (!_account)
+    if (!_account || _refreshToken.isEmpty() || _oAuthJob)
         return;
 
     // parent with nam to ensure we reset when the nam is reset
     // todo: #22 - the parenting here is highly questionable, as is the use of the shared account ptr
     _oAuthJob = new AccountBasedOAuth(_account, _openIdConfig, this);
-    connect(_oAuthJob, &AccountBasedOAuth::refreshError, this, &Credentials::handleRefreshError);
-    connect(_oAuthJob, &AccountBasedOAuth::refreshFinished, this, &Credentials::handleRefreshSuccess);
+    const auto generation = _authenticationGeneration;
+    const QPointer<AccountBasedOAuth> job = _oAuthJob;
+    connect(job, &AccountBasedOAuth::refreshError, this, [this, job, generation](QNetworkReply::NetworkError error, const QString &message) {
+        if (generation == _authenticationGeneration && job && _oAuthJob == job)
+            handleRefreshError(error, message);
+    });
+    connect(job, &AccountBasedOAuth::refreshFinished, this, [this, job, generation](const QString &token, const QString &refreshToken) {
+        if (generation == _authenticationGeneration && job && _oAuthJob == job)
+            handleRefreshSuccess(token, refreshToken);
+    });
 
     Q_EMIT authenticationStarted();
-    _oAuthJob->refreshAuthentication(_refreshToken);
+    if (generation == _authenticationGeneration && _oAuthJob == job && job)
+        job->refreshAuthentication(_refreshToken);
 }
 
 void Credentials::askFromUser()
@@ -310,36 +374,46 @@ void Credentials::askFromUser()
     // the widget is parented to the AccountModalWidget when it's installed in the main window.
     // it will be cleaned up there - this is not a leak
     RequestAuthenticationWidget *widget = new RequestAuthenticationWidget();
-    _requestAuth = new RequestAuthenticationController(widget, this);
+    connectAuthenticationController(new RequestAuthenticationController(widget, this));
+    _requestAuth->startAuthentication(_account);
+}
+
+void Credentials::connectAuthenticationController(RequestAuthenticationController *controller)
+{
+    _requestAuth = controller;
     // we should not connect to the failed signal as we are forcing the user to make the decision using the gui.
     // if they log in successfully, we get the success signal.
     // if the auth fails the gui stays until the user gets it right or clicks the stay logged out button.
-    connect(_requestAuth, &RequestAuthenticationController::authenticationSucceeded, this, &Credentials::askFromUserSucceeded);
-    connect(_requestAuth, &RequestAuthenticationController::requestLogout, this, &Credentials::askFromUserLogout);
-    _requestAuth->startAuthentication(_account);
+    const auto generation = _authenticationGeneration;
+    const QPointer<RequestAuthenticationController> guard = controller;
+    connect(controller, &RequestAuthenticationController::authenticationSucceeded, this,
+        [this, guard, generation](const QString &token, const QString &refreshToken) {
+            if (generation == _authenticationGeneration && guard && _requestAuth == guard)
+                askFromUserSucceeded(token, refreshToken);
+        });
+    connect(controller, &RequestAuthenticationController::requestLogout, this, [this, guard, generation] {
+        if (generation == _authenticationGeneration && guard && _requestAuth == guard)
+            askFromUserLogout();
+    });
 }
 
 void Credentials::askFromUserSucceeded(const QString &token, const QString &refreshToken)
 {
+    if (_requestAuth) {
+        _requestAuth->deleteLater();
+        _requestAuth.clear();
+    }
     _accessToken = token;
     _refreshToken = refreshToken;
     _ready = true;
     persist();
     Q_EMIT fetched();
-
-    if (_requestAuth) {
-        delete _requestAuth;
-        _requestAuth = nullptr;
-    }
 }
 
 void Credentials::askFromUserLogout()
 {
+    forgetSensitiveData();
     Q_EMIT requestLogout();
-    if (_requestAuth) {
-        delete _requestAuth;
-        _requestAuth = nullptr;
-    }
 }
 
 void Credentials::invalidateToken()
@@ -372,6 +446,19 @@ void Credentials::invalidateToken()
 
 void Credentials::forgetSensitiveData()
 {
+    ++_authenticationGeneration;
+    _tokenRefreshRetriesCount = 0;
+    if (_oAuthJob) {
+        disconnect(_oAuthJob, nullptr, this, nullptr);
+        _oAuthJob->deleteLater();
+        _oAuthJob.clear();
+    }
+    if (_requestAuth) {
+        disconnect(_requestAuth, nullptr, this, nullptr);
+        _requestAuth->cancelAuthentication();
+        _requestAuth->deleteLater();
+        _requestAuth.clear();
+    }
     // need to be done before invalidateToken, so it actually deletes the refresh_token from the keychain
     // to do, make that more explicit
     _refreshToken.clear();

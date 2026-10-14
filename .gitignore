@@ -1,4 +1,4 @@
-/branding/
+# UDrive branding is part of this fork and is committed with the source.
 .gitmodules
 *build*/
 *flymake*
@@ -180,3 +180,5 @@ test/gui/config.ini
 test/gui/reports
 */**/__pycache__/
 test/gui/users.json
+scripts
+DEVELOPMENT.md

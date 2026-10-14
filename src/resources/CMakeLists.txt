@@ -33,7 +33,15 @@ generate_export_header(owncloudResources
 )
 
 # Handle Translations, pick all client_* files from trans directory.
-file(GLOB client_translations ${CMAKE_SOURCE_DIR}/translations/client_*.ts)
+if(APPLICATION_NAME STREQUAL "UDrive")
+    set(client_translations
+        ${CMAKE_SOURCE_DIR}/translations/client_en_US.ts
+        ${CMAKE_SOURCE_DIR}/translations/client_km.ts
+        ${CMAKE_SOURCE_DIR}/translations/client_zh_CN.ts
+    )
+else()
+    file(GLOB client_translations ${CMAKE_SOURCE_DIR}/translations/client_*.ts)
+endif()
 qt_add_lrelease(owncloudResources TS_FILES ${client_translations} QM_FILES_OUTPUT_VARIABLE client_compiled_translations)
 add_resources_to_target(
     TARGET owncloudResources

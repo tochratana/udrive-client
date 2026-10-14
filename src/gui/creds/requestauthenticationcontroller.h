@@ -15,6 +15,7 @@
 
 #include <QObject>
 
+#include "gui/owncloudguilib.h"
 #include "oauth.h"
 
 namespace OCC {
@@ -24,13 +25,14 @@ class AccountBasedOAuth;
 class Account;
 class AccountModalWidget;
 
-class RequestAuthenticationController : public QObject
+class OWNCLOUDGUI_EXPORT RequestAuthenticationController : public QObject
 {
     Q_OBJECT
 public:
     explicit RequestAuthenticationController(RequestAuthenticationWidget *widget, QObject *parent);
 
     void startAuthentication(Account *account);
+    void cancelAuthentication();
 
 Q_SIGNALS:
     void requestLogout();

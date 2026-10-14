@@ -30,6 +30,7 @@ class QAuthenticator;
 namespace OCC {
 class OAuth;
 class RequestAuthenticationController;
+class CredentialJob;
 
 class OWNCLOUDGUI_EXPORT Credentials : public AbstractCredentials
 {
@@ -84,6 +85,8 @@ protected:
 
     void slotAuthentication(QNetworkReply *reply, QAuthenticator *authenticator);
     void fetchCredentialsFromKeychain();
+    virtual CredentialJob *createKeychainReadJob();
+    void connectAuthenticationController(RequestAuthenticationController *controller);
     void refreshAccessTokenInternal();
 
     void askFromUserSucceeded(const QString &token, const QString &refreshToken);
@@ -99,7 +102,8 @@ protected:
 
     QPointer<AccountBasedOAuth> _oAuthJob;
 
-    RequestAuthenticationController *_requestAuth = nullptr;
+    QPointer<RequestAuthenticationController> _requestAuth;
+    quint64 _authenticationGeneration = 0;
 };
 
 

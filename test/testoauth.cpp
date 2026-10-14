@@ -312,6 +312,35 @@ private Q_SLOTS:
         test.test();
     }
 
+    void testCancelDuringUserInfo()
+    {
+        struct Test : OAuthTestCase
+        {
+            bool destroyed = false;
+            int authResults = 0;
+            bool done() const override { return destroyed && replyToBrowserOk; }
+            QNetworkReply *userInfoReply(QNetworkAccessManager::Operation op, const QNetworkRequest &req) override
+            {
+                state = UserInfoFetched;
+                auto payload = std::make_unique<QBuffer>();
+                payload->setData(userInfoPayload());
+                auto *reply = new SlowFakePostReply(op, req, std::move(payload), fakeAm);
+                // Dispose the auth attempt from inside UserInfoAdapter's nested
+                // loop, while the valid user-info reply is still pending.
+                auto *attempt = oauth.release();
+                connect(attempt, &QObject::destroyed, this, [this] { destroyed = true; });
+                QTimer::singleShot(0, attempt, &QObject::deleteLater);
+                return reply;
+            }
+            void oauthResult(OAuth::Result, const QString &, const QString &) override { ++authResults; }
+            void browserReplyFinished() override { replyToBrowserOk = true; }
+        } test;
+        test.test();
+        QTest::qWait(150);
+        QVERIFY(test.destroyed);
+        QCOMPARE(test.authResults, 0);
+    }
+
 
     void testWrongUser()
     {

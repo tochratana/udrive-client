@@ -13,6 +13,7 @@
  */
 
 #include "oauth.h"
+#include "localdevelopment.h"
 
 #include "accessmanager.h"
 #include "creds/credentialssupport.h"
@@ -245,6 +246,12 @@ void OAuth::getTokens()
         {QStringLiteral("code_verifier"), QString::fromUtf8(_pkceCodeVerifier)},
     });
 
+    if (!postTokenReply) {
+        httpReplyAndClose(_socket, false, QStringLiteral("403 Forbidden"), tr("Authentication endpoint requires HTTPS"));
+        Q_EMIT result(ErrorInsecureUrl, QString());
+        return;
+    }
+
     connect(postTokenReply, &QNetworkReply::finished, this, [postTokenReply, this] {
         const auto jsonData = postTokenReply->readAll();
         QJsonParseError jsonParseError;
@@ -297,7 +304,13 @@ void OAuth::checkUserInfo()
     Q_ASSERT(!_davUser.isEmpty());
 
     UserInfoAdapter infoAdapter(_networkAccessManager, _accessToken, _serverUrl);
+    connect(this, &QObject::destroyed, &infoAdapter, &UserInfoAdapter::cancel);
+    const QPointer<OAuth> guard(this);
     const UserInfoResult infoResult = infoAdapter.getResult();
+    // User-info validation runs a nested event loop. Logout can destroy this
+    // authentication attempt while that loop is waiting for its reply.
+    if (!guard)
+        return;
 
     if (!infoResult.success()) {
         httpReplyAndClose(_socket, false, QStringLiteral("500 Internal Server Error"), tr("Login Error"), infoResult.error);
@@ -321,6 +334,10 @@ void OAuth::checkUserInfo()
 QNetworkReply *OAuth::postTokenRequest(QUrlQuery &&queryItems)
 {
     const QUrl requestTokenUrl = _tokenEndpoint;
+    if (!LocalDevelopment::allowsAuthenticationUrl(requestTokenUrl, _serverUrl)) {
+        qCWarning(lcOauth) << "Rejected insecure authentication token endpoint";
+        return nullptr;
+    }
     QNetworkRequest req;
     req.setTransferTimeout(defaultTimeoutMs());
     switch (_endpointAuthMethod) {
@@ -337,7 +354,9 @@ QNetworkReply *OAuth::postTokenRequest(QUrlQuery &&queryItems)
 
     queryItems.addQueryItem(QStringLiteral("scope"), QString::fromUtf8(QUrl::toPercentEncoding(_openIdConfig.scopes())));
     req.setUrl(requestTokenUrl);
-    return _networkAccessManager->post(req, queryItems.toString(QUrl::FullyEncoded).toUtf8());
+    auto *reply = _networkAccessManager->post(req, queryItems.toString(QUrl::FullyEncoded).toUtf8());
+    reply->setParent(this);
+    return reply;
 }
 
 QByteArray OAuth::generateRandomString(size_t size) const
@@ -386,6 +405,7 @@ void OAuth::fetchWellKnown()
     req.setTransferTimeout(defaultTimeoutMs());
 
     auto reply = _networkAccessManager->get(req);
+    reply->setParent(this);
 
     QObject::connect(reply, &QNetworkReply::finished, this, [reply, this] {
         _wellKnownFinished = true;
@@ -436,19 +456,13 @@ void OAuth::fetchWellKnown()
  * @param url URL to validate
  * @return true if validation is successful, false otherwise
  */
-bool isUrlSchemeValid(const QUrl &url)
+bool isUrlSchemeValid(const QUrl &url, const QUrl &serverUrl)
 {
     qCDebug(lcOauth()) << "Checking URL scheme for validity:" << url;
 
-    // todo: #21 - I am not sure this check has much of a point to begin with as
-    // we have already validated any URL via user input OR we take the url from the webfinger service,
-    // but if this is in fact "needed" it should check more than just the scheme imo
-
-    // the following allow list contains URL schemes accepted as valid
-    // OAuth 2.0 URLs must be HTTPS to be in compliance with the specification
-    // for unit tests, we also permit the non existing oauthtest scheme
-    const QStringList allowedSchemes({QStringLiteral("https"), QStringLiteral("oauthtest")});
-    return allowedSchemes.contains(url.scheme());
+    // Ordinary accounts require HTTPS. The explicit Debug-only exception is
+    // confined to loopback services and keeps the existing test transport.
+    return LocalDevelopment::allowsAuthenticationUrl(url, serverUrl);
 }
 
 void OAuth::openBrowser()
@@ -461,7 +475,7 @@ void OAuth::openBrowser()
     }
     qCDebug(lcOauth) << "opening browser";
 
-    if (!isUrlSchemeValid(authorisationURL)) {
+    if (!isUrlSchemeValid(authorisationURL, _serverUrl) || !LocalDevelopment::allowsAuthenticationUrl(_tokenEndpoint, _serverUrl)) {
         qCWarning(lcOauth) << "URL validation failed";
         Q_EMIT result(ErrorInsecureUrl, QString());
         return;
@@ -529,6 +543,10 @@ void AccountBasedOAuth::refreshAuthentication(const QString &refreshToken)
     // make this a real function -
     auto refresh = [this, refreshToken] {
         auto reply = postTokenRequest({{QStringLiteral("grant_type"), QStringLiteral("refresh_token")}, {QStringLiteral("refresh_token"), refreshToken}});
+        if (!reply) {
+            Q_EMIT refreshError(QNetworkReply::ProtocolInvalidOperationError, tr("Authentication endpoint requires HTTPS"));
+            return;
+        }
         connect(reply, &QNetworkReply::finished, this, [reply, refreshToken, this]() {
             const auto jsonData = reply->readAll();
             QJsonParseError jsonParseError;

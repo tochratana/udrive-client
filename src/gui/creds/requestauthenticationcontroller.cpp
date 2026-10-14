@@ -40,6 +40,17 @@ void RequestAuthenticationController::handleSignIn()
     _oauth->openBrowser();
 }
 
+void RequestAuthenticationController::cancelAuthentication()
+{
+    if (_oauth) {
+        disconnect(_oauth, nullptr, this, nullptr);
+        _oauth->deleteLater();
+        _oauth = nullptr;
+    }
+    if (_modalWidget)
+        _modalWidget->reject();
+}
+
 void RequestAuthenticationController::handleLogOut()
 {
     if (_modalWidget) {

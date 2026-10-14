@@ -16,9 +16,12 @@
 #include "platform_mac.h"
 
 #include <QApplication>
+#include <QBuffer>
+#include <QIcon>
 #include <QLoggingCategory>
 
 #import <AppKit/NSApplication.h>
+#import <AppKit/NSImage.h>
 
 #include <IOKit/IOMessage.h>
 #include <IOKit/pwr_mgt/IOPMLib.h>
@@ -206,6 +209,24 @@ void MacPlatform::migrate()
 void MacPlatform::startServices()
 {
     Q_D(MacPlatform);
+
+    // Platform construction precedes QApplication. Only render the Dock icon
+    // here, once Qt's GUI is initialized and the application icon is set.
+    // Read the current resource rather than the cached bundle icon, which can
+    // still show an earlier logo when rebuilding the same development bundle.
+    if (auto *guiApp = qobject_cast<QGuiApplication *>(QCoreApplication::instance())) {
+        QByteArray iconData;
+        QBuffer iconBuffer(&iconData);
+        iconBuffer.open(QIODevice::WriteOnly);
+        if (guiApp->windowIcon().pixmap(512, 512).save(&iconBuffer, "PNG")) {
+            NSData *data = [NSData dataWithBytes:iconData.constData() length:iconData.size()];
+            NSImage *icon = [[NSImage alloc] initWithData:data];
+            if (icon) {
+                [[NSApplication sharedApplication] setApplicationIconImage:icon];
+                [icon release];
+            }
+        }
+    }
 
     d->listener.registerForNotifications();
 }

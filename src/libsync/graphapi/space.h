@@ -72,6 +72,7 @@ namespace GraphApi {
         QString description() const;
         QUrl webUrl() const;
         QString id() const;
+        QString driveId() const;
         QUrl webDavUrl() const;
         QString eTag() const;
         OpenAPI::OAIQuota quota() const;

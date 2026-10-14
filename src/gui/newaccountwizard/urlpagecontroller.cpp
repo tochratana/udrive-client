@@ -15,6 +15,7 @@
 
 #include "accessmanager.h"
 #include "config/appconfig.h"
+#include "creds/localdevelopment.h"
 #include "networkadapters/determineauthtypeadapter.h"
 #include "networkadapters/discoverwebfingerserviceadapter.h"
 #include "networkadapters/resolveurladapter.h"
@@ -209,7 +210,7 @@ bool UrlPageController::validate()
         QStringList parts = fullError.split(QStringLiteral(";"), Qt::SkipEmptyParts);
         handleError(tr("Invalid server URL: %1").arg(parts[0] + parts[1]));
         return false;
-    } else if (givenUrl.scheme().isEmpty() || givenUrl.scheme() != QStringLiteral("https")) // scheme should not be empty but who knows
+    } else if (!LocalDevelopment::allowsServerUrl(givenUrl))
     {
         handleError(tr("Invalid URL scheme. Only https is accepted."));
         return false;

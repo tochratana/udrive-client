@@ -43,6 +43,17 @@ namespace Translations {
         return QStringLiteral(":/client/translations/");
     }
 
+    QString udriveLocale(QString locale)
+    {
+        locale.replace(QLatin1Char('-'), QLatin1Char('_'));
+        const QString language = locale.section(QLatin1Char('_'), 0, 0).toLower();
+        if (language == QStringLiteral("km"))
+            return QStringLiteral("km");
+        if (language == QStringLiteral("zh"))
+            return QStringLiteral("zh_CN");
+        return QStringLiteral("en_US");
+    }
+
     QSet<QString> listAvailableTranslations()
     {
         QSet<QString> availableTranslations;

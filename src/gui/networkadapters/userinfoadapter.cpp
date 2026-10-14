@@ -53,9 +53,16 @@ UserInfoResult UserInfoAdapter::getResult()
     req.setAttribute(QNetworkRequest::AuthenticationReuseAttribute, QNetworkRequest::Manual);
 
     QEventLoop waitLoop;
-    QNetworkReply *reply = _nam->get(req);
+    QPointer<QNetworkReply> reply = _nam->get(req);
+    _reply = reply;
     connect(reply, &QNetworkReply::finished, &waitLoop, &QEventLoop::quit);
+    connect(reply, &QObject::destroyed, &waitLoop, &QEventLoop::quit);
     waitLoop.exec();
+    _reply.clear();
+    if (!reply) {
+        result.error = tr("User info request was canceled.");
+        return result;
+    }
 
     const auto data = reply->readAll();
     const auto statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -85,6 +92,14 @@ UserInfoResult UserInfoAdapter::getResult()
         }
     }
 
+    reply->deleteLater();
     return result;
+}
+
+void UserInfoAdapter::cancel()
+{
+    _authorizationHeader.clear();
+    if (_reply)
+        _reply->abort();
 }
 }

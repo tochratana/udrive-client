@@ -309,7 +309,7 @@ QString Theme::aboutVersions(Theme::VersionFormat format) const
         "Libraries Qt %3, %4%7"
         "Using virtual files plugin: %5%7"
         "%6")
-        .arg(appName(), _version, qtVersionString, QSslSocket::sslLibraryVersionString(),
+        .arg(appNameGUI(), _version, qtVersionString, QSslSocket::sslLibraryVersionString(),
             Utility::enumToString(VfsPluginManager::instance().bestAvailableVfsMode()), sysInfo.join(br), br, gitUrl);
 }
 

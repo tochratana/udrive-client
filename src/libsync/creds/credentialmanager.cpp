@@ -76,6 +76,11 @@ QKeychain::Job *CredentialManager::set(const QString &key, const QVariant &data)
     qCInfo(lcCredentialsManager) << "set" << scoped;
     auto writeJob = new QKeychain::WritePasswordJob(Theme::instance()->appName());
     writeJob->setKey(scoped);
+    const bool previouslyKnown = contains(key);
+    const auto generation = ++_writeGeneration[key];
+    // Register before the queued write starts. Logout must enqueue a delete
+    // even when the first write has not yet completed. QKeychain serializes jobs.
+    credentialsList().setValue(key, true);
 
     auto timer = new QTimer(writeJob);
     timer->setInterval(tiemoutC);
@@ -83,13 +88,13 @@ QKeychain::Job *CredentialManager::set(const QString &key, const QVariant &data)
     Utility::ChronoElapsedTimer elapsedTimer;
     connect(timer, &QTimer::timeout, writeJob,
         [writeJob, elapsedTimer] { qCWarning(lcCredentialsManager) << "set" << writeJob->key() << "has not yet finished." << elapsedTimer.duration(); });
-    connect(writeJob, &QKeychain::WritePasswordJob::finished, this, [writeJob, key, elapsedTimer, this] {
+    connect(writeJob, &QKeychain::WritePasswordJob::finished, this, [writeJob, key, elapsedTimer, this, generation, previouslyKnown] {
         if (writeJob->error() == QKeychain::NoError) {
             qCInfo(lcCredentialsManager) << "added" << writeJob->key() << "after" << elapsedTimer.duration();
-            // just a list, the values don't matter
-            credentialsList().setValue(key, true);
         } else {
             qCWarning(lcCredentialsManager) << "Failed to set:" << writeJob->key() << writeJob->errorString() << "after" << elapsedTimer.duration();
+            if (_writeGeneration.value(key) == generation && !previouslyKnown)
+                credentialsList().remove(key);
         }
     });
     writeJob->setBinaryData(QCborValue::fromVariant(data).toCbor());
@@ -103,6 +108,7 @@ QKeychain::Job *CredentialManager::set(const QString &key, const QVariant &data)
 QKeychain::Job *CredentialManager::remove(const QString &key)
 {
     OC_ASSERT(contains(key));
+    ++_writeGeneration[key];
     // remove immediately to prevent double invocation by clear()
     credentialsList().remove(key);
     const QString scoped = scopedKey(key);
@@ -110,8 +116,7 @@ QKeychain::Job *CredentialManager::remove(const QString &key)
     auto keychainJob = new QKeychain::DeletePasswordJob(Theme::instance()->appName());
     keychainJob->setKey(scoped);
     connect(keychainJob, &QKeychain::DeletePasswordJob::finished, this, [keychainJob, scoped] {
-        OC_ASSERT(keychainJob->error() != QKeychain::EntryNotFound);
-        if (keychainJob->error() == QKeychain::NoError) {
+        if (keychainJob->error() == QKeychain::NoError || keychainJob->error() == QKeychain::EntryNotFound) {
             qCInfo(lcCredentialsManager) << "removed" << scoped;
         } else {
             qCWarning(lcCredentialsManager) << "Failed to remove:" << scoped << keychainJob->errorString();
@@ -208,24 +213,33 @@ void CredentialJob::start()
             qCInfo(lcCredentialsManager) << "Backend unavailable (yet?) Retrying in a few seconds." << _job->errorString();
             QTimer::singleShot(10s, this, &CredentialJob::start);
             _retryOnKeyChainError = false;
+            return;
         }
 #endif
-        if (_job->error() == QKeychain::NoError) {
-            QCborParserError error;
-            const auto obj = QCborValue::fromCbor(_job->binaryData(), &error);
-            if (error.error != QCborError::NoError) {
-                _error = QKeychain::OtherError;
-                _errorString = tr("Failed to parse credentials %1").arg(error.errorString());
-                return;
-            }
-            _data = obj.toVariant();
-            OC_ASSERT(_data.isValid());
-        } else {
-            qCWarning(lcCredentialsManager) << "Failed to get password" << _scopedKey << _job->errorString();
-            _error = _job->error();
-            _errorString = _job->errorString();
-        }
-        Q_EMIT finished();
+        handleReadResult(_job->error(), _job->errorString(), _job->binaryData());
     });
     _job->start();
+}
+
+void CredentialJob::handleReadResult(QKeychain::Error error, const QString &message, const QByteArray &data)
+{
+    if (error == QKeychain::NoError) {
+        QCborParserError parseError;
+        const auto obj = QCborValue::fromCbor(data, &parseError);
+        if (parseError.error != QCborError::NoError) {
+            _error = QKeychain::OtherError;
+            _errorString = tr("Failed to parse credentials %1").arg(parseError.errorString());
+        } else {
+            _data = obj.toVariant();
+            if (!_data.isValid()) {
+                _error = QKeychain::OtherError;
+                _errorString = tr("Stored credentials contain an invalid value.");
+            }
+        }
+    } else {
+        qCWarning(lcCredentialsManager) << "Failed to get password" << _scopedKey << message;
+        _error = error;
+        _errorString = message;
+    }
+    Q_EMIT finished();
 }

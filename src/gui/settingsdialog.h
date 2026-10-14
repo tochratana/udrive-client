@@ -21,6 +21,9 @@
 #include <QMainWindow>
 #include <QStyledItemDelegate>
 
+class QStackedWidget;
+class QPushButton;
+
 
 namespace OCC {
 
@@ -33,21 +36,25 @@ class FolderMan;
 class ownCloudGui;
 class ActivitySettings;
 class GeneralSettings;
+class UDriveFileBrowser;
 
 /**
  * @brief The SettingsDialog class
  * @ingroup gui
  */
-class SettingsDialog : public QMainWindow
+class OWNCLOUDGUI_EXPORT SettingsDialog : public QMainWindow
 {
     Q_OBJECT
     Q_PROPERTY(SettingsPage currentPage READ currentPage WRITE setCurrentPage NOTIFY currentPageChanged)
     Q_PROPERTY(Account *currentAccount READ currentAccount WRITE setCurrentAccount NOTIFY currentAccountChanged)
+    Q_PROPERTY(bool canCreateFiles READ canCreateFiles NOTIFY workspaceChanged)
+    Q_PROPERTY(QString storageLabel READ storageLabel NOTIFY workspaceChanged)
+    Q_PROPERTY(double storageFraction READ storageFraction NOTIFY workspaceChanged)
     QML_ELEMENT
     QML_UNCREATABLE("C++ only")
     OC_DECLARE_WIDGET_FOCUS
 public:
-    enum class SettingsPage { None, Activity, Settings, Account };
+    enum class SettingsPage { None, Activity, Settings, Account, Files, Workspaces, Shares, Favorites, Trash };
     Q_ENUM(SettingsPage)
     explicit SettingsDialog(ownCloudGui *gui, QWidget *parent = nullptr);
     ~SettingsDialog() override;
@@ -71,10 +78,15 @@ public:
 public Q_SLOTS:
     // this is a direct call from QML
     void createNewAccount();
+    void openNewFileMenu();
+    bool canCreateFiles() const;
+    QString storageLabel() const;
+    double storageFraction() const;
     void runFolderWizard(Account *account);
 
 
 Q_SIGNALS:
+    void workspaceChanged();
     void currentPageChanged();
     // I think this only goes to qml
     void currentAccountChanged();
@@ -85,19 +97,31 @@ protected Q_SLOTS:
 
 protected:
     void setVisible(bool visible) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 
 private:
+    void updateUDriveAppearance();
+    void createWorkspaceHeader();
+    void updateWorkspaceHeader();
+    void showAccountPopup();
+    QPointer<QWidget> _accountPopup;
+    QStackedWidget *_searchStack = nullptr;
+    QPushButton *_profileButton = nullptr;
     Ui::SettingsDialog *const _ui;
 
 
     QHash<QUuid, AccountView *> _viewForAccount;
+    QHash<QUuid, UDriveFileBrowser *> _filesForAccount;
+    QPointer<Account> _lastAccount;
 
     ActivitySettings *_activitySettings;
+    QWidget *_activityPage = nullptr;
     ownCloudGui *_gui;
     QList<Account *> _modalStack;
 
     GeneralSettings *_generalSettings;
+    QWidget *_settingsPage = nullptr;
     SettingsPage _currentPage = SettingsPage::None;
     // todo: #37
     Account *_currentAccount = nullptr;

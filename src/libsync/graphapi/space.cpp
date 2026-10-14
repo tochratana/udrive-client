@@ -125,6 +125,11 @@ QString Space::id() const
     return _drive.getRoot().getId();
 }
 
+QString Space::driveId() const
+{
+    return _drive.getId();
+}
+
 QUrl Space::webDavUrl() const
 {
     return QUrl(_drive.getRoot().getWebDavUrl());

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QSettings>
 #include <QVariant>
 
@@ -49,6 +50,7 @@ private:
 
     const Account *const _account = nullptr;
     mutable std::unique_ptr<QSettings> _credentialsList;
+    QHash<QString, quint64> _writeGeneration;
 };
 
 class OWNCLOUDSYNC_EXPORT CredentialJob : public QObject
@@ -66,6 +68,10 @@ public:
 
 Q_SIGNALS:
     void finished();
+
+protected:
+    // Complete a backend read through one path, including malformed data.
+    void handleReadResult(QKeychain::Error error, const QString &message, const QByteArray &data);
 
 private:
 

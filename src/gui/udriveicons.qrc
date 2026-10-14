@@ -1,0 +1,19 @@
+<RCC>
+    <qresource prefix="/udrive/icons">
+        <file alias="chevron-light.svg">icons/chevron-light.svg</file>
+        <file alias="chevron-dark.svg">icons/chevron-dark.svg</file>
+        <file alias="chevron-primary.svg">icons/chevron-primary.svg</file>
+        <file alias="chevron-disabled.svg">icons/chevron-disabled.svg</file>
+        <file alias="nav-folder.svg">icons/nav-folder.svg</file>
+        <file alias="nav-star.svg">icons/nav-star.svg</file>
+        <file alias="nav-share.svg">icons/nav-share.svg</file>
+        <file alias="nav-grid.svg">icons/nav-grid.svg</file>
+        <file alias="nav-trash.svg">icons/nav-trash.svg</file>
+        <file alias="nav-cloud.svg">icons/nav-cloud.svg</file>
+        <file alias="nav-sync.svg">icons/nav-sync.svg</file>
+        <file alias="nav-clock.svg">icons/nav-clock.svg</file>
+        <file alias="nav-settings.svg">icons/nav-settings.svg</file>
+        <file alias="nav-quit.svg">icons/nav-quit.svg</file>
+        <file alias="nav-add.svg">icons/nav-add.svg</file>
+    </qresource>
+</RCC>

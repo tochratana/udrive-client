@@ -38,6 +38,9 @@ namespace Translations {
      */
     OWNCLOUDGUI_EXPORT QString translationsDirectoryPath();
 
+    /** Canonical locale for the three UDrive UI languages; unknown locales use English. */
+    OWNCLOUDGUI_EXPORT QString udriveLocale(QString locale);
+
     /**
      * @return list of locales for which translations are available
      */

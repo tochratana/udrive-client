@@ -39,6 +39,8 @@
 #include "theme.h"
 
 #include <QAction>
+#include <QDir>
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QSortFilterProxyModel>
 #include <QStandardItemModel>
@@ -65,6 +67,11 @@ AccountView::AccountView(AccountState *accountState, QWidget *parent)
 {
     ui->setupUi(this);
 
+    ui->brandLogo->setPixmap(Theme::instance()->applicationIcon().pixmap(48, 48));
+    ui->workspaceTitle->setText(tr("Your %1 workspace").arg(Theme::instance()->appNameGUI()));
+    ui->openFolderButton->setEnabled(false);
+    ui->viewOnlineButton->setEnabled(false);
+
     // as usual we do too many things in the ctr and we need to eval all the code paths to make sure they handle
     // the QPointer properly, but as a stopgap to catch null states asap before they trickle down into other areas:
     if (!_accountState || !_accountState->account())
@@ -81,10 +88,24 @@ AccountView::AccountView(AccountState *accountState, QWidget *parent)
 
     buildManageAccountMenu();
 
+    ui->viewOnlineButton->setEnabled(true);
+    connect(ui->viewOnlineButton, &QPushButton::clicked, this, &AccountView::slotOpenAccountInBrowser);
+    connect(ui->openFolderButton, &QPushButton::clicked, this, &AccountView::slotOpenLocalFolder);
+    auto *folderMan = FolderMan::instance();
+    connect(folderMan, &FolderMan::folderAdded, this, &AccountView::updateFolderShortcut);
+    // Removal is signalled before FolderMan updates its list.
+    connect(folderMan, &FolderMan::folderRemoved, this, &AccountView::updateFolderShortcut, Qt::QueuedConnection);
+    connect(folderMan, &FolderMan::folderListChanged, this, &AccountView::updateFolderShortcut);
+    updateFolderShortcut();
+
     connect(_accountState, &AccountState::isSettingUpChanged, this, &AccountView::accountSettingUpChanged);
 
     connect(ui->stackedWidget, &QStackedWidget::currentChanged, this,
-        [this] { ui->manageAccountButton->setEnabled(ui->stackedWidget->currentWidget() == ui->accountFoldersView); });
+        [this] {
+            const bool showActions = ui->stackedWidget->currentWidget() == ui->accountFoldersView;
+            ui->manageAccountButton->setEnabled(showActions);
+            ui->workspaceHeader->setVisible(showActions);
+        });
     ui->stackedWidget->setCurrentWidget(ui->accountFoldersView);
 }
 
@@ -147,7 +168,7 @@ void AccountView::slotFolderWizardAccepted()
 
 void AccountView::slotOpenAccountInBrowser()
 {
-    if (!_accountState) {
+    if (!_accountState || !_accountState->account()) {
         return;
     }
 
@@ -157,6 +178,49 @@ void AccountView::slotOpenAccountInBrowser()
         url.setPath({});
     }
     QDesktopServices::openUrl(url);
+}
+
+void AccountView::updateFolderShortcut()
+{
+    bool hasLocalFolder = false;
+    if (_accountState && _accountState->account()) {
+        const auto folders = FolderMan::instance()->foldersForAccount(_accountState->account()->uuid());
+        for (const auto *folder : folders) {
+            if (QFileInfo(folder->path()).isDir()) {
+                hasLocalFolder = true;
+                break;
+            }
+        }
+    }
+    ui->openFolderButton->setEnabled(hasLocalFolder);
+    ui->openFolderButton->setToolTip(hasLocalFolder ? tr("Open your synced files in the file manager") : tr("Add a space sync to open files on this computer"));
+}
+
+void AccountView::slotOpenLocalFolder()
+{
+    if (!_accountState || !_accountState->account())
+        return;
+
+    QMenu menu(this);
+    menu.setAccessibleName(tr("Synced folders"));
+    QStringList paths;
+    const auto folders = FolderMan::instance()->foldersForAccount(_accountState->account()->uuid());
+    for (const auto *folder : folders) {
+        const QString path = folder->path();
+        if (!QFileInfo(path).isDir())
+            continue;
+        paths.append(path);
+        auto *action = menu.addAction(folder->displayName());
+        action->setToolTip(QDir::toNativeSeparators(path));
+        connect(action, &QAction::triggered, this, [path] { QDesktopServices::openUrl(QUrl::fromLocalFile(path)); });
+    }
+    if (paths.size() == 1) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(paths.first()));
+    } else if (!paths.isEmpty()) {
+        menu.exec(ui->openFolderButton->mapToGlobal(QPoint(0, ui->openFolderButton->height())));
+    } else {
+        updateFolderShortcut();
+    }
 }
 
 void AccountView::slotToggleSignInState()
@@ -341,6 +405,7 @@ void AccountView::addModalLegacyDialog(QWidget *widget, ModalWidgetSizePolicy si
 void AccountView::showEvent(QShowEvent *ev)
 {
     Q_UNUSED(ev);
+    updateFolderShortcut();
     ui->manageAccountButton->setFocus();
 }
 

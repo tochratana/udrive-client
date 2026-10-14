@@ -6,6 +6,7 @@
  */
 #include "account.h"
 #include "libsync/creds/credentialmanager.h"
+#include "libsync/theme.h"
 
 #include "testutils/syncenginetestutils.h"
 
@@ -136,8 +137,40 @@ private Q_SLOTS:
             qDeleteAll(spies);
         }
     }
+
+    void pendingWriteIsRemoved()
+    {
+        FakeFolder fakeFolder{FileInfo::A12_B12_C12_S12()};
+        auto *manager = fakeFolder.account()->credentialManager();
+        const QString key = QStringLiteral("http/pending-write");
+        auto *write = manager->set(key, QStringLiteral("DUMMY_REFRESH_TOKEN"));
+        setFallbackEnabled(write);
+        const QString scoped = write->key();
+        QSignalSpy written(write, &QKeychain::Job::finished);
+        QVERIFY(manager->contains(key));
+        const auto deletes = manager->clear(QStringLiteral("http"));
+        QCOMPARE(deletes.size(), 1);
+        setFallbackEnabled(deletes.front());
+        QSignalSpy deleted(deletes.front(), &QKeychain::Job::finished);
+        QTRY_COMPARE(written.count(), 1);
+        QTRY_COMPARE(deleted.count(), 1);
+        QVERIFY(!manager->contains(key));
+        QKeychain::ReadPasswordJob read(Theme::instance()->appName());
+        read.setAutoDelete(false);
+        read.setKey(scoped);
+        setFallbackEnabled(&read);
+        QSignalSpy readFinished(&read, &QKeychain::Job::finished);
+        read.start();
+        QTRY_COMPARE(readFinished.count(), 1);
+        QCOMPARE(read.error(), QKeychain::EntryNotFound);
+    }
 };
 }
 
+#ifdef Q_OS_MACOS
+// The native Keychain backend needs the Cocoa/CoreFoundation event dispatcher.
+QTEST_MAIN(OCC::TestCredentialManager)
+#else
 QTEST_GUILESS_MAIN(OCC::TestCredentialManager)
+#endif
 #include "testcredentialmanager.moc"

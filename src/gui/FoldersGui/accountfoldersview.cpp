@@ -53,19 +53,23 @@ AccountFoldersView::AccountFoldersView(QWidget *parent)
 void AccountFoldersView::buildView()
 {
     QVBoxLayout *mainLayout = new QVBoxLayout();
+    mainLayout->setContentsMargins(0, 8, 0, 0);
+    mainLayout->setSpacing(12);
     //: This shows as 'Folder sync' or 'Space sync'
-    QString titleString = tr("%1 sync").arg(CommonStrings::capSpace());
+    QString titleString = tr("Synced %1").arg(CommonStrings::spaces());
     QLabel *titleLabel = new QLabel(titleString, this);
     QFont f = titleLabel->font();
     f.setBold(true);
+    f.setPointSize(f.pointSize() + 3);
     titleLabel->setFont(f);
     titleLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     mainLayout->addWidget(titleLabel, 0, Qt::AlignLeft);
 
     QHBoxLayout *buttonLineLayout = new QHBoxLayout();
-    QString descString = tr("Manage your synced %1.").arg(CommonStrings::spaces());
+    QString descString = tr("Choose which %1 are available on this computer.").arg(CommonStrings::spaces());
     QLabel *description = new QLabel(descString, this);
     description->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    description->setWordWrap(true);
     buttonLineLayout->addWidget(description, 0, Qt::AlignLeft);
 
     //: This shows as 'Add new folder sync…' or 'Add new Space sync…'
@@ -134,7 +138,7 @@ void AccountFoldersView::buildView()
 
     mainLayout->addWidget(_treeView);
 
-    _syncedFolderCountLabel = new QLabel("placeholder for sync count", this);
+    _syncedFolderCountLabel = new QLabel(tr("Loading your synced %1…").arg(CommonStrings::spaces()), this);
     _syncedFolderCountLabel->setObjectName("syncedFolderCount");
     _syncedFolderCountLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     mainLayout->addWidget(_syncedFolderCountLabel, 0, Qt::AlignLeft);
