@@ -625,14 +625,21 @@ QString SettingsDialog::storageLabel() const
 {
     if (!_lastAccount)
         return tr("No account connected");
+    // Match the web's decimal units and omit redundant decimals for whole units.
+    const auto formatSize = [](qint64 bytes) {
+        qint64 unit = 1;
+        while (bytes / unit >= 1000) unit *= 1000;
+        const int precision = bytes < 1024 * 1024 || bytes % unit == 0 ? 0 : 1;
+        return QLocale().formattedDataSize(bytes, precision, QLocale::DataSizeSIFormat);
+    };
     for (const auto *space : _lastAccount->spacesManager()->spaces()) {
         if (space->sortPriority() != 100 || space->disabled())
             continue;
         const auto quota = space->quota();
         if (quota.is_used_Valid() && quota.getUsed() >= 0) {
-            const QString used = QLocale().formattedDataSize(quota.getUsed());
+            const QString used = formatSize(quota.getUsed());
             if (quota.is_total_Valid() && quota.getTotal() > 0)
-                return tr("%1 of %2 used").arg(used, QLocale().formattedDataSize(quota.getTotal()));
+                return tr("%1 of %2 used").arg(used, formatSize(quota.getTotal()));
             return tr("%1 used").arg(used);
         }
     }
@@ -707,7 +714,7 @@ void SettingsDialog::updateUDriveAppearance()
         "QStackedWidget#stack QMenu::item { padding: 4px 18px 4px 8px; border-radius: 4px; }"
         "QStackedWidget#stack QMenu::item:selected { background: %4; color: %2; }"
         "QStackedWidget#stack QMenu::item:disabled { color: %5; }"
-        "QCheckBox#driveSelectAll { color: %2; spacing: 6px; }"
+        "QCheckBox#driveSelectAll { color: %2; spacing: 8px; padding-right: 4px; }"
         "QCheckBox#driveSelectAll:disabled { color: %5; }"
         "QCheckBox#driveSelectAll::indicator { width: 18px; height: 18px; border: 1px solid #858585; border-radius: 4px; background: transparent; }"
         "QCheckBox#driveSelectAll::indicator:hover { border-color: %11; }"
@@ -744,6 +751,14 @@ void SettingsDialog::updateUDriveAppearance()
         "QStackedWidget#stack QComboBox[udriveCombo=\"true\"]:disabled { color: %5; background: %6; }"
         "QStackedWidget#stack QComboBox[udriveCombo=\"true\"]::down-arrow:disabled { image: url(:/udrive/icons/chevron-disabled.svg); }"
         "QStackedWidget#stack QComboBox[udriveCombo=\"true\"] QAbstractItemView { background: %1; color: %2; selection-background-color: %4; selection-color: %2; border: 1px solid %3; padding: 4px; }"
+        "QStackedWidget#stack QComboBox#driveSpaces { min-height: 20px; padding: 6px 28px 6px 10px; border-radius: 8px; border-color: %10; background: %9; font-size: 13px; font-weight: 500; }"
+        "QStackedWidget#stack QComboBox#driveSpaces:hover, QStackedWidget#stack QComboBox#driveSpaces:focus { border-color: %11; }"
+        "QStackedWidget#stack QComboBox#driveSpaces::drop-down { width: 24px; }"
+        "QStackedWidget#stack QComboBox#driveSpaces::down-arrow { width: 10px; height: 10px; }"
+        "QListView#driveSpacesPopup { background: %9; color: %2; border: 1px solid %10; border-radius: 8px; padding: 4px; outline: none; }"
+        "QListView#driveSpacesPopup::item { padding: 4px 8px; border: none; border-radius: 5px; }"
+        "QListView#driveSpacesPopup::item:hover { background: %6; }"
+        "QListView#driveSpacesPopup::item:selected { background: %4; color: %11; }"
         "QTreeView#accountFoldersTreeView { border: 1px solid %3; border-radius: 12px; background: %1; padding: 8px; }"
         "QLabel#syncedFolderCount { color: %2; padding-top: 8px; }")
         .arg(surface, text, border, hover, disabledText, disabledSurface, arrow, dark ? QStringLiteral("#202020") : QStringLiteral("#F6F7F8"))

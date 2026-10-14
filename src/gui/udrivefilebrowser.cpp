@@ -77,6 +77,18 @@ protected:
     }
 };
 
+class SpaceItemDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        auto size = QStyledItemDelegate::sizeHint(option, index);
+        size.setHeight(qMax(32, size.height()));
+        return size;
+    }
+};
+
 QString recentKey(const QUrl &root, const QString &path)
 {
     const QByteArray identity = root.toEncoded() + '\0' + path.toUtf8();
@@ -488,8 +500,20 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _spaces->setProperty("udriveCombo", true);
     _spaces->setAccessibleName(tr("Choose a space"));
     _spaces->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    _spaces->setMinimumWidth(120);
+    _spaces->setMinimumWidth(144);
     _spaces->setMaximumWidth(240);
+    _spaces->setFixedHeight(34);
+    _spaces->setIconSize(QSize(16, 16));
+    auto *spaceList = new QListView(_spaces);
+    spaceList->setObjectName(QStringLiteral("driveSpacesPopup"));
+    spaceList->setUniformItemSizes(true);
+    spaceList->setSpacing(2);
+    spaceList->setMinimumWidth(180);
+    spaceList->setTextElideMode(Qt::ElideRight);
+    spaceList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    _spaces->setView(spaceList);
+    _spaces->setItemDelegate(new SpaceItemDelegate(_spaces));
+    _spaces->setMaxVisibleItems(8);
     _refreshButton = new QPushButton(tr("Refresh"), this);
     _refreshButton->setObjectName(QStringLiteral("driveRefresh"));
     _refreshButton->setProperty("driveToolbarButton", true);
@@ -507,8 +531,10 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _selectAll = new SelectAllCheckBox(tr("Select all"), this);
     _selectAll->setObjectName(QStringLiteral("driveSelectAll"));
     _selectAll->setTristate(true);
+    _selectAll->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     _selectAll->setToolTip(tr("Select all files in the current results."));
     headingRow->addWidget(_selectAll);
+    headingRow->addSpacing(12);
     auto *sortLabel = new QLabel(tr("Sort by"), this);
     _sortButton = new QPushButton(this);
     _sortButton->setObjectName(QStringLiteral("driveSort"));
@@ -1123,7 +1149,8 @@ void UDriveFileBrowser::updateSpaces()
             const bool shares = space->sortPriority() == 50;
             if (space->disabled() || (_section == Section::Personal && !personal)
                 || (_section == Section::Workspaces && (personal || shares)) || (_section == Section::Shares && !shares)) continue;
-            _spaces->addItem(space->displayName(), space->id());
+            const auto symbol = personal ? UDriveIcons::Symbol::Folder : shares ? UDriveIcons::Symbol::Link : UDriveIcons::Symbol::Grid;
+            _spaces->addItem(UDriveIcons::icon(symbol), space->displayName(), space->id());
             _spaces->setItemData(_spaces->count() - 1, space->webDavUrl(), Qt::UserRole + 1);
             _spaces->setItemData(_spaces->count() - 1, space->webUrl(), Qt::UserRole + 2);
             _spaces->setItemData(_spaces->count() - 1, space->driveId(), Qt::UserRole + 3);
@@ -1147,6 +1174,7 @@ void UDriveFileBrowser::selectSpace()
     _webUrl = _spaces->currentData(Qt::UserRole + 2).toUrl();
     _driveId = _spaces->currentData(Qt::UserRole + 3).toString();
     const QString name = _spaces->currentText().isEmpty() ? _heading->text() : _spaces->currentText();
+    _spaces->setToolTip(_spaces->currentText());
     _spaceName = name;
     if (id == _spaceId && root == _root && !id.isEmpty()) {
         updateBreadcrumbs();

@@ -1297,6 +1297,19 @@ private Q_SLOTS:
                 qApp->setPalette(previous);
                 QTest::qWait(150);
                 QVERIFY(window.grab().save("/tmp/udrive-workspace-light.png"));
+                window.setCurrentPage(SettingsDialog::SettingsPage::Trash);
+                auto *spacePicker = firstBrowser->findChild<QComboBox *>("driveSpaces");
+                QTRY_VERIFY(spacePicker->isVisible() && spacePicker->count() > 1);
+                for (const auto &theme : {QStringLiteral("dark"), QStringLiteral("light")}) {
+                    qApp->setPalette(theme == QStringLiteral("dark") ? dark : previous);
+                    QTest::qWait(50);
+                    window.grab().save(QStringLiteral("/tmp/udrive-space-selector-%1.png").arg(theme));
+                    spacePicker->showPopup(); QTest::qWait(50);
+                    spacePicker->view()->window()->grab().save(QStringLiteral("/tmp/udrive-space-popup-%1.png").arg(theme));
+                    spacePicker->hidePopup();
+                }
+                qApp->setPalette(previous);
+                window.setCurrentPage(SettingsDialog::SettingsPage::Files);
             }
             // Closing a window with accounts and an open popup must not let
             // child cleanup re-enter an already destroyed SettingsDialog.
