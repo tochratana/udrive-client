@@ -51,9 +51,24 @@ private Q_SLOTS:
         QVERIFY(translator.load(Translations::translationsFilePrefix() + locale, Translations::translationsDirectoryPath()));
         QCOMPARE(translator.translate("UDriveSidebar", "Personal"), personal);
         QCOMPARE(translator.translate("OCC::UDriveFileBrowser", "Personal"), personal);
-        for (const auto *label : {"Sort by", "Recent", "A-Z", "Z-A", "Newest", "Oldest", "Largest", "Smallest"})
+        for (const auto *label : {"Sort by", "Recent", "A-Z", "Z-A", "Newest", "Oldest", "Largest", "Smallest", "Select all", "Select all files in the current results."})
             QVERIFY2(!translator.translate("OCC::UDriveFileBrowser", label).isEmpty(), label);
+        QVERIFY(translator.translate("OCC::UDriveFileBrowser", "%1 selected. Select one item to use file actions.").contains(QStringLiteral("%1")));
         QVERIFY(translator.translate("OCC::UDriveFileBrowser", "Sort by: %1").contains(QStringLiteral("%1")));
+        for (const auto *source : {"Delete permanently…", "Item permanently deleted.", "Open on Web", "Open this item in your web browser",
+                 "The selected item changed. Review it and confirm again."}) {
+            const auto translated = translator.translate("OCC::UDriveFileBrowser", source);
+            QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
+        }
+        for (const auto *source : {"Move to Deleted files", "Delete permanently", "Move “%1” to Deleted files?", "Permanently delete “%1”?", "Cancel", "Delete",
+                 "All contents inside this folder will also be moved to Deleted files. You can restore them anytime.",
+                 "This item will be moved to Deleted files. You can restore it anytime.",
+                 "This folder and all of its contents will be permanently deleted. This action cannot be undone.",
+                 "This item will be permanently deleted. This action cannot be undone."}) {
+            const auto translated = translator.translate("OCC::DeleteConfirmDialog", source);
+            QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
+            if (QString::fromUtf8(source).contains(QStringLiteral("%1"))) QVERIFY(translated.contains(QStringLiteral("%1")));
+        }
         for (auto pair : {qMakePair("OCC::GeneralSettings", "Language"), qMakePair("OCC::UDrivePdfPreview", "Back to files"),
                  qMakePair("OCC::UrlPageController", "Welcome to %1"), qMakePair("OCC::AccountView", "Connected")}) {
             const auto translated = translator.translate(pair.first, pair.second);

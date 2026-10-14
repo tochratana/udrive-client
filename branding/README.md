@@ -40,7 +40,8 @@ should adopt its own settings identity with an explicit migration plan.
 
 Automatic updates are disabled until UDrive has its own signed update feed.
 OAuth settings remain compatible with the desktop client already registered
-in your Keycloak realm. The View online button uses the selected account's URL.
+in your Keycloak realm. Open on Web uses the selected item's sign-in link,
+falling back to the selected space's web URL.
 
 For an HTTP-only local development server, quit any running UDrive instance,
 then launch the Debug build with `bash scripts/dev-macos.sh run-local`. This
@@ -60,6 +61,11 @@ lists, and stays inside the current screen. Account changes dismiss it so stale
 entries cannot remain open. Use the footer to add an account or manage sync. Each account has its
 own search field and filter; removing an account also removes its header field.
 
+Document, spreadsheet, presentation and drawing files use the supplied colored
+icons in both table and tile views. Transparent PNGs are embedded from
+`src/resources/filetypes`; see its README for extension mappings and asset
+preparation. File-type icons do not add editing or preview support for those formats.
+
 `src/gui/qml/UDriveSidebar.qml` and `UDriveNavigationButton.qml` provide the
 rounded sidebar, New menu, file sections, Sync, Quit, and a storage meter based
 on the selected account's personal-space quota. Missing quota is reported as
@@ -71,7 +77,7 @@ copy-sign-in-link controls, and a menu on each row. Keyboard users can use the
 Open, Download, and Actions controls that appear when a row is selected. The
 sidebar and content follow the system light/dark palette. `SettingsDialog`
 retains the upstream toolbar when building with a different application name.
-Sync management, Finder, and View online remain available alongside the file
+Sync management, Finder, and Open on Web remain available alongside the file
 browser. The redesign does not add bulk selection, global search, or new sharing
 APIs.
 
@@ -123,6 +129,14 @@ file actions and navigation. Tiles show larger previews, file names, sizes and
 a per-file actions menu. The last selected mode is saved for future windows;
 each account still owns its own file model, thumbnail cache and requests.
 
+Select all beside Sort by selects the current filtered results, including rows
+outside the viewport. Its checkbox shows none, some or all selected. Row and tile
+checkboxes toggle individual items; the standard Select All shortcut also works
+while the file view is focused. Selection survives switching view modes and
+sorting, and clears on refresh or navigation. File actions currently require one
+selected item; multiple selections show a hint and disable those actions. A
+per-file actions menu selects the clicked item explicitly.
+
 The Sort by menu is available in all three views: Recent, A-Z, Z-A, Newest,
 Oldest, Largest and Smallest. Table headings and the menu stay in sync; folders
 remain first and missing dates/sizes sort last. Newest/Oldest use modified dates.
@@ -144,15 +158,25 @@ unconfirmed results are reported as failures with a reminder to refresh, since
 some changes may already have reached the server.
 
 Favorites uses the server's DAV REPORT and PROPPATCH APIs. Results are mapped to
-known account spaces before any file operation. Shares has its own sidebar page.
+known account spaces before any file operation. Both `/remote.php/dav/` and
+`/dav/` response paths are supported, including the account's personal files
+namespace and space references identified by `oc:spaceid`. Absolute response
+URLs must belong to the account or an advertised space. Mapping preserves
+literal percent, question-mark and hash characters in file names. Shares has its own sidebar page.
 Deleted files lists the chosen drive's trash bin and restores to the original
 location. Restore requires the parent folder to exist and never replaces an
-existing destination. There is no permanent-purge action in the desktop UI.
+existing destination. Delete permanently removes a selected trash item after
+an explicit confirmation. Both deletion prompts use asynchronous, parent-owned
+dialogs; closing or removing their browser cannot leave a stack-owned dialog
+inside a nested event loop. Confirmation revalidates the account, space, item,
+section and listed ETag. Changed or reloaded items require a new confirmation,
+and deletion sends `If-Match` when an ETag is available. Hiding the browser or
+signing out dismisses the prompt. Permanent deletion cannot be undone.
 Reported permissions disable unsupported write actions; the server remains the
 authority when deciding whether an operation is allowed.
 
 Search currently filters this folder. A server-wide Recent page, global search, public-link creation,
-sharing-permission management, and file previews remain in View online. Copy
+sharing-permission management, and other file previews remain on the web. Copy
 sign-in link preserves existing access permissions. Upload cancellation stops
 the request; refresh to verify server state if it had already accepted the file.
 

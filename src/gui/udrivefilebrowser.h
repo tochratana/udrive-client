@@ -6,10 +6,12 @@
 #include <QPersistentModelIndex>
 #include <QSet>
 #include <QWidget>
+#include <QDialog>
 #include <QVariant>
 #include <memory>
 
 class QComboBox;
+class QCheckBox;
 class QHBoxLayout;
 class QAction;
 class QIODevice;
@@ -34,6 +36,7 @@ class PropfindJob;
 class SimpleNetworkJob;
 class UDrivePdfPreview;
 class UDriveThumbnails;
+class DeleteConfirmDialog;
 
 class UDriveFileBrowser : public QWidget
 {
@@ -92,9 +95,14 @@ private:
     QUrl trashRoot() const;
     QUrl selectedRoot() const;
     QModelIndex selectedItem() const;
+    int selectedCount() const;
+    void selectAllFiles(bool select);
+    void selectOnly(const QModelIndex &index);
+    void updateSelectionState();
     bool runOperation(
         const QByteArray &verb, const QUrl &root, const QString &path, const QNetworkRequest &request, const QString &message, QIODevice *body = nullptr);
     void cancelOperation();
+    void confirmDelete(bool permanent);
     void addFileActions(QMenu *menu);
     void updateBreadcrumbs();
     void navigateToBreadcrumb(const QString &path, const QUrl &root);
@@ -123,6 +131,7 @@ private:
     QPointer<PropfindJob> _listing;
     QPointer<SimpleNetworkJob> _report;
     QPointer<SimpleNetworkJob> _operation;
+    QPointer<DeleteConfirmDialog> _deleteConfirmation;
     bool _uploading = false;
     QString _driveId;
     QString _folderPermissions;
@@ -144,11 +153,13 @@ private:
     QHBoxLayout *_breadcrumbLayout;
     QString _spaceName;
     QLabel *_message;
+    QString _statusMessage;
+    QCheckBox *_selectAll;
     QPushButton *_rootButton;
     QPushButton *_refreshButton;
     QPushButton *_openButton;
     QPushButton *_downloadButton;
-    QPushButton *_onlineButton;
+    QPushButton *_restoreButton;
     QPushButton *_cancelButton;
     QPushButton *_newButton;
     QMenu *_fileMenu;
@@ -159,8 +170,10 @@ private:
     QAction *_moveAction;
     QAction *_deleteAction;
     QAction *_restoreAction;
+    QAction *_permanentDeleteAction;
     QAction *_favoriteAction;
     QAction *_linkAction;
+    QAction *_webAction;
     QProgressBar *_progress;
     QTreeView *_tree;
     QListView *_tiles;
@@ -175,5 +188,12 @@ private:
     UDriveThumbnails *_thumbnails;
     QTimer *_thumbnailTimer;
     QSet<QPersistentModelIndex> _thumbnailRows;
+};
+
+class DeleteConfirmDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    explicit DeleteConfirmDialog(const QString &fileName, bool isFolder, QWidget *parent = nullptr, bool permanent = false);
 };
 }

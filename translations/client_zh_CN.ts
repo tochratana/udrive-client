@@ -548,6 +548,29 @@
     </context>
     <context>
         <name>OCC::UDriveFileBrowser</name>
+        <message><source>Select all</source><translation>全选</translation></message>
+        <message><source>Select all files in the current results.</source><translation>选择当前结果中的所有文件。</translation></message>
+        <message><source>%1 selected. Select one item to use file actions.</source><translation>已选择 %1 个项目。请选择一个项目以使用文件操作。</translation></message>
+        <message>
+            <source>Delete permanently…</source>
+            <translation>永久删除…</translation>
+        </message>
+        <message>
+            <source>Item permanently deleted.</source>
+            <translation>项目已永久删除。</translation>
+        </message>
+        <message>
+            <source>Open on Web</source>
+            <translation>在网页中打开</translation>
+        </message>
+        <message>
+            <source>Open this item in your web browser</source>
+            <translation>在网页浏览器中打开此项目</translation>
+        </message>
+        <message>
+            <source>The selected item changed. Review it and confirm again.</source>
+            <translation>所选项目已更改。请检查后再次确认。</translation>
+        </message>
         <message><source>Sort by</source><translation>排序方式</translation></message>
         <message><source>Sort by: %1</source><translation>排序方式：%1</translation></message>
         <message><source>Recent</source><translation>最近打开</translation></message>
@@ -1509,6 +1532,49 @@
         <message>
             <source>Deleted</source>
             <translation>删除时间</translation>
+        </message>
+    </context>
+    <context>
+        <name>OCC::DeleteConfirmDialog</name>
+        <message>
+            <source>Move to Deleted files</source>
+            <translation>移至已删除文件</translation>
+        </message>
+        <message>
+            <source>Delete permanently</source>
+            <translation>永久删除</translation>
+        </message>
+        <message>
+            <source>Move “%1” to Deleted files?</source>
+            <translation>将“%1”移至已删除文件？</translation>
+        </message>
+        <message>
+            <source>Permanently delete “%1”?</source>
+            <translation>永久删除“%1”？</translation>
+        </message>
+        <message>
+            <source>All contents inside this folder will also be moved to Deleted files. You can restore them anytime.</source>
+            <translation>此文件夹中的所有内容也将移至已删除文件。您可以随时恢复。</translation>
+        </message>
+        <message>
+            <source>This item will be moved to Deleted files. You can restore it anytime.</source>
+            <translation>此项目将移至已删除文件。您可以随时恢复。</translation>
+        </message>
+        <message>
+            <source>This folder and all of its contents will be permanently deleted. This action cannot be undone.</source>
+            <translation>此文件夹及其所有内容将被永久删除。此操作无法撤销。</translation>
+        </message>
+        <message>
+            <source>This item will be permanently deleted. This action cannot be undone.</source>
+            <translation>此项目将被永久删除。此操作无法撤销。</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Delete</source>
+            <translation>删除</translation>
         </message>
     </context>
 </TS>

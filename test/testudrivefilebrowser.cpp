@@ -56,6 +56,7 @@
 #include <QTimer>
 #include <QAction>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QSet>
 #include <QtTest>
 #include <algorithm>
@@ -119,6 +120,8 @@ public:
     QMap<QString, QString> modifiedDates;
     QSet<QString> removed;
     QSet<QString> favorites;
+    QByteArray favoritesReport;
+    QString graphDavPrefix = QStringLiteral("/dav");
     QMap<QString, QString> trash;
     QMap<QString, QByteArray> requestBodies;
     QMap<QString, QMap<QByteArray, QByteArray>> requestHeaders;
@@ -167,7 +170,7 @@ public:
                                 {"driveType", id == "personal" ? "personal" : "project"}, {"eTag", "drive-tag"},
                                 {"quota", id == "personal" ? personalQuota : QJsonObject{}},
                                 {"root", QJsonObject{{"id", id}, {"eTag", "root-tag"},
-                                    {"webDavUrl", url("/dav/" + id + "/").toString()}, {"webUrl", url("/web/" + id).toString()}}}});
+                                    {"webDavUrl", url(graphDavPrefix + "/" + id + "/").toString()}, {"webUrl", url("/web/" + id).toString()}}}});
                         }
                         respond(socket, 200, "application/json", QJsonDocument(QJsonObject{{"value", drives}}).toJson());
                     } else if (parts.at(0) == "GET" && QUrlQuery(QUrl::fromEncoded(parts.at(1))).queryItemValue("preview") == "1") {
@@ -200,6 +203,10 @@ public:
                             QByteArray("<d:multistatus xmlns:d=\"DAV:\"><d:response><d:propstat><d:prop/><d:status>HTTP/1.1 ")
                             + (rejectFavorite ? "403 Forbidden" : "200 OK") + "</d:status></d:propstat></d:response></d:multistatus>");
                     } else if (parts.at(0) == "REPORT") {
+                        if (!favoritesReport.isEmpty()) {
+                            respond(socket, 207, "application/xml; charset=utf-8", favoritesReport);
+                            return;
+                        }
                         QByteArray xml = "<d:multistatus xmlns:d=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\">";
                         for (const auto &fav : favorites) xml += entry(fav, folders.contains(fav));
                         respond(socket, 207, "application/xml; charset=utf-8", xml + "</d:multistatus>");
@@ -218,21 +225,25 @@ public:
                             respond(socket, 201, "text/plain", {});
                         }
                     } else if (parts.at(0) == "DELETE") {
-                        if (!exists(path)) respond(socket, 404, "text/plain", "Missing");
+                        if (path.startsWith("/dav/spaces/trash-bin/")) {
+                            if (readOnly) respond(socket, 403, "text/plain", "Forbidden");
+                            else if (!trash.remove(path.section('/', -1))) respond(socket, 404, "text/plain", "Missing");
+                            else respond(socket, 204, "text/plain", {});
+                        } else if (!exists(path)) respond(socket, 404, "text/plain", "Missing");
                         else { removed.insert(path); trash.insert(QStringLiteral("deleted-%1").arg(trash.size() + 1), path); respond(socket, 204, "text/plain", {}); }
                     } else if (parts.at(0) == "PROPFIND") {
                         QByteArray xml = "<?xml version=\"1.0\"?><d:multistatus xmlns:d=\"DAV:\">";
                         xml += entry(path, true);
-                        if (path == "/dav/personal") {
+                        if (path == graphDavPrefix + "/personal") {
                             for (const auto &name : {"Docs", "slowfolder", "a&b.txt", "%2F.txt", "denied.txt", "slow.txt", "truncated.txt"})
                                 if (!removed.contains(path + '/' + name)) xml += entry(path + '/' + name, QByteArray(name) == "Docs" || QByteArray(name) == "slowfolder");
                             xml += entry(path + "/../escape", false);
                             xml += entry(path + "/Docs/not-a-direct-child", false);
-                        } else if (path == "/dav/personal/Docs") {
+                        } else if (path == graphDavPrefix + "/personal/Docs") {
                             xml += entry(path + "/Budget 2026.pdf", false);
-                        } else if (path == "/dav/personal/slowfolder") {
+                        } else if (path == graphDavPrefix + "/personal/slowfolder") {
                             xml += entry(path + "/stale.txt", false);
-                        } else if (path == "/dav/team") {
+                        } else if (path == graphDavPrefix + "/team") {
                             xml += entry(path + "/Roadmap.pdf", false);
                         } else if (path.startsWith("/dav/spaces/trash-bin/")) {
                             for (auto it = trash.cbegin(); it != trash.cend(); ++it) {
@@ -791,6 +802,148 @@ private Q_SLOTS:
         QCOMPARE(otherTree->model()->index(0, 0).data().toString(), files.at(1));
     }
 
+    void selectAllFilteredResultsAndActions_data()
+    {
+        QTest::addColumn<QString>("viewAction");
+        QTest::newRow("table") << QStringLiteral("driveViewDefault");
+        QTest::newRow("condensed") << QStringLiteral("driveViewCondensed");
+        QTest::newRow("tiles") << QStringLiteral("driveViewTiles");
+    }
+
+    void selectAllFilteredResultsAndActions()
+    {
+        QFETCH(QString, viewAction);
+        auto settings = ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"));
+        const QVariant previousSort = settings->value(QStringLiteral("sortMode"));
+        const QVariant previousView = settings->value(QStringLiteral("viewMode"));
+        const auto restoreSettings = qScopeGuard([previousSort, previousView] {
+            auto settings = ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"));
+            if (previousSort.isValid()) settings->setValue(QStringLiteral("sortMode"), previousSort);
+            else settings->remove(QStringLiteral("sortMode"));
+            if (previousView.isValid()) settings->setValue(QStringLiteral("viewMode"), previousView);
+            else settings->remove(QStringLiteral("viewMode"));
+        });
+        DriveServer server(true);
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state); browser.resize(1050, 760); browser.show();
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        auto *tiles = browser.findChild<QListView *>("driveTiles");
+        auto *all = browser.findChild<QCheckBox *>("driveSelectAll");
+        auto *search = browser.findChild<QLineEdit *>("driveSearch");
+        QVERIFY(all);
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        QTRY_VERIFY(all->isEnabled());
+        browser.findChild<QAction *>(viewAction)->trigger();
+        auto *view = viewAction == QStringLiteral("driveViewTiles") ? static_cast<QAbstractItemView *>(tiles) : static_cast<QAbstractItemView *>(tree);
+        QCOMPARE(tiles->selectionModel(), tree->selectionModel());
+        QCOMPARE(all->checkState(), Qt::Unchecked);
+        all->click();
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 7);
+        QCOMPARE(all->checkState(), Qt::Checked);
+        QVERIFY(browser.findChild<QLabel *>("driveStatus")->text().contains(QStringLiteral("7")));
+        DriveServer otherServer;
+        auto *otherAccount = new Account(QUuid::createUuid(), "test", otherServer.url());
+        otherAccount->setCredentials(new Credentials("browser-test-token", "test-refresh-token", otherAccount));
+        otherAccount->credentials()->fetchFromKeychain();
+        AccountState otherState(otherAccount);
+        UDriveFileBrowser otherBrowser(&otherState);
+        auto *otherAll = otherBrowser.findChild<QCheckBox *>("driveSelectAll");
+        QTRY_VERIFY(otherAll->isEnabled());
+        QCOMPARE(otherAll->checkState(), Qt::Unchecked);
+        QCOMPARE(otherBrowser.findChild<QTreeView *>("driveFiles")->selectionModel()->selectedRows().size(), 0);
+        QCOMPARE(all->checkState(), Qt::Checked);
+        for (const auto *name : {"driveFavorite", "driveWebAction", "drivePermanentDelete"})
+            QVERIFY(!browser.findChild<QAction *>(name)->isEnabled());
+        QVERIFY(!browser.deleteSelected());
+        QVERIFY(!browser.renameSelected("unexpected.txt"));
+        QVERIFY(!browser.copySelected("unexpected.txt"));
+        QVERIFY(!browser.moveSelected("Docs"));
+        QVERIFY(!browser.restoreSelected());
+        QVERIFY(!browser.setSelectedFavorite(true));
+        QTemporaryDir destination;
+        QVERIFY(!browser.saveSelectedFile(destination.filePath("unexpected.txt")));
+        QVERIFY(!browser.previewSelectedPdf());
+
+        const auto first = view->model()->index(0, 0);
+        view->scrollTo(first);
+        QTRY_VERIFY(view->visualRect(first).isValid());
+        const QRect row = view->visualRect(first);
+        const QPoint check = view == tree ? QPoint(row.left() + 17, row.center().y()) : row.topLeft() + QPoint(24, 24);
+        QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, check);
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 6);
+        QCOMPARE(all->checkState(), Qt::PartiallyChecked);
+        all->click();
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 7);
+        QCOMPARE(all->checkState(), Qt::Checked);
+        all->click();
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 0);
+        QCOMPARE(all->checkState(), Qt::Unchecked);
+
+        view->setFocus();
+        QTest::keySequence(view, QKeySequence(QKeySequence::SelectAll));
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 7);
+        search->setText(QStringLiteral(".txt"));
+        QCOMPARE(tree->model()->rowCount(), 5);
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 5);
+        QCOMPARE(all->checkState(), Qt::Checked);
+        all->click(); all->click();
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 5);
+        search->setText(QStringLiteral("a&b"));
+        QCOMPARE(tree->model()->rowCount(), 1);
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 1);
+        QCOMPARE(all->checkState(), Qt::Checked);
+        QVERIFY(browser.findChild<QAction *>("driveFavorite")->isEnabled());
+        search->setText(QStringLiteral("no matching file"));
+        QCOMPARE(tree->model()->rowCount(), 0);
+        QCOMPARE(all->checkState(), Qt::Unchecked);
+        QVERIFY(!all->isEnabled());
+
+        search->clear();
+        QTRY_VERIFY(all->isEnabled()); all->click();
+        browser.findChild<QAction *>("driveSort_largest")->trigger();
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 7);
+        QCOMPARE(all->checkState(), Qt::Checked);
+        browser.findChild<QAction *>(view == tree ? "driveViewTiles" : "driveViewDefault")->trigger();
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 7);
+        QCOMPARE(all->checkState(), Qt::Checked);
+        view = view == tree ? static_cast<QAbstractItemView *>(tiles) : static_cast<QAbstractItemView *>(tree);
+        const auto clicked = view->model()->index(0, view == tree ? 4 : 0);
+        view->scrollTo(clicked);
+        QTRY_VERIFY(view->visualRect(clicked).isValid());
+        const QRect clickedRect = view->visualRect(clicked);
+        const QPoint more = view == tree ? QPoint(clickedRect.right() - 27, clickedRect.center().y())
+                                         : QPoint(clickedRect.right() - 26, clickedRect.top() + 181);
+        QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier, more);
+        auto *menu = browser.findChild<QMenu *>("driveActionsMenu");
+        QVERIFY(menu && menu->isVisible());
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 1);
+        QCOMPARE(all->checkState(), Qt::PartiallyChecked);
+        menu->close();
+
+        all->click();
+        browser.findChild<QPushButton *>("driveRefresh")->click();
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        QTRY_VERIFY(all->isEnabled());
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 0);
+        QCOMPARE(all->checkState(), Qt::Unchecked);
+        all->click();
+        browser.showWorkspaces();
+        QTRY_COMPARE(tree->model()->rowCount(), 1);
+        QTRY_VERIFY(all->isEnabled());
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 0);
+        QCOMPARE(all->checkState(), Qt::Unchecked);
+        all->click();
+        state.signOutByUi();
+        QTRY_VERIFY(!all->isEnabled());
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 0);
+        QCOMPARE(all->checkState(), Qt::Unchecked);
+        for (const auto &request : server.requests)
+            QVERIFY(request.first != "DELETE" && request.first != "MOVE" && request.first != "COPY" && request.first != "PROPPATCH");
+    }
+
     void gridViewModesAndActions()
     {
         auto settings = ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"));
@@ -854,6 +1007,14 @@ private Q_SLOTS:
                     if (auto *sort = window.findChild<QPushButton *>("driveSort")) {
                         sort->menu()->popup(sort->mapToGlobal(QPoint(0, sort->height())));
                         QTest::qWait(50); sort->menu()->grab().save("/tmp/udrive-sort-menu-khmer.png"); sort->menu()->close();
+                    }
+                    if (auto *all = window.findChild<QCheckBox *>("driveSelectAll")) {
+                        all->click(); QTest::qWait(50);
+                        window.grab().save("/tmp/udrive-select-all-checked-khmer.png");
+                        auto *files = window.findChild<QTreeView *>("driveFiles");
+                        files->selectionModel()->select(files->model()->index(0, 0), QItemSelectionModel::Deselect | QItemSelectionModel::Rows);
+                        QTest::qWait(50);
+                        window.grab().save("/tmp/udrive-select-all-partial-khmer.png");
                     }
                     qApp->removeTranslator(&translator); qApp->setPalette(originalPalette);
                 }
@@ -968,6 +1129,10 @@ private Q_SLOTS:
         auto *actions = browser.findChild<QMenu *>("driveActionsMenu");
         QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(row.right() - 27, row.center().y()));
         QVERIFY(actions && actions->isVisible());
+        auto *webAction = browser.findChild<QAction *>("driveWebAction");
+        QVERIFY(webAction != nullptr);
+        QVERIFY(webAction->isEnabled());
+        QVERIFY(!browser.findChild<QPushButton *>("driveOnline"));
         actions->hide();
         QSignalSpy completed(&browser, &UDriveFileBrowser::operationFinished);
         QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(row.right() - 95, row.center().y()));
@@ -1449,7 +1614,7 @@ private Q_SLOTS:
         QTRY_VERIFY(!rendered.isEmpty());
         rendered.clear();
         preview.findChild<QComboBox *>("pdfZoom")->setCurrentIndex(8); // 300%
-        QTRY_VERIFY(!rendered.isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(!rendered.isEmpty(), 15000);
         auto *image = preview.findChild<QLabel *>("pdfPageImage");
         QCOMPARE(image->size(), QSize(6000, 9000));
         QCOMPARE(image->pixmap().height(), 4096);
@@ -1650,6 +1815,67 @@ private Q_SLOTS:
         QVERIFY(server.authenticated);
     }
 
+    void favoritesHrefCompatibility_data()
+    {
+        QTest::addColumn<QString>("href");
+        QTest::addColumn<QString>("name");
+        QTest::addColumn<bool>("shown");
+        QTest::addColumn<bool>("spaceEndpoints");
+        QTest::newRow("canonical") << QStringLiteral("/dav/personal/a&b.txt") << QStringLiteral("a&b.txt") << true << false;
+        QTest::newRow("remote-php-files") << QStringLiteral("/remote.php/dav/files/test/a&b.txt") << QStringLiteral("a&b.txt") << true << false;
+        QTest::newRow("dav-files-alias") << QStringLiteral("/dav/files/test/a&b.txt") << QStringLiteral("a&b.txt") << true << false;
+        QTest::newRow("absolute-dav-files") << QStringLiteral("absolute:/dav/files/test/a&b.txt") << QStringLiteral("a&b.txt") << true << false;
+        QTest::newRow("remote-php-root") << QStringLiteral("/remote.php/dav/personal/a&b.txt") << QStringLiteral("a&b.txt") << true << false;
+        QTest::newRow("literal-characters") << QStringLiteral("/dav/files/test/percent%#?.txt") << QStringLiteral("percent%#?.txt") << true << false;
+        QTest::newRow("other-user") << QStringLiteral("/dav/files/other/a&b.txt") << QStringLiteral("a&b.txt") << false << false;
+        QTest::newRow("outside-account") << QStringLiteral("foreign:/dav/files/test/a&b.txt") << QStringLiteral("a&b.txt") << false << false;
+        QTest::newRow("traversal") << QStringLiteral("/dav/files/test/../a&b.txt") << QStringLiteral("a&b.txt") << false << false;
+        QTest::newRow("unknown-space") << QStringLiteral("/dav/unknown/a&b.txt") << QStringLiteral("a&b.txt") << false << false;
+        QTest::newRow("spaces-remote-php") << QStringLiteral("/remote.php/dav/spaces/personal/a&b.txt") << QStringLiteral("a&b.txt") << true << true;
+        QTest::newRow("cs3-reference") << QStringLiteral("/remote.php/dav/personal/a&b.txt") << QStringLiteral("a&b.txt") << true << true;
+    }
+
+    void favoritesHrefCompatibility()
+    {
+        QFETCH(QString, href); QFETCH(QString, name); QFETCH(bool, shown); QFETCH(bool, spaceEndpoints);
+        DriveServer server;
+        if (spaceEndpoints) server.graphDavPrefix = QStringLiteral("/dav/spaces");
+        const QString path = server.graphDavPrefix + QStringLiteral("/personal/") + name;
+        if (name != QStringLiteral("a&b.txt")) server.uploaded.insert(path, "fixture");
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account); UDriveFileBrowser browser(&state); browser.show();
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        QTRY_VERIFY(select(tree, name).isValid());
+        QSignalSpy completed(&browser, &UDriveFileBrowser::operationFinished);
+        QVERIFY(browser.setSelectedFavorite(true)); QTRY_COMPARE(completed.count(), 1);
+        QVERIFY(completed.first().at(0).toBool()); QVERIFY(server.favorites.contains(path));
+        QTRY_VERIFY(select(tree, name).isValid());
+        QCOMPARE(browser.findChild<QAction *>("driveFavorite")->text(), QStringLiteral("Remove from Favorites"));
+        QUrl reported;
+        if (href.startsWith("absolute:")) { reported = server.url(); href.remove(0, 9); }
+        else if (href.startsWith("foreign:")) { reported = QUrl("https://unrelated.example"); href.remove(0, 8); }
+        reported.setPath(href);
+        QByteArray entry = server.entry(path, false);
+        if (spaceEndpoints) entry.replace("</d:prop>", "<oc:spaceid>personal</oc:spaceid></d:prop>");
+        const auto start = entry.indexOf("<d:href>") + 8;
+        const auto end = entry.indexOf("</d:href>", start);
+        entry.replace(start, end - start, reported.toString(QUrl::FullyEncoded).toHtmlEscaped().toUtf8());
+        server.favoritesReport = "<d:multistatus xmlns:d=\"DAV:\">" + entry + "</d:multistatus>";
+        browser.showFavorites();
+        QTRY_VERIFY(!browser.findChild<QLabel *>("driveStatus")->text().startsWith(QStringLiteral("Loading")));
+        QCOMPARE(tree->model()->rowCount(), shown ? 1 : 0);
+        if (shown) {
+            QVERIFY(select(tree, name).isValid());
+            QTemporaryDir downloads;
+            QSignalSpy saved(&browser, &UDriveFileBrowser::downloadFinished);
+            QVERIFY(browser.saveSelectedFile(downloads.filePath("favorite.txt")));
+            QTRY_COMPARE(saved.count(), 1); QVERIFY(saved.first().at(0).toBool());
+            QVERIFY(server.requests.contains(qMakePair(QByteArray("GET"), path)));
+        }
+    }
+
     void manageFilesFavoritesAndTrash()
     {
         DriveServer server(true);
@@ -1752,6 +1978,10 @@ private Q_SLOTS:
         spaces->setCurrentIndex(spaces->findText("Personal"));
         QTRY_COMPARE(tree->model()->rowCount(), 1);
         QVERIFY(select(tree, "Final & draft.txt").isValid());
+        auto *restoreBtn = browser.findChild<QPushButton *>("driveRestore");
+        QVERIFY(restoreBtn && !restoreBtn->isHidden() && restoreBtn->isEnabled());
+        auto *openBtn = browser.findChild<QPushButton *>("driveOpen");
+        QVERIFY(openBtn && openBtn->isHidden());
         QVERIFY(!browser.saveSelectedFile(local.path() + "/trash.txt"));
         server.uploaded.insert("/dav/personal/Final & draft.txt", "new existing file");
         server.removed.remove("/dav/personal/Final & draft.txt");
@@ -1766,6 +1996,7 @@ private Q_SLOTS:
         QTRY_COMPARE(tree->model()->rowCount(), 0);
         QCOMPARE(server.requestHeaders.value("MOVE /dav/spaces/trash-bin/personal/deleted-1").value("overwrite"), QByteArray("F"));
         browser.showPersonal();
+        QVERIFY(restoreBtn && restoreBtn->isHidden());
         QTRY_VERIFY(select(tree, "Final & draft.txt").isValid());
         const QString pendingUpload = local.path() + "/pending upload.txt";
         { QFile file(pendingUpload); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("pending upload"); }
@@ -1859,6 +2090,189 @@ private Q_SLOTS:
         QVERIFY(!browser.moveSelected("Docs"));
         QVERIFY(!browser.deleteSelected());
         QCOMPARE(server.requests.size(), requests);
+    }
+
+    void deleteConfirmationDialog()
+    {
+        // Test file confirmation dialog
+        DeleteConfirmDialog fileDialog(QStringLiteral("readme.md"), false);
+        auto *title = fileDialog.findChild<QLabel *>(QStringLiteral("confirmTitle"));
+        auto *message = fileDialog.findChild<QLabel *>(QStringLiteral("confirmMessage"));
+        auto *cancelBtn = fileDialog.findChild<QPushButton *>(QStringLiteral("cancelDeleteButton"));
+        auto *deleteBtn = fileDialog.findChild<QPushButton *>(QStringLiteral("confirmDeleteButton"));
+
+        QVERIFY(title != nullptr);
+        QVERIFY(message != nullptr);
+        QVERIFY(cancelBtn != nullptr);
+        QVERIFY(deleteBtn != nullptr);
+
+        QVERIFY(title->text().contains(QStringLiteral("readme.md")));
+        QVERIFY(message->text().contains(QStringLiteral("This item will be moved to Deleted files")));
+        QVERIFY(!message->text().contains(QStringLiteral("A folder includes all of its contents")));
+
+        // Test folder confirmation dialog
+        DeleteConfirmDialog folderDialog(QStringLiteral("Documents"), true);
+        auto *folderMessage = folderDialog.findChild<QLabel *>(QStringLiteral("confirmMessage"));
+        QVERIFY(folderMessage != nullptr);
+        QVERIFY(folderMessage->text().contains(QStringLiteral("All contents inside this folder will also be moved to Deleted files")));
+
+        DeleteConfirmDialog permanentDialog(QStringLiteral("Documents"), true, nullptr, true);
+        QVERIFY(permanentDialog.findChild<QLabel *>("confirmMessage")->text().contains(QStringLiteral("cannot be undone")));
+        QCOMPARE(permanentDialog.findChild<QPushButton *>("confirmDeleteButton")->text(), QStringLiteral("Delete permanently"));
+        QVERIFY(permanentDialog.findChild<QPushButton *>("cancelDeleteButton")->isDefault());
+    }
+
+    void deleteConfirmationGuards_data()
+    {
+        QTest::addColumn<bool>("permanent");
+        QTest::addColumn<QString>("change");
+        for (bool permanent : {false, true})
+            for (const auto &change : {"accept", "cancel", "space", "selection", "refresh", "etag", "signout", "hide"})
+                QTest::newRow(qPrintable(QStringLiteral("%1-%2").arg(permanent ? "permanent" : "trash", change)))
+                    << permanent << QString::fromLatin1(change);
+    }
+
+    void deleteConfirmationGuards()
+    {
+        QFETCH(bool, permanent); QFETCH(QString, change);
+        DriveServer server;
+        server.trash.insert("deleted-1", "/dav/personal/a&b.txt");
+        server.trash.insert("deleted-2", "/dav/personal/denied.txt");
+        server.uploaded.insert("/dav/team/a&b.txt", "other-space fixture");
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account); UDriveFileBrowser browser(&state); browser.show();
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        if (permanent) {
+            browser.showTrash();
+            auto *spaces = browser.findChild<QComboBox *>("driveSpaces");
+            spaces->setCurrentIndex(spaces->findText("Personal"));
+            QTRY_COMPARE(tree->model()->rowCount(), 2);
+        }
+        QVERIFY(select(tree, "a&b.txt").isValid());
+        QAction *action = browser.findChild<QAction *>("drivePermanentDelete");
+        if (!permanent)
+            for (auto *candidate : browser.findChild<QMenu *>("driveActionsMenu")->actions())
+                if (candidate->text() == QStringLiteral("Move to Deleted files…")) action = candidate;
+        QVERIFY(action && action->isEnabled());
+        action->trigger(); // Returns immediately; no nested event loop.
+        QPointer<DeleteConfirmDialog> dialog = browser.findChild<DeleteConfirmDialog *>();
+        QVERIFY(dialog && dialog->isVisible());
+        QSignalSpy completed(&browser, &UDriveFileBrowser::operationFinished);
+        if (change == "space") {
+            if (permanent) {
+                auto *spaces = browser.findChild<QComboBox *>("driveSpaces");
+                spaces->setCurrentIndex(spaces->findText("Team files"));
+            } else browser.showWorkspaces();
+            QTRY_COMPARE(tree->model()->rowCount(), 2);
+            QVERIFY(select(tree, "a&b.txt").isValid());
+        } else if (change == "selection") {
+            QVERIFY(select(tree, "denied.txt").isValid());
+        } else if (change == "refresh") {
+            browser.findChild<QPushButton *>("driveRefresh")->click();
+            QTRY_COMPARE(tree->model()->rowCount(), permanent ? 2 : 7);
+            QVERIFY(select(tree, "a&b.txt").isValid());
+        } else if (change == "etag") {
+            // Change the listed revision without replacing the item/index.
+            QVERIFY(tree->model()->setData(tree->currentIndex(), QStringLiteral("\"new-revision\""), Qt::UserRole + 9));
+        } else if (change == "signout") {
+            state.signOutByUi();
+            QTRY_VERIFY(!dialog || !dialog->isVisible());
+        } else if (change == "hide") {
+            browser.hide();
+            QTRY_VERIFY(!dialog || !dialog->isVisible());
+        }
+        if (dialog) {
+            if (change == "cancel" || change == "hide") dialog->reject();
+            else dialog->accept();
+        }
+        if (change == "accept") {
+            QTRY_COMPARE(completed.count(), 1);
+            QVERIFY(completed.first().at(0).toBool());
+            const QString target = permanent ? QStringLiteral("/dav/spaces/trash-bin/personal/deleted-1") : QStringLiteral("/dav/personal/a&b.txt");
+            QVERIFY(server.requests.contains(qMakePair(QByteArray("DELETE"), target)));
+            QCOMPARE(server.requestHeaders.value("DELETE " + target).value("if-match"), QByteArray("\"tag\""));
+            if (permanent) QVERIFY(!server.trash.contains("deleted-1"));
+        } else {
+            QTest::qWait(100);
+            QCOMPARE(completed.count(), 0);
+        }
+        QCOMPARE(std::count_if(server.requests.cbegin(), server.requests.cend(), [](const auto &r) { return r.first == "DELETE"; }), change == "accept" ? 1 : 0);
+        QTRY_VERIFY(dialog.isNull());
+    }
+
+    void deleteConfirmationParentDestruction_data()
+    {
+        QTest::addColumn<bool>("permanent");
+        QTest::newRow("trash") << false;
+        QTest::newRow("permanent") << true;
+    }
+
+    void deleteConfirmationParentDestruction()
+    {
+        QFETCH(bool, permanent);
+        DriveServer server; server.trash.insert("deleted-1", "/dav/personal/a&b.txt");
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        auto browser = std::make_unique<UDriveFileBrowser>(&state); browser->show();
+        auto *tree = browser->findChild<QTreeView *>("driveFiles");
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        if (permanent) {
+            browser->showTrash();
+            auto *spaces = browser->findChild<QComboBox *>("driveSpaces");
+            spaces->setCurrentIndex(spaces->findText("Personal"));
+            QTRY_COMPARE(tree->model()->rowCount(), 1);
+        }
+        QVERIFY(select(tree, "a&b.txt").isValid());
+        QAction *action = browser->findChild<QAction *>("drivePermanentDelete");
+        if (!permanent)
+            for (auto *candidate : browser->findChild<QMenu *>("driveActionsMenu")->actions())
+                if (candidate->text() == QStringLiteral("Move to Deleted files…")) action = candidate;
+        QVERIFY(action && action->isEnabled()); action->trigger();
+        QPointer<DeleteConfirmDialog> dialog = browser->findChild<DeleteConfirmDialog *>();
+        QVERIFY(dialog && dialog->isVisible());
+        browser.reset(); // Same destruction boundary used when removing an account.
+        QVERIFY(dialog.isNull());
+        QTest::qWait(50);
+        QVERIFY(std::none_of(server.requests.cbegin(), server.requests.cend(), [](const auto &r) { return r.first == "DELETE"; }));
+    }
+
+    void deleteConfirmationTranslations_data()
+    {
+        QTest::addColumn<QString>("locale");
+        QTest::addColumn<QString>("permanentLabel");
+        QTest::newRow("khmer") << QStringLiteral("km") << QStringLiteral("លុបជាអចិន្ត្រៃយ៍");
+        QTest::newRow("chinese") << QStringLiteral("zh_CN") << QStringLiteral("永久删除");
+    }
+
+    void deleteConfirmationTranslations()
+    {
+        QFETCH(QString, locale); QFETCH(QString, permanentLabel);
+        QTranslator translator;
+        QVERIFY(translator.load(Translations::translationsFilePrefix() + locale, Translations::translationsDirectoryPath()));
+        QVERIFY(qApp->installTranslator(&translator));
+        const auto cleanup = qScopeGuard([&] { qApp->removeTranslator(&translator); });
+        const QString name = QStringLiteral("<b>ឯកសារ 文件.pdf</b>");
+        for (bool permanent : {false, true}) {
+            DeleteConfirmDialog dialog(name, true, nullptr, permanent);
+            auto *title = dialog.findChild<QLabel *>("confirmTitle");
+            auto *message = dialog.findChild<QLabel *>("confirmMessage");
+            QVERIFY(title && message);
+            QCOMPARE(title->textFormat(), Qt::PlainText);
+            QVERIFY(title->text().contains(name));
+            const auto source = permanent ? "This folder and all of its contents will be permanently deleted. This action cannot be undone."
+                                          : "All contents inside this folder will also be moved to Deleted files. You can restore them anytime.";
+            QCOMPARE(message->text(), translator.translate("OCC::DeleteConfirmDialog", source));
+            QVERIFY(message->text() != QString::fromUtf8(source));
+            if (permanent) {
+                QCOMPARE(dialog.windowTitle(), permanentLabel);
+                QCOMPARE(dialog.findChild<QPushButton *>("confirmDeleteButton")->text(), permanentLabel);
+            }
+        }
     }
 
     void monochromeStatusIcons()

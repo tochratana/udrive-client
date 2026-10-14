@@ -33,6 +33,7 @@ enum class Symbol {
     Back,
     Next,
     File,
+    Image,
     Pdf,
     Video,
     Sheet,
@@ -212,12 +213,17 @@ public:
             line({{12, 6}, {12, 12}, {16, 14}});
             break;
         case Symbol::File:
+        case Symbol::Image:
         case Symbol::Pdf:
         case Symbol::Video:
         case Symbol::Sheet:
         case Symbol::Slides:
             line({{5, 3}, {14, 3}, {20, 9}, {20, 21}, {5, 21}, {5, 3}});
             line({{14, 3}, {14, 9}, {20, 9}});
+            if (_symbol == Symbol::Image) {
+                painter->drawEllipse(QPointF(9, 13), 1.2, 1.2);
+                line({{7, 18}, {10, 15}, {13, 17}, {16, 14}, {18, 18}});
+            }
             if (_symbol == Symbol::Pdf) {
                 line({{8, 13}, {17, 13}});
                 line({{8, 17}, {14, 17}});
@@ -254,9 +260,9 @@ private:
     QColor _tint;
 };
 
-inline QIcon icon(Symbol symbol, bool primary = false)
+inline QIcon icon(Symbol symbol, bool primary = false, QColor tint = {})
 {
-    return QIcon(new Engine(symbol, primary));
+    return QIcon(new Engine(symbol, primary, tint));
 }
 inline QIcon fileIcon(const QString &name, bool directory)
 {
@@ -265,12 +271,44 @@ inline QIcon fileIcon(const QString &name, bool directory)
     const QString extension = name.section(QLatin1Char('.'), -1).toLower();
     if (extension == QStringLiteral("pdf"))
         return QIcon(new Engine(Symbol::Pdf, false, QColor("#FF4B55")));
-    if (extension == QStringLiteral("ppt") || extension == QStringLiteral("pptx"))
-        return QIcon(new Engine(Symbol::Slides, false, QColor("#FF9D43")));
-    if (extension == QStringLiteral("xls") || extension == QStringLiteral("xlsx") || extension == QStringLiteral("csv"))
-        return QIcon(new Engine(Symbol::Sheet, false, QColor("#40C98C")));
-    if (extension == QStringLiteral("mp4") || extension == QStringLiteral("mov") || extension == QStringLiteral("webm"))
+    if (extension == QStringLiteral("ppt") || extension == QStringLiteral("pptx") || extension == QStringLiteral("pptm")
+        || extension == QStringLiteral("pps") || extension == QStringLiteral("ppsx") || extension == QStringLiteral("odp")) {
+        static const QIcon presentation(QStringLiteral(":/client/resources/filetypes/presentation.png"));
+        return presentation;
+    }
+    if (extension == QStringLiteral("xls") || extension == QStringLiteral("xlsx") || extension == QStringLiteral("xlsm")
+        || extension == QStringLiteral("xlsb") || extension == QStringLiteral("csv") || extension == QStringLiteral("tsv") || extension == QStringLiteral("ods")) {
+        static const QIcon spreadsheet(QStringLiteral(":/client/resources/filetypes/spreadsheet.png"));
+        return spreadsheet;
+    }
+    if (extension == QStringLiteral("svg") || extension == QStringLiteral("odg") || extension == QStringLiteral("otg")
+        || extension == QStringLiteral("drawio") || extension == QStringLiteral("vsd") || extension == QStringLiteral("vsdx")
+        || extension == QStringLiteral("dwg") || extension == QStringLiteral("dxf")) {
+        static const QIcon drawing(QStringLiteral(":/client/resources/filetypes/drawing.png"));
+        return drawing;
+    }
+    if (extension == QStringLiteral("mp4") || extension == QStringLiteral("mov") || extension == QStringLiteral("webm")
+        || extension == QStringLiteral("avi") || extension == QStringLiteral("mkv"))
         return QIcon(new Engine(Symbol::Video, false, QColor("#00BCD4")));
+    if (extension == QStringLiteral("jpg") || extension == QStringLiteral("jpeg") || extension == QStringLiteral("png")
+        || extension == QStringLiteral("gif") || extension == QStringLiteral("webp")
+        || extension == QStringLiteral("bmp") || extension == QStringLiteral("ico") || extension == QStringLiteral("heic"))
+        return QIcon(new Engine(Symbol::Image, false, QColor("#8B5CF6")));
+    if (extension == QStringLiteral("doc") || extension == QStringLiteral("docx") || extension == QStringLiteral("docm")
+        || extension == QStringLiteral("dot") || extension == QStringLiteral("dotx") || extension == QStringLiteral("odt") || extension == QStringLiteral("rtf")) {
+        static const QIcon document(QStringLiteral(":/client/resources/filetypes/document.png"));
+        return document;
+    }
+    if (extension == QStringLiteral("txt") || extension == QStringLiteral("md") || extension == QStringLiteral("json")
+        || extension == QStringLiteral("xml") || extension == QStringLiteral("html") || extension == QStringLiteral("js")
+        || extension == QStringLiteral("py") || extension == QStringLiteral("cpp") || extension == QStringLiteral("h"))
+        return QIcon(new Engine(Symbol::File, false, QColor("#10B981")));
+    if (extension == QStringLiteral("zip") || extension == QStringLiteral("tar") || extension == QStringLiteral("gz")
+        || extension == QStringLiteral("7z") || extension == QStringLiteral("rar"))
+        return QIcon(new Engine(Symbol::File, false, QColor("#F59E0B")));
+    if (extension == QStringLiteral("mp3") || extension == QStringLiteral("wav") || extension == QStringLiteral("flac")
+        || extension == QStringLiteral("ogg") || extension == QStringLiteral("m4a"))
+        return QIcon(new Engine(Symbol::File, false, QColor("#EC4899")));
     return icon(Symbol::File);
 }
 }

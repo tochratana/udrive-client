@@ -548,6 +548,29 @@
     </context>
     <context>
         <name>OCC::UDriveFileBrowser</name>
+        <message><source>Select all</source><translation>ជ្រើសរើសទាំងអស់</translation></message>
+        <message><source>Select all files in the current results.</source><translation>ជ្រើសរើសឯកសារទាំងអស់នៅក្នុងលទ្ធផលបច្ចុប្បន្ន។</translation></message>
+        <message><source>%1 selected. Select one item to use file actions.</source><translation>បានជ្រើសរើស %1 ធាតុ។ ជ្រើសរើសធាតុមួយដើម្បីប្រើសកម្មភាពឯកសារ។</translation></message>
+        <message>
+            <source>Delete permanently…</source>
+            <translation>លុបជាអចិន្ត្រៃយ៍…</translation>
+        </message>
+        <message>
+            <source>Item permanently deleted.</source>
+            <translation>បានលុបធាតុជាអចិន្ត្រៃយ៍។</translation>
+        </message>
+        <message>
+            <source>Open on Web</source>
+            <translation>បើកលើវេប</translation>
+        </message>
+        <message>
+            <source>Open this item in your web browser</source>
+            <translation>បើកធាតុនេះក្នុងកម្មវិធីរុករកវេបរបស់អ្នក</translation>
+        </message>
+        <message>
+            <source>The selected item changed. Review it and confirm again.</source>
+            <translation>ធាតុដែលបានជ្រើសរើសបានផ្លាស់ប្ដូរ។ សូមពិនិត្យវា ហើយបញ្ជាក់ម្ដងទៀត។</translation>
+        </message>
         <message><source>Sort by</source><translation>តម្រៀបតាម</translation></message>
         <message><source>Sort by: %1</source><translation>តម្រៀបតាម៖ %1</translation></message>
         <message><source>Recent</source><translation>បានបើកថ្មីៗ</translation></message>
@@ -1509,6 +1532,49 @@
         <message>
             <source>Deleted</source>
             <translation>បានលុប</translation>
+        </message>
+    </context>
+    <context>
+        <name>OCC::DeleteConfirmDialog</name>
+        <message>
+            <source>Move to Deleted files</source>
+            <translation>ផ្លាស់ទីទៅឯកសារដែលបានលុប</translation>
+        </message>
+        <message>
+            <source>Delete permanently</source>
+            <translation>លុបជាអចិន្ត្រៃយ៍</translation>
+        </message>
+        <message>
+            <source>Move “%1” to Deleted files?</source>
+            <translation>ផ្លាស់ទី “%1” ទៅឯកសារដែលបានលុប?</translation>
+        </message>
+        <message>
+            <source>Permanently delete “%1”?</source>
+            <translation>លុប “%1” ជាអចិន្ត្រៃយ៍?</translation>
+        </message>
+        <message>
+            <source>All contents inside this folder will also be moved to Deleted files. You can restore them anytime.</source>
+            <translation>មាតិកាទាំងអស់នៅក្នុងថតនេះក៏នឹងត្រូវផ្លាស់ទីទៅឯកសារដែលបានលុបផងដែរ។ អ្នកអាចស្ដារពួកវាឡើងវិញបានគ្រប់ពេល។</translation>
+        </message>
+        <message>
+            <source>This item will be moved to Deleted files. You can restore it anytime.</source>
+            <translation>ធាតុនេះនឹងត្រូវផ្លាស់ទីទៅឯកសារដែលបានលុប។ អ្នកអាចស្ដារវាឡើងវិញបានគ្រប់ពេល។</translation>
+        </message>
+        <message>
+            <source>This folder and all of its contents will be permanently deleted. This action cannot be undone.</source>
+            <translation>ថតនេះនិងមាតិកាទាំងអស់របស់វានឹងត្រូវលុបជាអចិន្ត្រៃយ៍។ សកម្មភាពនេះមិនអាចត្រឡប់វិញបានទេ។</translation>
+        </message>
+        <message>
+            <source>This item will be permanently deleted. This action cannot be undone.</source>
+            <translation>ធាតុនេះនឹងត្រូវលុបជាអចិន្ត្រៃយ៍។ សកម្មភាពនេះមិនអាចត្រឡប់វិញបានទេ។</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>បោះបង់</translation>
+        </message>
+        <message>
+            <source>Delete</source>
+            <translation>លុប</translation>
         </message>
     </context>
 </TS>
