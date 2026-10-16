@@ -1604,4 +1604,119 @@
             <translation>删除</translation>
         </message>
     </context>
+    <context>
+        <name>OCC::UDriveShareDialog</name>
+        <message>
+            <source>Share “%1”</source>
+            <translation>共享“%1”</translation>
+        </message>
+        <message>
+            <source>Share folder with other users</source>
+            <translation>与其他用户共享文件夹</translation>
+        </message>
+        <message>
+            <source>Share file with other users</source>
+            <translation>与其他用户共享文件</translation>
+        </message>
+        <message>
+            <source>Invite user or group</source>
+            <translation>邀请用户或群组</translation>
+        </message>
+        <message>
+            <source>Search users or groups…</source>
+            <translation>搜索用户或群组…</translation>
+        </message>
+        <message>
+            <source>Viewer</source>
+            <translation>查看者</translation>
+        </message>
+        <message>
+            <source>Editor</source>
+            <translation>编辑者</translation>
+        </message>
+        <message>
+            <source>Share</source>
+            <translation>共享</translation>
+        </message>
+        <message>
+            <source>People with access</source>
+            <translation>有访问权限的用户</translation>
+        </message>
+        <message>
+            <source>Copy sign-in link</source>
+            <translation>复制登录链接</translation>
+        </message>
+        <message>
+            <source>Done</source>
+            <translation>完成</translation>
+        </message>
+        <message>
+            <source>Matching users and groups</source>
+            <translation>匹配的用户和群组</translation>
+        </message>
+        <message>
+            <source>Type at least 2 characters to find a user or group.</source>
+            <translation>输入至少 2 个字符以查找用户或群组。</translation>
+        </message>
+        <message>
+            <source>Searching…</source>
+            <translation>正在搜索…</translation>
+        </message>
+        <message>
+            <source>Could not search users and groups. Try again.</source>
+            <translation>无法搜索用户和群组。请重试。</translation>
+        </message>
+        <message>
+            <source>User · %1</source>
+            <translation>用户 · %1</translation>
+        </message>
+        <message>
+            <source>Group · %1</source>
+            <translation>群组 · %1</translation>
+        </message>
+        <message>
+            <source>No matching users or groups. Try another name or email.</source>
+            <translation>没有匹配的用户或群组。请尝试其他姓名或邮箱。</translation>
+        </message>
+        <message>
+            <source>Select a user or group, then click Share.</source>
+            <translation>选择用户或群组，然后点击共享。</translation>
+        </message>
+        <message>
+            <source>Selected: %1</source>
+            <translation>已选择：%1</translation>
+        </message>
+        <message>
+            <source>Sharing with %1…</source>
+            <translation>正在与 %1 共享…</translation>
+        </message>
+        <message>
+            <source>Failed to share: %1</source>
+            <translation>共享失败：%1</translation>
+        </message>
+        <message>
+            <source>Successfully shared with %1</source>
+            <translation>已成功与 %1 共享</translation>
+        </message>
+        <message>
+            <source>Not shared with anyone yet.</source>
+            <translation>尚未与任何人共享。</translation>
+        </message>
+        <message>
+            <source>Remove</source>
+            <translation>移除</translation>
+        </message>
+        <message>
+            <source>Access removed.</source>
+            <translation>已移除访问权限。</translation>
+        </message>
+        <message>
+            <source>Failed to revoke: %1</source>
+            <translation>撤销失败：%1</translation>
+        </message>
+        <message>
+            <source>Sign-in link copied to clipboard.</source>
+            <translation>已将登录链接复制到剪贴板。</translation>
+        </message>
+    </context>
 </TS>

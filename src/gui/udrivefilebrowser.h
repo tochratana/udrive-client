@@ -11,8 +11,10 @@
 #include <memory>
 
 class QComboBox;
+class QCompleter;
 class QCheckBox;
 class QHBoxLayout;
+class QVBoxLayout;
 class QAction;
 class QIODevice;
 class QNetworkRequest;
@@ -34,6 +36,7 @@ class QAbstractItemView;
 namespace OCC {
 class PropfindJob;
 class SimpleNetworkJob;
+class JsonApiJob;
 class UDrivePdfPreview;
 class UDriveThumbnails;
 class DeleteConfirmDialog;
@@ -161,6 +164,7 @@ private:
     QPushButton *_openButton;
     QPushButton *_downloadButton;
     QPushButton *_restoreButton;
+    QPushButton *_shareButton;
     QPushButton *_cancelButton;
     QPushButton *_newButton;
     QMenu *_fileMenu;
@@ -175,9 +179,11 @@ private:
     QAction *_favoriteAction;
     QAction *_linkAction;
     QAction *_webAction;
+    QAction *_shareAction;
     QProgressBar *_progress;
     QTreeView *_tree;
     QListView *_tiles;
+    QPointer<QWidget> _checkboxViewport;
     QStackedWidget *_fileViews;
     QPushButton *_viewButton;
     QPushButton *_sortButton;
@@ -213,5 +219,49 @@ public:
 private:
     QLineEdit *_lineEdit = nullptr;
     QPushButton *_confirmButton = nullptr;
+};
+
+class UDriveShareDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    explicit UDriveShareDialog(AccountState *accountState, const QString &fileName, bool isFolder,
+                               const QString &remotePath, const QUrl &linkUrl, const QString &spaceId = {},
+                               QWidget *parent = nullptr);
+    ~UDriveShareDialog() override;
+
+private:
+    bool canShare() const;
+    void cancelRecipientSearch();
+    void searchRecipients();
+    void selectRecipient(const QModelIndex &index);
+    void sendShare();
+    void fetchShares();
+    void revokeShare(const QString &shareId);
+    void copyLink();
+
+    QPointer<AccountState> _accountState;
+    QTimer *_recipientTimer = nullptr;
+    QCompleter *_recipientCompleter = nullptr;
+    QStandardItemModel *_recipientModel = nullptr;
+    QPointer<JsonApiJob> _recipientJob;
+    QString _recipientId;
+    QString _recipientLabel;
+    int _recipientType = -1;
+    bool _sharing = false;
+    bool _closed = false;
+    QString _fileName;
+    bool _isFolder = false;
+    QString _remotePath;
+    QUrl _linkUrl;
+    QString _spaceId;
+
+    QLineEdit *_userInput = nullptr;
+    QComboBox *_roleCombo = nullptr;
+    QPushButton *_shareButton = nullptr;
+    QLabel *_statusLabel = nullptr;
+    QVBoxLayout *_sharesLayout = nullptr;
+    QWidget *_sharesContainer = nullptr;
+    QPushButton *_copyLinkButton = nullptr;
 };
 }

@@ -79,6 +79,14 @@ private Q_SLOTS:
             QVERIFY2(!translated.isEmpty(), pair.second);
             QVERIFY(translated != QString::fromUtf8(pair.second));
         }
+        for (const auto *source : {"Search users or groups…", "Viewer", "Editor", "Share", "Matching users and groups",
+                 "Type at least 2 characters to find a user or group.", "Searching…",
+                 "Could not search users and groups. Try again.", "User · %1", "Group · %1",
+                 "No matching users or groups. Try another name or email.", "Select a user or group, then click Share.", "Selected: %1"}) {
+            const auto translated = translator.translate("OCC::UDriveShareDialog", source);
+            QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
+            if (QString::fromUtf8(source).contains(QStringLiteral("%1"))) QVERIFY(translated.contains(QStringLiteral("%1")));
+        }
         const auto storage = translator.translate("OCC::SettingsDialog", "%1 of %2 used");
         QVERIFY(storage.contains(QStringLiteral("%1")) && storage.contains(QStringLiteral("%2")));
         if (locale == QStringLiteral("km")) {

@@ -1604,4 +1604,119 @@
             <translation>លុប</translation>
         </message>
     </context>
+    <context>
+        <name>OCC::UDriveShareDialog</name>
+        <message>
+            <source>Share “%1”</source>
+            <translation>ចែករំលែក “%1”</translation>
+        </message>
+        <message>
+            <source>Share folder with other users</source>
+            <translation>ចែករំលែកថតជាមួយអ្នកប្រើផ្សេងទៀត</translation>
+        </message>
+        <message>
+            <source>Share file with other users</source>
+            <translation>ចែករំលែកឯកសារជាមួយអ្នកប្រើផ្សេងទៀត</translation>
+        </message>
+        <message>
+            <source>Invite user or group</source>
+            <translation>អញ្ជើញអ្នកប្រើឬក្រុម</translation>
+        </message>
+        <message>
+            <source>Search users or groups…</source>
+            <translation>ស្វែងរកអ្នកប្រើឬក្រុម…</translation>
+        </message>
+        <message>
+            <source>Viewer</source>
+            <translation>អ្នកមើល</translation>
+        </message>
+        <message>
+            <source>Editor</source>
+            <translation>អ្នកកែសម្រួល</translation>
+        </message>
+        <message>
+            <source>Share</source>
+            <translation>ចែករំលែក</translation>
+        </message>
+        <message>
+            <source>People with access</source>
+            <translation>អ្នកដែលមានសិទ្ធិចូលប្រើ</translation>
+        </message>
+        <message>
+            <source>Copy sign-in link</source>
+            <translation>ចម្លងតំណចូលប្រើ</translation>
+        </message>
+        <message>
+            <source>Done</source>
+            <translation>រួចរាល់</translation>
+        </message>
+        <message>
+            <source>Matching users and groups</source>
+            <translation>អ្នកប្រើនិងក្រុមដែលត្រូវគ្នា</translation>
+        </message>
+        <message>
+            <source>Type at least 2 characters to find a user or group.</source>
+            <translation>វាយយ៉ាងតិច ២ តួអក្សរដើម្បីស្វែងរកអ្នកប្រើឬក្រុម។</translation>
+        </message>
+        <message>
+            <source>Searching…</source>
+            <translation>កំពុងស្វែងរក…</translation>
+        </message>
+        <message>
+            <source>Could not search users and groups. Try again.</source>
+            <translation>មិនអាចស្វែងរកអ្នកប្រើនិងក្រុមបានទេ។ សូមព្យាយាមម្ដងទៀត។</translation>
+        </message>
+        <message>
+            <source>User · %1</source>
+            <translation>អ្នកប្រើ · %1</translation>
+        </message>
+        <message>
+            <source>Group · %1</source>
+            <translation>ក្រុម · %1</translation>
+        </message>
+        <message>
+            <source>No matching users or groups. Try another name or email.</source>
+            <translation>រកមិនឃើញអ្នកប្រើឬក្រុមដែលត្រូវគ្នាទេ។ សូមសាកឈ្មោះឬអ៊ីមែលផ្សេង។</translation>
+        </message>
+        <message>
+            <source>Select a user or group, then click Share.</source>
+            <translation>ជ្រើសរើសអ្នកប្រើឬក្រុម រួចចុចចែករំលែក។</translation>
+        </message>
+        <message>
+            <source>Selected: %1</source>
+            <translation>បានជ្រើសរើស៖ %1</translation>
+        </message>
+        <message>
+            <source>Sharing with %1…</source>
+            <translation>កំពុងចែករំលែកជាមួយ %1…</translation>
+        </message>
+        <message>
+            <source>Failed to share: %1</source>
+            <translation>មិនអាចចែករំលែកបាន៖ %1</translation>
+        </message>
+        <message>
+            <source>Successfully shared with %1</source>
+            <translation>បានចែករំលែកជាមួយ %1 ដោយជោគជ័យ</translation>
+        </message>
+        <message>
+            <source>Not shared with anyone yet.</source>
+            <translation>មិនទាន់បានចែករំលែកជាមួយនរណាម្នាក់នៅឡើយទេ។</translation>
+        </message>
+        <message>
+            <source>Remove</source>
+            <translation>ដកចេញ</translation>
+        </message>
+        <message>
+            <source>Access removed.</source>
+            <translation>បានដកសិទ្ធិចូលប្រើ។</translation>
+        </message>
+        <message>
+            <source>Failed to revoke: %1</source>
+            <translation>មិនអាចដកសិទ្ធិបាន៖ %1</translation>
+        </message>
+        <message>
+            <source>Sign-in link copied to clipboard.</source>
+            <translation>បានចម្លងតំណចូលប្រើទៅក្ដារតម្បៀតខ្ទាស់។</translation>
+        </message>
+    </context>
 </TS>

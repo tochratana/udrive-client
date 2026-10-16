@@ -3,6 +3,7 @@
 
 #include <QAbstractItemView>
 #include <QComboBox>
+#include <QFrame>
 #include <QScreen>
 #include <QTimer>
 
@@ -14,9 +15,17 @@ public:
 
     void showPopup() override
     {
+        const bool customPopup = property("udriveCombo").toBool();
+        if (customPopup) {
+            auto *popup = view()->window();
+            popup->setWindowFlag(Qt::FramelessWindowHint);
+            popup->setAttribute(Qt::WA_TranslucentBackground);
+        }
         QComboBox::showPopup();
-        if (!property("udriveCombo").toBool())
+        if (!customPopup)
             return;
+        if (auto *frame = qobject_cast<QFrame *>(view()->window()))
+            frame->setFrameShape(QFrame::NoFrame);
         positionPopup();
         // Cocoa may finish its popup animation after showPopup returns.
         QTimer::singleShot(0, this, [this] { positionPopup(); });
