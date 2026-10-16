@@ -39,6 +39,9 @@
 #include "resources/resources.h"
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
+#include <QGlyphRun>
+#include <QTextLayout>
 #include <QImage>
 #include <QDesktopServices>
 #include <QJsonArray>
@@ -48,6 +51,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QPushButton>
+#include <QToolButton>
 #include <QSignalSpy>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -57,6 +61,9 @@
 #include <QAction>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QRadioButton>
+#include <QGroupBox>
+#include <QAbstractSpinBox>
 #include <QSet>
 #include <QtTest>
 #include <algorithm>
@@ -423,6 +430,8 @@ class TestUDriveFileBrowser : public QObject
 private Q_SLOTS:
     void initTestCase()
     {
+        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive"))
+            QVERIFY(Resources::loadUDriveFonts());
         _localHttpWasSet = qEnvironmentVariableIsSet("UDRIVE_ALLOW_LOCAL_HTTP");
         _previousLocalHttp = qgetenv("UDRIVE_ALLOW_LOCAL_HTTP");
         qputenv("UDRIVE_ALLOW_LOCAL_HTTP", "1");
@@ -436,6 +445,119 @@ private Q_SLOTS:
     {
         if (_localHttpWasSet) qputenv("UDRIVE_ALLOW_LOCAL_HTTP", _previousLocalHttp);
         else qunsetenv("UDRIVE_ALLOW_LOCAL_HTTP");
+    }
+
+    void khmerFontRendering()
+    {
+        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive"))
+            QSKIP("UDrive bundled font test.");
+        const QFont original = qApp->font();
+        QVERIFY(Resources::loadUDriveFonts());
+        QVERIFY(Resources::loadUDriveFonts());
+        QCOMPARE(qApp->font(), original);
+        const auto families = QFontDatabase::applicationFallbackFontFamilies(QChar::Script_Khmer);
+        QCOMPARE(families.count(QStringLiteral("Google Sans")), 1);
+        for (const auto weight : {QFont::Normal, QFont::DemiBold, QFont::Bold}) {
+            auto font = original;
+            font.setWeight(weight);
+            for (const auto &text : {QStringLiteral("ភាសាខ្មែរ"), QStringLiteral("ផ្ទាល់ខ្លួន"), QStringLiteral("ជ្រើសរើសទាំងអស់")}) {
+                QTextLayout layout(text, font);
+                layout.beginLayout();
+                auto line = layout.createLine();
+                QVERIFY(line.isValid());
+                line.setLineWidth(1000);
+                layout.endLayout();
+                QVERIFY(line.height() > 0);
+                const auto runs = layout.glyphRuns();
+                QVERIFY(!runs.isEmpty());
+                for (const auto &run : runs) {
+                    QCOMPARE(run.rawFont().familyName(), QStringLiteral("Google Sans"));
+                    for (const auto glyph : run.glyphIndexes())
+                        QVERIFY(glyph != 0);
+                }
+            }
+        }
+        QVERIFY(!contents(QStringLiteral(":/client/resources/fonts/GoogleSans-OFL.txt")).isEmpty());
+    }
+
+    void networkSettingsLayout_data()
+    {
+        QTest::addColumn<QString>("locale");
+        for (const auto &locale : {QStringLiteral("en_US"), QStringLiteral("km"), QStringLiteral("zh_CN")})
+            QTest::newRow(qPrintable(locale)) << locale;
+    }
+
+    void networkSettingsLayout()
+    {
+        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive"))
+            QSKIP("UDrive network settings layout test.");
+        QFETCH(QString, locale);
+        QTranslator translator;
+        QVERIFY(translator.load(Translations::translationsFilePrefix() + locale, Translations::translationsDirectoryPath()));
+        QVERIFY(qApp->installTranslator(&translator));
+        const auto previous = qApp->palette();
+        const auto restore = qScopeGuard([&] { qApp->removeTranslator(&translator); qApp->setPalette(previous); });
+        const auto proxyType = ConfigFile().proxyType();
+        SettingsDialog window(nullptr);
+        window.resize(1150, 900);
+        window.setCurrentPage(SettingsDialog::SettingsPage::Settings);
+        window.show();
+        QWidget *network = nullptr;
+        for (auto *widget : window.findChildren<QWidget *>()) {
+            if (widget->property("udriveNetwork").toBool()) {
+                network = widget;
+                break;
+            }
+        }
+        QVERIFY(network);
+        auto *manual = network->findChild<QRadioButton *>("manualProxyRadioButton");
+        auto *noProxy = network->findChild<QRadioButton *>("noProxyRadioButton");
+        auto *form = network->findChild<QWidget *>("manualSettings");
+        auto *host = network->findChild<QLineEdit *>("hostLineEdit");
+        auto *user = network->findChild<QLineEdit *>("userLineEdit");
+        auto *password = network->findChild<QLineEdit *>("passwordLineEdit");
+        auto *port = network->findChild<QAbstractSpinBox *>("portSpinBox");
+        auto *type = network->findChild<QComboBox *>("typeComboBox");
+        QVERIFY(manual && noProxy && form && host && user && password && port && type);
+        QVERIFY(!form->isVisible());
+        // Programmatic radio selection exercises layout signals without saving
+        // proxy settings or writing any credentials to the system keychain.
+        manual->setChecked(true);
+        QVERIFY(form->isVisible() && form->isEnabled());
+        QVERIFY(host->property("proxyHostMissing").toBool());
+        QVERIFY(network->findChild<QLabel *>("proxyHostHint")->isVisible());
+        host->setText(QStringLiteral("proxy.example.com"));
+        QVERIFY(!host->property("proxyHostMissing").toBool());
+        QVERIFY(!network->findChild<QLabel *>("proxyHostHint")->isVisible());
+        QCOMPARE(password->echoMode(), QLineEdit::Password);
+        QCOMPARE(type->count(), 2);
+        if (locale == QStringLiteral("km")) {
+            QVERIFY(network->findChild<QGroupBox *>("proxyGroupBox")->title().contains(QStringLiteral("Proxy")));
+            QVERIFY(manual->text().contains(QStringLiteral("Proxy")));
+            QCOMPARE(type->itemText(0), QStringLiteral("HTTP(S) Proxy"));
+            QCOMPARE(type->itemText(1), QStringLiteral("SOCKS5 Proxy"));
+        }
+        if (qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE")) {
+            for (const auto &theme : {QStringLiteral("dark"), QStringLiteral("light")}) {
+                auto palette = previous;
+                const bool dark = theme == QStringLiteral("dark");
+                palette.setColor(QPalette::Window, QColor(dark ? "#292929" : "#FFFFFF"));
+                palette.setColor(QPalette::WindowText, QColor(dark ? "#EDEEF0" : "#2B3035"));
+                palette.setColor(QPalette::Base, palette.color(QPalette::Window));
+                palette.setColor(QPalette::Button, palette.color(QPalette::Window));
+                palette.setColor(QPalette::Text, palette.color(QPalette::WindowText));
+                qApp->setPalette(palette);
+                QTest::qWait(50);
+                QVERIFY(network->grab().save(QStringLiteral("/tmp/udrive-network-%1-%2.png").arg(locale, theme)));
+                type->showPopup();
+                QTest::qWait(50);
+                QVERIFY(type->view()->window()->grab().save(QStringLiteral("/tmp/udrive-proxy-type-%1-%2.png").arg(locale, theme)));
+                type->hidePopup();
+            }
+        }
+        noProxy->setChecked(true);
+        QVERIFY(!form->isVisible());
+        QCOMPARE(ConfigFile().proxyType(), proxyType);
     }
 
     void imageThumbnails()
@@ -1085,20 +1207,81 @@ private Q_SLOTS:
         QVERIFY(languages);
         QCOMPARE(languages->count(), 3);
         QCOMPARE(languages->currentData().toString(), expectedLocale);
+        languages->showPopup();
+        auto *languagePopup = languages->view()->window();
+        const auto below = languages->mapToGlobal(QPoint(0, languages->height() + 4));
+        QTRY_COMPARE(languagePopup->pos(), below);
+        QCOMPARE(languagePopup->width(), languages->width());
+        QVERIFY(languages->screen()->availableGeometry().contains(languagePopup->geometry()));
+        languages->hidePopup();
         if (qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE")) {
             QTest::qWait(100);
             QVERIFY(window.grab().save(QStringLiteral("/tmp/udrive-language-%1.png").arg(expectedLocale)));
+            const QPalette previous = qApp->palette();
+            for (const auto &theme : {QStringLiteral("dark"), QStringLiteral("light")}) {
+                auto palette = previous;
+                const bool dark = theme == QStringLiteral("dark");
+                palette.setColor(QPalette::Window, QColor(dark ? "#292929" : "#FFFFFF"));
+                palette.setColor(QPalette::WindowText, QColor(dark ? "#EDEEF0" : "#2B3035"));
+                palette.setColor(QPalette::Text, palette.color(QPalette::WindowText));
+                palette.setColor(QPalette::Base, QColor(dark ? "#303330" : "#FAFCFB"));
+                palette.setColor(QPalette::Button, palette.color(QPalette::Base));
+                qApp->setPalette(palette);
+                QTest::qWait(50);
+                languages->showPopup();
+                QTest::qWait(50);
+                QVERIFY(languages->view()->window()->grab().save(QStringLiteral("/tmp/udrive-language-popup-%1-%2.png").arg(expectedLocale, theme)));
+                languages->hidePopup();
+            }
+            qApp->setPalette(previous);
         }
         // Selection is saved canonically and restored when settings reopen.
         languages->setCurrentIndex(1);
-        auto *general = languages->parentWidget();
-        while (general && general->metaObject()->indexOfMethod("saveMiscSettings()") < 0)
-            general = general->parentWidget();
-        QVERIFY(general);
-        QVERIFY(QMetaObject::invokeMethod(general, "saveMiscSettings", Qt::DirectConnection));
+        const QPalette previousPalette = qApp->palette();
+        const auto restorePalette = qScopeGuard([previousPalette] { qApp->setPalette(previousPalette); });
+        if (qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE")) {
+            auto dark = previousPalette;
+            dark.setColor(QPalette::Window, QColor("#292929"));
+            dark.setColor(QPalette::WindowText, QColor("#EDEEF0"));
+            qApp->setPalette(dark);
+        }
+        QVERIFY(QMetaObject::invokeMethod(languages, "activated", Qt::DirectConnection, Q_ARG(int, 1)));
         QCOMPARE(ConfigFile().uiLanguage(), QStringLiteral("km"));
-        SettingsDialog reopened(nullptr);
-        QCOMPARE(reopened.findChild<QComboBox *>("languageDropdown")->currentData().toString(), QStringLiteral("km"));
+        QPointer<QDialog> notice = window.findChild<QDialog *>("languageRestartNotice");
+        QVERIFY(notice && notice->isVisible() && notice->isModal());
+        auto *title = notice->findChild<QLabel *>("languageRestartTitle");
+        auto *message = notice->findChild<QLabel *>("languageRestartMessage");
+        auto *okay = notice->findChild<QPushButton *>("languageRestartOkay");
+        QVERIFY(title && message && okay && okay->isDefault());
+        QCOMPARE(title->textFormat(), Qt::PlainText);
+        QCOMPARE(message->textFormat(), Qt::PlainText);
+        QCOMPARE(title->text(), expectedLocale == QStringLiteral("en_US") ? QStringLiteral("Language saved")
+            : translator.translate("OCC::GeneralSettings", "Language saved"));
+        QCOMPARE(message->text(), expectedLocale == QStringLiteral("en_US") ? QStringLiteral("Restart UDrive to apply your new language.")
+            : translator.translate("OCC::GeneralSettings", "Restart UDrive to apply your new language."));
+        QVERIFY(QMetaObject::invokeMethod(languages, "activated", Qt::DirectConnection, Q_ARG(int, 1)));
+        QCOMPARE(window.findChildren<QDialog *>("languageRestartNotice").size(), 1);
+        if (qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE")) {
+            QTest::qWait(50);
+            QVERIFY(notice->grab().save(QStringLiteral("/tmp/udrive-language-restart-%1.png").arg(expectedLocale)));
+        }
+        QSignalSpy accepted(notice, &QDialog::accepted);
+        okay->click();
+        QCOMPARE(accepted.count(), 1);
+        QTRY_VERIFY(notice.isNull());
+        QVERIFY(QMetaObject::invokeMethod(languages, "activated", Qt::DirectConnection, Q_ARG(int, 1)));
+        notice = window.findChild<QDialog *>("languageRestartNotice");
+        QVERIFY(notice && notice->isVisible());
+        QTest::keyClick(notice, Qt::Key_Escape);
+        QTRY_VERIFY(notice.isNull());
+        auto reopened = std::make_unique<SettingsDialog>(nullptr);
+        auto *reopenedLanguages = reopened->findChild<QComboBox *>("languageDropdown");
+        QCOMPARE(reopenedLanguages->currentData().toString(), QStringLiteral("km"));
+        QVERIFY(QMetaObject::invokeMethod(reopenedLanguages, "activated", Qt::DirectConnection, Q_ARG(int, 1)));
+        notice = reopened->findChild<QDialog *>("languageRestartNotice");
+        QVERIFY(notice);
+        reopened.reset();
+        QVERIFY(notice.isNull());
     }
 
     void rowActionsTargetTheClickedFile()
@@ -1165,6 +1348,8 @@ private Q_SLOTS:
             window.show();
             auto *headerSearch = window.findChild<QStackedWidget *>("driveHeaderSearch");
             QVERIFY(headerSearch);
+            auto *home = window.findChild<QPushButton *>("driveHome");
+            QVERIFY(home);
             auto *languages = window.findChild<QComboBox *>("languageDropdown");
             QVERIFY(languages);
             QCOMPARE(languages->count(), 3);
@@ -1198,8 +1383,24 @@ private Q_SLOTS:
             QTRY_VERIFY(qAbs(window.storageFraction() - double(29 * 1024 * 1024) / double(qint64(15) * 1024 * 1024 * 1024)) < 0.000001);
             firstSearch->setText("Docs");
             QCOMPARE(tree->model()->rowCount(), 1);
+            auto *clearSearch = firstSearch->findChild<QToolButton *>("driveClearSearch");
+            auto *searchIcon = firstSearch->findChild<QToolButton *>("driveSearchIcon");
+            QVERIFY(clearSearch && searchIcon);
+            QVERIFY(clearSearch->isVisible());
+            QTest::mouseClick(clearSearch, Qt::LeftButton);
+            QVERIFY(firstSearch->text().isEmpty());
+            QVERIFY(!clearSearch->isVisible());
+            QCOMPARE(tree->model()->rowCount(), 7);
+            QVERIFY(firstSearch->hasFocus());
+            home->setFocus();
+            QTest::mouseClick(searchIcon, Qt::LeftButton);
+            QVERIFY(firstSearch->hasFocus());
+            firstSearch->setText("Docs");
             window.setCurrentAccount(second);
-            window.setCurrentPage(SettingsDialog::SettingsPage::Files);
+            window.setCurrentPage(SettingsDialog::SettingsPage::Settings);
+            QTest::mouseClick(home, Qt::LeftButton);
+            QCOMPARE(window.currentPage(), SettingsDialog::SettingsPage::Files);
+            QCOMPARE(window.currentAccount(), second);
             auto *secondSearch = qobject_cast<QLineEdit *>(headerSearch->currentWidget());
             QVERIFY(secondSearch && secondSearch != firstSearch);
             QCOMPARE(secondSearch->property("accountId").toUuid(), second->uuid());
@@ -1210,6 +1411,23 @@ private Q_SLOTS:
             QCOMPARE(headerSearch->currentWidget(), firstSearch);
             QCOMPARE(firstSearch->text(), QStringLiteral("Docs"));
             firstSearch->clear();
+            const auto docs = select(tree, "Docs");
+            QVERIFY(docs.isValid());
+            Q_EMIT tree->activated(docs);
+            QTRY_COMPARE(tree->model()->rowCount(), 1);
+            QCOMPARE(tree->model()->index(0, 0).data().toString(), QStringLiteral("Budget 2026.pdf"));
+            firstSearch->setText(QStringLiteral("missing"));
+            QTest::mouseClick(home, Qt::LeftButton);
+            QCOMPARE(window.currentAccount(), first);
+            QVERIFY(firstSearch->text().isEmpty());
+            QTRY_COMPARE(tree->model()->rowCount(), 7);
+            window.setCurrentPage(SettingsDialog::SettingsPage::Favorites);
+            QTRY_COMPARE(tree->model()->rowCount(), 0);
+            home->setFocus();
+            QTest::keyClick(home, Qt::Key_Space);
+            QCOMPARE(window.currentPage(), SettingsDialog::SettingsPage::Files);
+            QCOMPARE(window.currentAccount(), first);
+            QTRY_COMPARE(tree->model()->rowCount(), 7);
             QTRY_VERIFY(window.canCreateFiles());
             auto *profile = window.findChild<QPushButton *>("driveProfile");
             QVERIFY(profile);
@@ -1277,6 +1495,17 @@ private Q_SLOTS:
                 qApp->setPalette(dark);
                 QTest::qWait(150);
                 QVERIFY(window.grab().save("/tmp/udrive-workspace-preview.png"));
+                firstSearch->setText(QStringLiteral("Project"));
+                firstSearch->setFocus();
+                QTest::qWait(50);
+                QVERIFY(firstSearch->grab().save("/tmp/udrive-search-dark.png"));
+                clearSearch->click();
+                window.openNewFileMenu();
+                if (auto *newMenu = firstBrowser->findChild<QMenu *>("driveNewMenu")) {
+                    QTest::qWait(50);
+                    newMenu->grab().save("/tmp/udrive-new-menu-full-width.png");
+                    newMenu->hide();
+                }
                 profile->click();
                 QVERIFY(visiblePopup());
                 QTest::qWait(100);
@@ -1297,6 +1526,16 @@ private Q_SLOTS:
                 qApp->setPalette(previous);
                 QTest::qWait(150);
                 QVERIFY(window.grab().save("/tmp/udrive-workspace-light.png"));
+                firstSearch->setText(QStringLiteral("Project"));
+                firstSearch->setFocus();
+                QTest::qWait(50);
+                QVERIFY(firstSearch->grab().save("/tmp/udrive-search-light.png"));
+                clearSearch->click();
+                profile->click();
+                QVERIFY(visiblePopup());
+                QTest::qWait(50);
+                QVERIFY(visiblePopup()->grab().save("/tmp/udrive-accounts-popup-light.png"));
+                visiblePopup()->close();
                 window.setCurrentPage(SettingsDialog::SettingsPage::Trash);
                 auto *spacePicker = firstBrowser->findChild<QComboBox *>("driveSpaces");
                 QTRY_VERIFY(spacePicker->isVisible() && spacePicker->count() > 1);
@@ -1307,6 +1546,13 @@ private Q_SLOTS:
                     spacePicker->showPopup(); QTest::qWait(50);
                     spacePicker->view()->window()->grab().save(QStringLiteral("/tmp/udrive-space-popup-%1.png").arg(theme));
                     spacePicker->hidePopup();
+                    for (const auto &name : {QStringLiteral("driveSort"), QStringLiteral("driveViewMode")}) {
+                        auto *button = firstBrowser->findChild<QPushButton *>(name);
+                        button->menu()->popup(button->mapToGlobal(QPoint(0, button->height())));
+                        QTest::qWait(50);
+                        button->menu()->grab().save(QStringLiteral("/tmp/udrive-%1-popup-%2.png").arg(name, theme));
+                        button->menu()->hide();
+                    }
                 }
                 qApp->setPalette(previous);
                 window.setCurrentPage(SettingsDialog::SettingsPage::Files);
@@ -1326,9 +1572,30 @@ private Q_SLOTS:
             QCOMPARE(headerSearch->count(), 2);
             QCOMPARE(window.currentAccount(), second);
             QCOMPARE(headerSearch->currentWidget(), secondSearch);
+            if (qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE")) {
+                const auto previous = qApp->palette();
+                QTranslator khmer;
+                QVERIFY(khmer.load(QStringLiteral("client_km"), Translations::translationsDirectoryPath()));
+                QVERIFY(qApp->installTranslator(&khmer));
+                const auto restore = qScopeGuard([&] { qApp->removeTranslator(&khmer); qApp->setPalette(previous); });
+                for (const auto &theme : {QStringLiteral("dark"), QStringLiteral("light")}) {
+                    auto palette = previous;
+                    palette.setColor(QPalette::Window, QColor(theme == QStringLiteral("dark") ? "#202020" : "#FFFFFF"));
+                    qApp->setPalette(palette);
+                    QTest::qWait(50);
+                    profile->click();
+                    QVERIFY(visiblePopup());
+                    QTest::qWait(50);
+                    QVERIFY(visiblePopup()->grab().save(QStringLiteral("/tmp/udrive-profile-single-km-%1.png").arg(theme)));
+                    visiblePopup()->close();
+                }
+            }
             manager->deleteAccount(secondState);
             QCOMPARE(headerSearch->count(), 1);
             QVERIFY(!window.canCreateFiles());
+            home->click();
+            QCOMPARE(window.currentPage(), SettingsDialog::SettingsPage::Settings);
+            QVERIFY(!window.currentAccount());
         }
     }
 

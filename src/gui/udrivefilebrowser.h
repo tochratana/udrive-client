@@ -48,6 +48,7 @@ public:
     ~UDriveFileBrowser() override;
     AccountState *accountState() const { return _state; }
     void showPersonal();
+    void showHome();
     void showWorkspaces();
     void showShares();
     void showFavorites();
@@ -65,7 +66,7 @@ public:
     bool previewSelectedPdf();
     QLineEdit *takeSearchField();
     bool canCreate() const;
-    void showNewMenu(const QPoint &globalPosition);
+    void showNewMenu(const QPoint &globalPosition, int minimumWidth = 0);
 
 Q_SIGNALS:
     void creationAvailabilityChanged();

@@ -21,6 +21,7 @@
 
 #include <QDebug>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QImageReader>
 #include <QJsonDocument>
 #include <QLoggingCategory>
@@ -81,6 +82,24 @@ bool hasTheme(IconType type, const QString &theme)
     return it.value();
 }
 
+}
+
+bool Resources::loadUDriveFonts()
+{
+    static const QStringList families = [] {
+        const int id = QFontDatabase::addApplicationFont(QStringLiteral(":/client/resources/fonts/GoogleSans.ttf"));
+        if (id < 0) {
+            qCWarning(lcResources) << "Could not load the bundled Khmer font";
+            return QStringList();
+        }
+        return QFontDatabase::applicationFontFamilies(id);
+    }();
+    if (families.isEmpty())
+        return false;
+    const QString family = families.first();
+    if (!QFontDatabase::applicationFallbackFontFamilies(QChar::Script_Khmer).contains(family))
+        QFontDatabase::addApplicationFallbackFontFamily(QChar::Script_Khmer, family);
+    return true;
 }
 
 bool OCC::Resources::hasDarkTheme()

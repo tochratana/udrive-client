@@ -2,6 +2,7 @@
 #include "udrivepdfpreview.h"
 #include "udriveicons.h"
 #include <QComboBox>
+#include <QAbstractItemView>
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollArea>
@@ -56,6 +57,7 @@ UDrivePdfPreview::UDrivePdfPreview(QWidget *parent) : QWidget(parent)
     _zoom = new QComboBox(this);
     _zoom->setObjectName(QStringLiteral("pdfZoom"));
     _zoom->setProperty("udriveCombo", true);
+    _zoom->view()->setFrameShape(QFrame::NoFrame);
     _zoom->setAccessibleName(tr("PDF zoom"));
     _zoom->addItem(tr("Fit width"), -1);
     _zoom->addItem(tr("Fit page"), -2);

@@ -23,6 +23,7 @@
 #include "libsync/platform.h"
 #include "libsync/theme.h"
 #include "resources/loadresources.h"
+#include "resources/resources.h"
 
 #include "common/version.h"
 #include "gui/translations.h"
@@ -372,6 +373,8 @@ int main(int argc, char **argv)
 
         // Create the (Q)Application instance:
         QApplication app(argc, argv);
+        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive"))
+            Resources::loadUDriveFonts();
         app.setOrganizationDomain(Theme::instance()->orgDomainName());
         app.setApplicationName(Theme::instance()->appName());
         app.setApplicationDisplayName(Theme::instance()->appNameGUI());

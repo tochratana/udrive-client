@@ -37,7 +37,7 @@ Pane {
             Layout.bottomMargin: 14
             text: qsTr("+  New")
             font.pixelSize: 14
-            font.weight: Font.DemiBold
+            font.weight: Font.Bold
             hoverEnabled: true
             enabled: settingsDialog.canCreateFiles
             Accessible.name: qsTr("Create a folder or upload a file")
@@ -50,7 +50,7 @@ Pane {
             contentItem: Label {
                 text: newButton.text
                 font: newButton.font
-                color: newButton.enabled ? "#143B20" : (sidebar.dark ? "#9AA49E" : "#68776D")
+                color: newButton.enabled ? "#FFFFFF" : (sidebar.dark ? "#9AA49E" : "#68776D")
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
             }

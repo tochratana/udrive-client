@@ -78,7 +78,7 @@
              </widget>
             </item>
             <item>
-             <widget class="QComboBox" name="languageDropdown">
+             <widget class="UDriveComboBox" name="languageDropdown">
               <property name="sizePolicy">
                <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                 <horstretch>0</horstretch>
@@ -256,6 +256,11 @@
   </layout>
  </widget>
  <customwidgets>
+  <customwidget>
+   <class>UDriveComboBox</class>
+   <extends>QComboBox</extends>
+   <header>udrivecombobox.h</header>
+  </customwidget>
   <customwidget>
    <class>NetworkSettings</class>
    <extends>QWidget</extends>

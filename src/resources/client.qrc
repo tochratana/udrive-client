@@ -1,5 +1,7 @@
 <RCC>
     <qresource prefix="/client">
+        <file alias="resources/fonts/GoogleSans.ttf">fonts/GoogleSans.ttf</file>
+        <file alias="resources/fonts/GoogleSans-OFL.txt">fonts/GoogleSans-OFL.txt</file>
         <file alias="resources/core/checkbox-check.svg">otherCoreIcons/checkbox-check.svg</file>
         <file alias="resources/core/checkbox-partial.svg">otherCoreIcons/checkbox-partial.svg</file>
         <file alias="resources/filetypes/document.png">filetypes/document.png</file>

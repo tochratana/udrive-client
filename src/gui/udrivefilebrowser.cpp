@@ -44,6 +44,8 @@
 #include <QNetworkReply>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QResizeEvent>
+#include <QToolButton>
 #include <QSaveFile>
 #include <QSignalBlocker>
 #include <QStyle>
@@ -65,6 +67,82 @@ namespace OCC {
 namespace {
 enum Roles { PathRole = Qt::UserRole + 1, DirectoryRole, SortRole, RootRole, SpaceRole,
     PermissionsRole, FavoriteRole, FavoriteKnownRole, EtagRole, LinkRole, RestorePathRole, ThumbnailRole, OpenedRole };
+
+QMenu *createFileMenu(QWidget *parent)
+{
+    auto *menu = new QMenu(parent);
+    // Let the stylesheet draw the outline without a second native window frame.
+    menu->setWindowFlag(Qt::FramelessWindowHint);
+    menu->setAttribute(Qt::WA_TranslucentBackground);
+    return menu;
+}
+
+class SearchField : public QLineEdit
+{
+public:
+    SearchField(const QString &searchLabel, const QString &clearLabel, QWidget *parent)
+        : QLineEdit(parent)
+    {
+        setMinimumHeight(44);
+        auto addButton = [this](const QString &name, const QString &label, UDriveIcons::Symbol symbol) {
+            auto *button = new QToolButton(this);
+            button->setObjectName(name);
+            button->setIcon(UDriveIcons::icon(symbol));
+            button->setIconSize(QSize(18, 18));
+            button->setFixedSize(28, 28);
+            button->setAutoRaise(true);
+            button->setFocusPolicy(Qt::NoFocus);
+            button->setCursor(Qt::PointingHandCursor);
+            button->setAccessibleName(label);
+            button->setToolTip(label);
+            return button;
+        };
+        _searchButton = addButton(QStringLiteral("driveSearchIcon"), searchLabel, UDriveIcons::Symbol::Search);
+        _clearButton = addButton(QStringLiteral("driveClearSearch"), clearLabel, UDriveIcons::Symbol::Close);
+        _clearButton->hide();
+        connect(_searchButton, &QToolButton::clicked, this, [this] { setFocus(Qt::MouseFocusReason); });
+        connect(_clearButton, &QToolButton::clicked, this, [this] {
+            clear();
+            setFocus(Qt::MouseFocusReason);
+        });
+        connect(this, &QLineEdit::textChanged, this, [this] {
+            _clearButton->setVisible(!text().isEmpty());
+            positionButtons();
+        });
+        positionButtons();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QLineEdit::resizeEvent(event);
+        positionButtons();
+    }
+    void changeEvent(QEvent *event) override
+    {
+        QLineEdit::changeEvent(event);
+        if (event->type() == QEvent::LayoutDirectionChange)
+            positionButtons();
+    }
+
+private:
+    void positionButtons()
+    {
+        if (!_searchButton || !_clearButton)
+            return;
+        const bool rtl = layoutDirection() == Qt::RightToLeft;
+        const int leading = 8;
+        const int trailing = width() - 36;
+        const int top = (height() - 28) / 2;
+        _searchButton->move(rtl ? trailing : leading, top);
+        _clearButton->move(rtl ? leading : trailing, top);
+        const int clearMargin = text().isEmpty() ? 0 : 32;
+        setTextMargins(rtl ? clearMargin : 32, 0, rtl ? 32 : clearMargin, 0);
+    }
+
+    QToolButton *_searchButton = nullptr;
+    QToolButton *_clearButton = nullptr;
+};
 
 class SelectAllCheckBox : public QCheckBox
 {
@@ -468,11 +546,10 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     layout->setSpacing(10);
 
     auto *top = new QHBoxLayout;
-    _search = new QLineEdit(this);
+    _search = new SearchField(tr("Search"), tr("Clear search"), this);
     _search->setObjectName(QStringLiteral("driveSearch"));
     _search->setPlaceholderText(tr("Search this folder"));
     _search->setAccessibleName(tr("Search this folder"));
-    _search->setClearButtonEnabled(true);
     top->addWidget(_search, 1);
     _newButton = new QPushButton(tr("New"), this);
     _newButton->setObjectName(QStringLiteral("driveNew"));
@@ -480,9 +557,13 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _newButton->setProperty("udriveMenuButton", true);
     _newButton->setMinimumWidth(96);
     _newButton->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Add, true));
-    auto *newMenu = new QMenu(_newButton);
+    auto *newMenu = createFileMenu(_newButton);
+    newMenu->setObjectName(QStringLiteral("driveNewMenu"));
+    connect(newMenu, &QMenu::aboutToShow, this, [this, newMenu] {
+        if (_newButton->isVisible()) newMenu->setMinimumWidth(_newButton->width());
+    });
     _newFolderAction = newMenu->addAction(tr("New folder"));
-    _uploadAction = newMenu->addAction(tr("Upload file…"));
+    _uploadAction = newMenu->addAction(tr("Upload file"));
     _newButton->setMenu(newMenu);
     top->addWidget(_newButton);
     layout->addLayout(top);
@@ -506,6 +587,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _spaces->setIconSize(QSize(16, 16));
     auto *spaceList = new QListView(_spaces);
     spaceList->setObjectName(QStringLiteral("driveSpacesPopup"));
+    spaceList->setFrameShape(QFrame::NoFrame);
     spaceList->setUniformItemSizes(true);
     spaceList->setSpacing(2);
     spaceList->setMinimumWidth(180);
@@ -522,6 +604,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _refreshButton->setText(QString());
     _refreshButton->setFixedSize(34, 34);
     _refreshButton->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Refresh));
+    _refreshButton->setIconSize(QSize(20, 20));
     auto *headingRow = new QHBoxLayout;
     headingRow->setSpacing(8);
     headingRow->setAlignment(Qt::AlignVCenter);
@@ -541,7 +624,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _sortButton->setProperty("driveToolbarButton", true);
     _sortButton->setFixedHeight(34);
     sortLabel->setBuddy(_sortButton);
-    auto *sortMenu = new QMenu(_sortButton);
+    auto *sortMenu = createFileMenu(_sortButton);
     auto *sortGroup = new QActionGroup(sortMenu);
     sortGroup->setExclusive(true);
     const QStringList sortLabels{tr("Recent"), tr("A-Z"), tr("Z-A"), tr("Newest"), tr("Oldest"), tr("Largest"), tr("Smallest")};
@@ -556,6 +639,15 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         connect(action, &QAction::triggered, this, [this, i] { setSortMode(SortMode(i)); });
     }
     _sortButton->setMenu(sortMenu);
+    // Measure after the workspace stylesheet is applied so every translated
+    // option fits while the button and popup keep the same width.
+    QTimer::singleShot(0, this, [this, sortMenu] {
+        sortMenu->ensurePolished();
+        _sortButton->setMinimumWidth(sortMenu->sizeHint().width());
+    });
+    connect(sortMenu, &QMenu::aboutToShow, this, [this, sortMenu] {
+        sortMenu->setFixedWidth(_sortButton->width());
+    });
     headingRow->addWidget(sortLabel);
     headingRow->addWidget(_sortButton);
     headingRow->addWidget(_refreshButton);
@@ -567,7 +659,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _viewButton->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::List));
     _viewButton->setIconSize(QSize(18, 18));
     _viewButton->setFixedSize(48, 34);
-    auto *viewMenu = new QMenu(_viewButton);
+    auto *viewMenu = createFileMenu(_viewButton);
     auto *viewGroup = new QActionGroup(viewMenu); viewGroup->setExclusive(true);
     const QList<QPair<QString, ViewMode>> modes{{tr("Condensed table view"), ViewMode::Condensed}, {tr("Default table view"), ViewMode::Default}, {tr("Tiles view"), ViewMode::Tiles}};
     for (const auto &mode : modes) {
@@ -690,7 +782,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     actions->addWidget(_openButton);
     actions->addWidget(_downloadButton);
     actions->addWidget(_restoreButton);
-    _fileMenu = new QMenu(this);
+    _fileMenu = createFileMenu(this);
     _fileMenu->setObjectName(QStringLiteral("driveActionsMenu"));
     _renameAction = new QAction(tr("Rename…"), this);
     _copyAction = new QAction(tr("Make a copy…"), this);
@@ -758,10 +850,6 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     connect(_proxy, &QAbstractItemModel::rowsInserted, this, &UDriveFileBrowser::scheduleThumbnails);
     connect(_proxy, &QAbstractItemModel::layoutChanged, this, &UDriveFileBrowser::scheduleThumbnails);
     connect(_proxy, &QAbstractItemModel::modelReset, this, &UDriveFileBrowser::scheduleThumbnails);
-    auto *searchAction = _search->addAction(UDriveIcons::icon(UDriveIcons::Symbol::Search), QLineEdit::LeadingPosition);
-    searchAction->setText(tr("Search this folder"));
-    connect(searchAction, &QAction::triggered, _search.data(), [this] { _search->setFocus(); });
-
     connect(_search.data(), &QLineEdit::textChanged, _proxy, &QSortFilterProxyModel::setFilterFixedString);
     connect(_search.data(), &QLineEdit::textChanged, this, &UDriveFileBrowser::scheduleThumbnails);
     connect(_spaces, &QComboBox::currentIndexChanged, this, &UDriveFileBrowser::selectSpace);
@@ -1021,6 +1109,13 @@ void UDriveFileBrowser::showPersonal()
     setSection(Section::Personal);
 }
 
+void UDriveFileBrowser::showHome()
+{
+    showPersonal();
+    _search->clear();
+    navigateToBreadcrumb(QString(), _root);
+}
+
 void UDriveFileBrowser::showWorkspaces()
 {
     setSection(Section::Workspaces);
@@ -1087,7 +1182,7 @@ void UDriveFileBrowser::updateBreadcrumbs()
         more->setProperty("udriveBreadcrumb", true);
         more->setAccessibleName(tr("Earlier parent folders"));
         more->setToolTip(tr("Earlier parent folders"));
-        auto *menu = new QMenu(more);
+        auto *menu = createFileMenu(more);
         for (int i = 0; i < parts.size() - 2; ++i) {
             const QString path = parts.mid(0, i + 1).join(QLatin1Char('/'));
             auto *action = menu->addAction(UDriveIcons::icon(UDriveIcons::Symbol::Folder),
@@ -1530,10 +1625,13 @@ bool UDriveFileBrowser::canCreate() const
     return _newButton->isEnabled();
 }
 
-void UDriveFileBrowser::showNewMenu(const QPoint &position)
+void UDriveFileBrowser::showNewMenu(const QPoint &position, int minimumWidth)
 {
-    if (canCreate())
-        _newButton->menu()->popup(position);
+    if (canCreate()) {
+        auto *menu = _newButton->menu();
+        menu->setMinimumWidth(qMax(0, minimumWidth));
+        menu->popup(position);
+    }
 }
 
 void UDriveFileBrowser::setMessage(const QString &message)

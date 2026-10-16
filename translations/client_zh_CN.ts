@@ -227,6 +227,9 @@
     </context>
     <context>
         <name>OCC::GeneralSettings</name>
+        <message><source>Language saved</source><translation>语言已保存</translation></message>
+        <message><source>Restart UDrive to apply your new language.</source><translation>请重启 UDrive 以应用新语言。</translation></message>
+        <message><source>OK</source><translation>确定</translation></message>
         <message>
             <source>Form</source>
             <translation>表单</translation>
@@ -474,6 +477,10 @@
     <context>
         <name>OCC::SettingsDialog</name>
         <message>
+            <source>Go to Personal</source>
+            <translation>前往个人文件</translation>
+        </message>
+        <message>
             <source>Hide</source>
             <translation>隐藏</translation>
         </message>
@@ -548,6 +555,10 @@
     </context>
     <context>
         <name>OCC::UDriveFileBrowser</name>
+        <message>
+            <source>Clear search</source>
+            <translation>清除搜索</translation>
+        </message>
         <message><source>Select all</source><translation>全选</translation></message>
         <message><source>Select all files in the current results.</source><translation>选择当前结果中的所有文件。</translation></message>
         <message><source>%1 selected. Select one item to use file actions.</source><translation>已选择 %1 个项目。请选择一个项目以使用文件操作。</translation></message>
@@ -1382,6 +1393,22 @@
     </context>
     <context>
         <name>OCC::NetworkSettings</name>
+        <message>
+            <source>Port</source>
+            <translation>端口</translation>
+        </message>
+        <message>
+            <source>Username</source>
+            <translation>用户名</translation>
+        </message>
+        <message>
+            <source>Password</source>
+            <translation>密码</translation>
+        </message>
+        <message>
+            <source>Enter a Proxy hostname.</source>
+            <translation>请输入代理服务器主机名。</translation>
+        </message>
         <message>
             <source>Form</source>
             <translation>表单</translation>

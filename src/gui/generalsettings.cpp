@@ -27,6 +27,12 @@
 #include <QMessageBox>
 #include <QOperatingSystemVersion>
 #include <QScopedValueRollback>
+#include <QDialog>
+#include <QLabel>
+#include <QListView>
+#include <QPushButton>
+#include <QStyledItemDelegate>
+#include <QVBoxLayout>
 
 namespace OCC {
 
@@ -36,6 +42,23 @@ GeneralSettings::GeneralSettings(QWidget *parent)
     , _currentlyLoading(false)
 {
     _ui->setupUi(this);
+
+    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+        auto *languages = _ui->languageDropdown;
+        languages->setMinimumWidth(240);
+        languages->setMaximumWidth(320);
+        auto *list = new QListView(languages);
+        list->setObjectName(QStringLiteral("driveLanguagePopup"));
+        list->setFrameShape(QFrame::NoFrame);
+        list->setUniformItemSizes(true);
+        list->setSpacing(2);
+        list->setMouseTracking(true);
+        list->setTextElideMode(Qt::ElideNone);
+        list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        languages->setView(list);
+        languages->setItemDelegate(new QStyledItemDelegate(languages));
+        languages->setMaxVisibleItems(3);
+    }
 
     connect(_ui->desktopNotificationsCheckBox, &QAbstractButton::toggled, this, &GeneralSettings::slotToggleOptionalDesktopNotifications);
 
@@ -50,8 +73,7 @@ GeneralSettings::GeneralSettings(QWidget *parent)
         // first, store selected language in config file
         saveMiscSettings();
 
-        // warn user that a language change requires a restart to take effect
-        QMessageBox::warning(this, tr("Warning"), tr("Language changes require a restart of this application to take effect."), QMessageBox::Ok);
+        showLanguageRestartNotice();
     });
 
     /* handle the hidden file checkbox */
@@ -84,6 +106,73 @@ GeneralSettings::GeneralSettings(QWidget *parent)
     if (!Theme::instance()->aboutShowCopyright()) {
         _ui->copyrightLabel->hide();
     }
+}
+
+void GeneralSettings::showLanguageRestartNotice()
+{
+    if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive")) {
+        QMessageBox::warning(this, tr("Warning"), tr("Language changes require a restart of this application to take effect."), QMessageBox::Ok);
+        return;
+    }
+    if (_languageRestartNotice) {
+        _languageRestartNotice->raise();
+        _languageRestartNotice->activateWindow();
+        return;
+    }
+
+    auto *dialog = new QDialog(this);
+    _languageRestartNotice = dialog;
+    dialog->setObjectName(QStringLiteral("languageRestartNotice"));
+    dialog->setWindowTitle(tr("Language saved"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowFlags((dialog->windowFlags() | Qt::Dialog) & ~Qt::WindowContextHelpButtonHint);
+    dialog->setMinimumWidth(400);
+    dialog->setMaximumWidth(480);
+
+    const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+    const QString surface = dark ? QStringLiteral("#292B2D") : QStringLiteral("#FFFFFF");
+    const QString text = dark ? QStringLiteral("#EDEEF0") : QStringLiteral("#202923");
+    const QString secondary = dark ? QStringLiteral("#B7C1BA") : QStringLiteral("#5D6B62");
+    dialog->setStyleSheet(QStringLiteral(
+        "QDialog#languageRestartNotice { background: %1; }"
+        "QLabel#languageRestartTitle { color: %2; font-size: 15px; font-weight: 600; }"
+        "QLabel#languageRestartMessage { color: %3; font-size: 13px; }"
+        "QDialog#languageRestartNotice QPushButton#languageRestartOkay { min-width: 0; min-height: 32px; padding: 0 14px; background: #40D979; color: #12351D; border: 1px solid #40D979; border-radius: 8px; font-size: 13px; font-weight: 600; }"
+        "QDialog#languageRestartNotice QPushButton#languageRestartOkay:hover { background: #63E493; border-color: #63E493; }"
+        "QDialog#languageRestartNotice QPushButton#languageRestartOkay:pressed { background: #30C86A; border-color: #30C86A; }"
+        "QDialog#languageRestartNotice QPushButton#languageRestartOkay:focus { border-color: #007C58; }")
+        .arg(surface, text, secondary));
+
+    auto *layout = new QVBoxLayout(dialog);
+    layout->setContentsMargins(20, 20, 20, 18);
+    layout->setSpacing(18);
+    auto *copy = new QVBoxLayout;
+    copy->setSpacing(6);
+    auto *title = new QLabel(tr("Language saved"), dialog);
+    title->setObjectName(QStringLiteral("languageRestartTitle"));
+    title->setTextFormat(Qt::PlainText);
+    title->setWordWrap(true);
+    title->setAlignment(Qt::AlignCenter);
+    copy->addWidget(title);
+    auto *message = new QLabel(tr("Restart UDrive to apply your new language."), dialog);
+    message->setObjectName(QStringLiteral("languageRestartMessage"));
+    message->setTextFormat(Qt::PlainText);
+    message->setWordWrap(true);
+    message->setAlignment(Qt::AlignCenter);
+    copy->addWidget(message);
+    layout->addLayout(copy);
+    auto *okay = new QPushButton(tr("OK"), dialog);
+    okay->setObjectName(QStringLiteral("languageRestartOkay"));
+    okay->setFixedHeight(34);
+    okay->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    okay->setDefault(true);
+    okay->setCursor(Qt::PointingHandCursor);
+    layout->addWidget(okay, 0, Qt::AlignHCenter);
+    connect(okay, &QPushButton::clicked, dialog, &QDialog::accept);
+    connect(dialog, &QDialog::finished, this, [this, dialog] {
+        if (_languageRestartNotice == dialog) _languageRestartNotice.clear();
+    });
+    dialog->open();
 }
 
 GeneralSettings::~GeneralSettings()

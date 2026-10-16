@@ -36,10 +36,12 @@
 
 #include <QMessageBox>
 #include <QEvent>
+#include <QFocusEvent>
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QScreen>
 #include <QWindow>
+#include <QQuickItem>
 #include <QAbstractButton>
 #include <QFrame>
 #include <QScrollArea>
@@ -74,7 +76,7 @@ public:
         setCursor(Qt::PointingHandCursor);
         setAttribute(Qt::WA_Hover);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        setFixedHeight(detail.isEmpty() ? 48 : 72);
+        setFixedHeight(detail.isEmpty() ? 44 : 76);
     }
 
 protected:
@@ -85,37 +87,45 @@ protected:
         const bool dark = palette().color(QPalette::Window).lightness() < 128;
         const QColor textColor(dark ? "#EDEEF0" : "#24332C");
         const QRectF background = QRectF(rect()).adjusted(1, 1, -1, -1);
-        painter.setPen(hasFocus() ? QPen(QColor("#40D979"), 1.5) : isChecked() ? QPen(QColor(dark ? "#3C6C4D" : "#A8DDBA"), 1) : QPen(Qt::NoPen));
-        painter.setBrush(isChecked()       ? QColor(dark ? "#2D4233" : "#E3F6E9")
-                : underMouse() || isDown() ? QColor(dark ? "#353A37" : "#F0F5F2")
-                                           : Qt::transparent);
+        painter.setPen(hasFocus() && _keyboardFocus ? QPen(QColor("#40D979"), 1.5)
+                : isChecked() ? QPen(QColor(dark ? "#3D6D4E" : "#AEDBBF"), 1) : QPen(Qt::NoPen));
+        painter.setBrush(isDown() ? QColor(dark ? "#354B3D" : "#DFF1E5")
+                : isChecked() ? QColor(dark ? "#293D32" : "#E7F7ED")
+                : underMouse() ? QColor(dark ? "#343A36" : "#EFF5F1")
+                : !_detail.isEmpty() ? QColor(dark ? "#303335" : "#F6F9F7") : Qt::transparent);
         painter.drawRoundedRect(background, 10, 10);
-        const QRect avatar(12, (height() - 36) / 2, 36, 36);
+        const QRect avatar(12, (height() - 40) / 2, 40, 40);
         if (!_initials.isEmpty()) {
             painter.setPen(Qt::NoPen);
             painter.setBrush(QColor("#00866A"));
-            painter.drawRoundedRect(avatar, 12, 12);
+            painter.drawEllipse(avatar);
             if (!_icon.isNull()) {
                 painter.save();
                 QPainterPath clip;
-                clip.addRoundedRect(avatar, 12, 12);
+                clip.addEllipse(avatar);
                 painter.setClipPath(clip);
                 _icon.paint(&painter, avatar);
                 painter.restore();
             } else {
                 painter.setPen(Qt::white);
                 auto initialsFont = font();
-                initialsFont.setPixelSize(13);
+                initialsFont.setPixelSize(14);
                 initialsFont.setBold(true);
                 painter.setFont(initialsFont);
                 painter.drawText(avatar, Qt::AlignCenter, _initials.left(3));
             }
-        } else if (!_icon.isNull())
-            _icon.paint(&painter, avatar.adjusted(7, 7, -7, -7));
+        } else if (!_icon.isNull()) {
+            const QRect iconBox(12, (height() - 30) / 2, 30, 30);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(dark ? "#353B38" : "#EDF3EF"));
+            painter.drawRoundedRect(iconBox, 8, 8);
+            _icon.paint(&painter, iconBox.adjusted(5, 5, -5, -5));
+        }
         const int rightInset = isCheckable() ? 38 : 12;
-        const QRect textRect(60, 8, qMax(0, width() - 60 - rightInset), height() - 16);
+        const int textLeft = _detail.isEmpty() ? 54 : 64;
+        const QRect textRect(textLeft, 8, qMax(0, width() - textLeft - rightInset), height() - 16);
         auto nameFont = font();
-        nameFont.setPixelSize(13);
+        nameFont.setPixelSize(_detail.isEmpty() ? 13 : 14);
         nameFont.setWeight(QFont::DemiBold);
         painter.setFont(nameFont);
         painter.setPen(textColor);
@@ -125,20 +135,27 @@ protected:
             options.setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
             painter.drawText(textRect, text(), options);
         } else {
-            painter.drawText(
-                textRect.adjusted(0, 2, 0, -28), Qt::AlignVCenter | Qt::AlignLeft, painter.fontMetrics().elidedText(text(), Qt::ElideRight, textRect.width()));
             auto detailFont = font();
-            detailFont.setPixelSize(11);
+            detailFont.setPixelSize(12);
+            const int nameHeight = QFontMetrics(nameFont).height();
+            const int detailHeight = QFontMetrics(detailFont).height();
+            const int top = (height() - nameHeight - detailHeight - 4) / 2;
+            painter.drawText(QRect(textLeft, top, textRect.width(), nameHeight), Qt::AlignVCenter | Qt::AlignLeft,
+                painter.fontMetrics().elidedText(text(), Qt::ElideRight, textRect.width()));
             painter.setFont(detailFont);
             painter.setPen(QColor(dark ? "#AFB8B2" : "#64776B"));
             painter.drawText(
-                textRect.adjusted(0, 29, 0, 0), Qt::AlignVCenter | Qt::AlignLeft, painter.fontMetrics().elidedText(_detail, Qt::ElideMiddle, textRect.width()));
+                QRect(textLeft, top + nameHeight + 4, textRect.width(), detailHeight), Qt::AlignVCenter | Qt::AlignLeft,
+                painter.fontMetrics().elidedText(_detail, Qt::ElideMiddle, textRect.width()));
         }
         if (isChecked()) {
-            painter.setPen(QPen(QColor(dark ? "#40D979" : "#008051"), 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-            const QPoint center(width() - 22, height() / 2);
-            painter.drawLine(center + QPoint(-5, 0), center + QPoint(-1, 4));
-            painter.drawLine(center + QPoint(-1, 4), center + QPoint(6, -4));
+            const QPoint center(width() - 23, height() / 2);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(dark ? "#245B3A" : "#C4EDD2"));
+            painter.drawEllipse(center, 10, 10);
+            painter.setPen(QPen(QColor(dark ? "#63E493" : "#008051"), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter.drawLine(center + QPoint(-4, 0), center + QPoint(-1, 3));
+            painter.drawLine(center + QPoint(-1, 3), center + QPoint(4, -3));
         }
     }
     void enterEvent(QEnterEvent *event) override
@@ -151,11 +168,18 @@ protected:
         QAbstractButton::leaveEvent(event);
         update();
     }
+    void focusInEvent(QFocusEvent *event) override
+    {
+        _keyboardFocus = event->reason() == Qt::TabFocusReason || event->reason() == Qt::BacktabFocusReason || event->reason() == Qt::ShortcutFocusReason;
+        QAbstractButton::focusInEvent(event);
+        update();
+    }
 
 private:
     QString _detail;
     QString _initials;
     QIcon _icon;
+    bool _keyboardFocus = false;
 };
 
 class AccountPopup : public QFrame
@@ -165,6 +189,7 @@ public:
         : QFrame(parent, Qt::Popup | Qt::FramelessWindowHint)
     {
         setObjectName(QStringLiteral("driveAccountPopup"));
+        setFrameShape(QFrame::NoFrame);
         setAttribute(Qt::WA_DeleteOnClose);
         setAttribute(Qt::WA_TranslucentBackground);
         setAttribute(Qt::WA_NoMouseReplay);
@@ -191,8 +216,8 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
         const bool dark = palette().color(QPalette::Window).lightness() < 128;
-        painter.setPen(QPen(QColor(dark ? "#464646" : "#DFE6E1"), 1));
-        painter.setBrush(QColor(dark ? "#292929" : "#FFFFFF"));
+        painter.setPen(QPen(QColor(dark ? "#464B48" : "#DFE6E1"), 1));
+        painter.setBrush(QColor(dark ? "#2B2D2F" : "#FFFFFF"));
         painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 14, 14);
     }
     void keyPressEvent(QKeyEvent *event) override
@@ -413,16 +438,34 @@ void SettingsDialog::createWorkspaceHeader()
     brand->setFixedWidth(224);
     auto *brandRow = new QHBoxLayout(brand);
     brandRow->setContentsMargins(0, 0, 0, 0);
-    auto *logo = new QLabel(brand);
+    auto *home = new QPushButton(brand);
+    home->setObjectName(QStringLiteral("driveHome"));
+    home->setFixedHeight(40);
+    home->setCursor(Qt::PointingHandCursor);
+    home->setAccessibleName(tr("Go to Personal"));
+    home->setToolTip(tr("Go to Personal"));
+    auto *homeRow = new QHBoxLayout(home);
+    homeRow->setContentsMargins(4, 4, 8, 4);
+    homeRow->setSpacing(8);
+    auto *logo = new QLabel(home);
     logo->setPixmap(Resources::themeUniversalIcon(QStringLiteral("udrive-icon")).pixmap(30, 30));
-    auto *name = new QLabel(QStringLiteral("<span style='color:#00B889'>U</span>Drive"), brand);
+    logo->setAttribute(Qt::WA_TransparentForMouseEvents);
+    auto *name = new QLabel(QStringLiteral("<span style='color:#00B889'>U</span>Drive"), home);
+    name->setAttribute(Qt::WA_TransparentForMouseEvents);
     auto font = name->font();
     font.setPointSize(17);
     font.setBold(true);
     name->setFont(font);
-    brandRow->addWidget(logo);
-    brandRow->addWidget(name);
+    homeRow->addWidget(logo);
+    homeRow->addWidget(name);
+    home->setFixedWidth(homeRow->sizeHint().width());
+    brandRow->addWidget(home);
     brandRow->addStretch();
+    connect(home, &QPushButton::clicked, this, [this] {
+        setCurrentPage(SettingsPage::Files);
+        if (auto *files = qobject_cast<UDriveFileBrowser *>(_ui->stack->currentWidget()))
+            files->showHome();
+    });
     row->addWidget(brand);
     _searchStack = new QStackedWidget(header);
     _searchStack->setObjectName(QStringLiteral("driveHeaderSearch"));
@@ -482,29 +525,31 @@ void SettingsDialog::showAccountPopup()
     _accountPopup = popup;
     const auto *screen = _profileButton->screen();
     const QRect available = screen->availableGeometry();
-    popup->setFixedWidth(qMin(360, available.width() - 20));
+    popup->setFixedWidth(qMin(344, available.width() - 20));
     const bool dark = palette().color(QPalette::Window).lightness() < 128;
-    popup->setStyleSheet(QStringLiteral("QFrame#driveAccountPopup { background: %1; border: 1px solid %2; border-radius: 14px; }"
-                                        "QLabel#driveAccountTitle { color: %3; font-size: 14px; font-weight: 600; }"
-                                        "QLabel#driveAccountHint { color: %4; font-size: 12px; }"
+    popup->setStyleSheet(QStringLiteral("QFrame#driveAccountPopup { background: %4; border: none; border-radius: 14px; }"
+                                        "QLabel#driveAccountTitle { color: %1; font-size: 15px; font-weight: 700; padding: 0 4px; }"
+                                        "QLabel#driveAccountHint { color: %2; font-size: 12px; padding: 0 4px; }"
                                         "QScrollArea#driveAccountList, QWidget#driveAccountRows { background: transparent; border: none; }"
-                                        "QFrame#driveAccountDivider { background: %2; border: none; }")
-            .arg(dark ? QStringLiteral("#292929") : QStringLiteral("#FFFFFF"), dark ? QStringLiteral("#464646") : QStringLiteral("#DFE6E1"),
-                dark ? QStringLiteral("#EDEEF0") : QStringLiteral("#24332C"), dark ? QStringLiteral("#AFB8B2") : QStringLiteral("#64776B")));
+                                        "QFrame#driveAccountDivider { background: %3; border: none; }")
+            .arg(dark ? QStringLiteral("#EDEEF0") : QStringLiteral("#24332C"), dark ? QStringLiteral("#AFB8B2") : QStringLiteral("#64776B"),
+                dark ? QStringLiteral("#404642") : QStringLiteral("#E3EAE6"), dark ? QStringLiteral("#2B2D2F") : QStringLiteral("#FFFFFF")));
     auto *layout = new QVBoxLayout(popup);
-    layout->setContentsMargins(12, 14, 12, 10);
-    layout->setSpacing(6);
+    layout->setContentsMargins(12, 16, 12, 10);
+    layout->setSpacing(4);
     auto *title = new QLabel(tr("Accounts"), popup);
     title->setObjectName(QStringLiteral("driveAccountTitle"));
     title->setTextFormat(Qt::PlainText);
-    auto *hint = new QLabel(tr("Switch between your accounts."), popup);
-    hint->setObjectName(QStringLiteral("driveAccountHint"));
-    hint->setWordWrap(true);
-    hint->setTextFormat(Qt::PlainText);
     layout->addWidget(title);
-    layout->addWidget(hint);
-    layout->addSpacing(8);
     auto accounts = AccountManager::instance()->accounts();
+    if (accounts.size() > 1) {
+        auto *hint = new QLabel(tr("Switch between your accounts."), popup);
+        hint->setObjectName(QStringLiteral("driveAccountHint"));
+        hint->setWordWrap(true);
+        hint->setTextFormat(Qt::PlainText);
+        layout->addWidget(hint);
+    }
+    layout->addSpacing(6);
     // Keep the active account first, then use a stable, readable name order.
     std::stable_sort(accounts.begin(), accounts.end(), [this](const auto *left, const auto *right) {
         const bool leftActive = left->account() == _lastAccount;
@@ -519,12 +564,13 @@ void SettingsDialog::showAccountPopup()
         scroll->setObjectName(QStringLiteral("driveAccountList"));
         scroll->setWidgetResizable(true);
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        scroll->setFixedHeight(qMin(int(accounts.size()) * 78, qMax(78, qMin(312, available.height() - 240))));
+        scroll->setFixedHeight(qMin(int(accounts.size()) * 82 - 6, qMax(76, qMin(322, available.height() - 240))));
         auto *rows = new QWidget(scroll);
         rows->setObjectName(QStringLiteral("driveAccountRows"));
         auto *rowLayout = new QVBoxLayout(rows);
         rowLayout->setContentsMargins(0, 0, 0, 0);
         rowLayout->setSpacing(6);
+        rowLayout->setAlignment(Qt::AlignTop);
         for (auto *state : accounts) {
             QPointer<Account> account = state->account();
             const QString name = account->davDisplayName().isEmpty() ? account->hostName() : account->davDisplayName();
@@ -554,9 +600,9 @@ void SettingsDialog::showAccountPopup()
     auto *divider = new QFrame(popup);
     divider->setObjectName(QStringLiteral("driveAccountDivider"));
     divider->setFixedHeight(1);
-    layout->addSpacing(4);
+    layout->addSpacing(6);
     layout->addWidget(divider);
-    layout->addSpacing(4);
+    layout->addSpacing(6);
     auto *add = new AccountPopupButton(tr("Add account"), {}, {}, UDriveIcons::icon(UDriveIcons::Symbol::Add), popup);
     add->setObjectName(QStringLiteral("drivePopupAddAccount"));
     layout->addWidget(add);
@@ -617,8 +663,13 @@ bool SettingsDialog::canCreateFiles() const
 
 void SettingsDialog::openNewFileMenu()
 {
-    if (auto *files = qobject_cast<UDriveFileBrowser *>(_ui->stack->currentWidget()))
-        files->showNewMenu(_ui->quickWidget->mapToGlobal(QPoint(12, 82)));
+    auto *files = qobject_cast<UDriveFileBrowser *>(_ui->stack->currentWidget());
+    auto *root = _ui->quickWidget->rootObject();
+    auto *button = root ? root->findChild<QQuickItem *>(QStringLiteral("udriveNew")) : nullptr;
+    if (!files || !button || !button->isVisible()) return;
+    const QRectF bounds = button->mapRectToScene(button->boundingRect());
+    const QPoint position(qRound(bounds.left()), qRound(bounds.bottom()) + 4);
+    files->showNewMenu(_ui->quickWidget->mapToGlobal(position), qRound(bounds.width()));
 }
 
 QString SettingsDialog::storageLabel() const
@@ -680,6 +731,9 @@ void SettingsDialog::updateUDriveAppearance()
         "QWidget#page { background: %8; color: %2; }"
         "QStackedWidget#stack { border: 1px solid %3; border-radius: 16px; }"
         "QWidget#driveWorkspaceHeader { background: %8; color: %2; }"
+        "QPushButton#driveHome { border: 1px solid transparent; border-radius: 8px; background: transparent; }"
+        "QPushButton#driveHome:hover { background: %4; }"
+        "QPushButton#driveHome:focus { border-color: #40D979; }"
         "QWidget#driveWorkspaceHeader QPushButton#driveHeaderTool { border: none; border-radius: 8px; background: transparent; }"
         "QWidget#driveWorkspaceHeader QPushButton#driveHeaderTool:hover { background: %4; }"
         "QWidget#driveWorkspaceHeader QPushButton#driveHeaderTool:focus { border: 1px solid #40D979; }"
@@ -723,17 +777,38 @@ void SettingsDialog::updateUDriveAppearance()
         "QCheckBox#driveSelectAll::indicator:disabled { border-color: %3; background: %6; }"
         "QStackedWidget#stack QGroupBox { border: 1px solid %3; border-radius: 12px; margin-top: 22px; padding: 12px; }"
         "QStackedWidget#stack QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 4px; color: %2; }"
+        "QWidget[udriveNetwork=\"true\"] QGroupBox#proxyGroupBox { border: none; margin-top: 20px; padding: 0; }"
+        "QWidget[udriveNetwork=\"true\"] QGroupBox#proxyGroupBox::title { padding: 0; font-weight: 600; }"
+        "QWidget[udriveNetwork=\"true\"] QRadioButton, QWidget[udriveNetwork=\"true\"] QCheckBox { spacing: 8px; min-height: 24px; }"
+        "QWidget[udriveNetwork=\"true\"] QRadioButton::indicator { width: 16px; height: 16px; border: 1px solid %10; border-radius: 9px; background: %8; }"
+        "QWidget[udriveNetwork=\"true\"] QRadioButton::indicator:checked { border-color: %11; background: qradialgradient(cx: 0.5, cy: 0.5, radius: 0.5, fx: 0.5, fy: 0.5, stop: 0 #40D979, stop: 0.4 #40D979, stop: 0.41 %8, stop: 1 %8); }"
+        "QWidget[udriveNetwork=\"true\"] QRadioButton::indicator:hover, QWidget[udriveNetwork=\"true\"] QRadioButton::indicator:focus { border-color: %11; }"
+        "QWidget[udriveNetwork=\"true\"] QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid %10; border-radius: 4px; background: %8; }"
+        "QWidget[udriveNetwork=\"true\"] QCheckBox::indicator:checked { border-color: #40D979; background: #40D979; image: url(:/client/resources/core/checkbox-check.svg); }"
+        "QWidget[udriveNetwork=\"true\"] QCheckBox::indicator:hover { border-color: %11; }"
+        "QWidget[udriveNetwork=\"true\"] QRadioButton::indicator:disabled, QWidget[udriveNetwork=\"true\"] QCheckBox::indicator:disabled { background: %6; border-color: %3; }"
+        "QWidget[udriveNetwork=\"true\"] QLineEdit[proxyInput=\"true\"], QWidget[udriveNetwork=\"true\"] QSpinBox#portSpinBox { min-height: 20px; padding: 7px 10px; border: 1px solid %3; border-radius: 8px; background: %8; color: %2; font-size: 13px; selection-background-color: %4; }"
+        "QWidget[udriveNetwork=\"true\"] QLineEdit[proxyInput=\"true\"]:hover, QWidget[udriveNetwork=\"true\"] QSpinBox#portSpinBox:hover { border-color: %10; }"
+        "QWidget[udriveNetwork=\"true\"] QLineEdit[proxyInput=\"true\"]:focus, QWidget[udriveNetwork=\"true\"] QSpinBox#portSpinBox:focus { border-color: #00856B; }"
+        "QWidget[udriveNetwork=\"true\"] QLineEdit[proxyInput=\"true\"]:disabled, QWidget[udriveNetwork=\"true\"] QSpinBox#portSpinBox:disabled { background: %6; border-color: %3; color: %5; }"
+        "QWidget[udriveNetwork=\"true\"] QLineEdit[proxyHostMissing=\"true\"] { border-color: #D66A73; }"
+        "QWidget[udriveNetwork=\"true\"] QLabel#proxyHostHint { color: #D66A73; font-size: 12px; }"
+        "QWidget[udriveNetwork=\"true\"] QLabel#labelLocalhost { color: %5; font-size: 12px; }"
         "QScrollArea#scrollArea { border: none; background: %1; }"
         "QWidget#scrollAreaWidgetContents_2 { background: %1; }"
-        "QLineEdit#driveSearch { min-height: 20px; padding: 10px 12px; border: 1px solid %3; border-radius: 20px; background: %8; color: %2; }"
+        "QLineEdit#driveSearch { min-height: 20px; padding: 10px 12px; border: 1px solid %3; border-radius: 21px; background: %8; color: %2; }"
+        "QLineEdit#driveSearch:hover { border-color: %10; }"
         "QLineEdit#driveSearch:focus { border-color: #00856B; }"
+        "QLineEdit#driveSearch QToolButton { border: none; border-radius: 14px; padding: 0; background: transparent; }"
+        "QLineEdit#driveSearch QToolButton:hover { background: %4; }"
+        "QLineEdit#driveSearch QToolButton:pressed { background: %6; }"
         "QTreeView#driveFiles { border: none; background: %1; color: %2; padding: 0; outline: none; }"
         "QListView#driveTiles { border: none; background: %1; color: %2; padding: 0; outline: none; }"
-        "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"] { min-height: 32px; padding: 0 10px; border: 1px solid %10; border-radius: 8px; background: %9; font-size: 13px; font-weight: 500; }"
-        "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"]:hover { background: %4; border-color: %11; }"
-        "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"]:pressed { background: %4; border-color: %11; }"
+        "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"] { min-height: 32px; padding: 0 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 13px; font-weight: 500; }"
+        "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"]:hover { background: %4; border-color: transparent; }"
+        "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"]:pressed { background: %4; border-color: transparent; }"
         "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"]:focus { border-color: %11; }"
-        "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"]:disabled { background: %1; color: %5; border-color: %3; }"
+        "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"]:disabled { background: transparent; color: %5; border-color: transparent; }"
         "QStackedWidget#stack QPushButton#driveRefresh { padding: 0; }"
         "QStackedWidget#stack QPushButton#driveViewMode { padding: 0 20px 0 8px; }"
         "QStackedWidget#stack QPushButton#driveViewMode::menu-indicator { image: url(:/udrive/icons/%7.svg); width: 10px; height: 10px; subcontrol-origin: padding; subcontrol-position: center right; right: 6px; }"
@@ -744,13 +819,23 @@ void SettingsDialog::updateUDriveAppearance()
         "QTreeView#driveFiles::item:selected { background: %4; color: %2; }"
         "QTreeView#driveFiles QHeaderView::section { background: %1; color: %2; border: none; border-bottom: 1px solid %3; padding: 12px 8px; }"
         "QStackedWidget#stack QComboBox#driveSpaces, QStackedWidget#stack QComboBox#languageDropdown, QStackedWidget#stack QComboBox#pdfZoom { min-height: 22px; border: 1px solid %3; border-radius: 9px; padding: 8px 38px 8px 12px; background: %1; color: %2; }"
+        "QWidget[udriveNetwork=\"true\"] QComboBox#typeComboBox { min-height: 20px; padding: 7px 30px 7px 10px; border: 1px solid %3; border-radius: 8px; background: %8; color: %2; font-size: 13px; }"
+        "QWidget[udriveNetwork=\"true\"] QComboBox#typeComboBox:hover, QWidget[udriveNetwork=\"true\"] QComboBox#typeComboBox:focus { border-color: #00856B; }"
         "QStackedWidget#stack QComboBox#driveSpaces:hover, QStackedWidget#stack QComboBox#languageDropdown:hover, QStackedWidget#stack QComboBox#pdfZoom:hover { border-color: #00856B; }"
         "QStackedWidget#stack QComboBox#driveSpaces:focus, QStackedWidget#stack QComboBox#languageDropdown:focus, QStackedWidget#stack QComboBox#pdfZoom:focus { border-color: #00856B; }"
         "QStackedWidget#stack QComboBox[udriveCombo=\"true\"]::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 30px; border: none; }"
         "QStackedWidget#stack QComboBox[udriveCombo=\"true\"]::down-arrow { image: url(:/udrive/icons/%7.svg); width: 14px; height: 14px; }"
         "QStackedWidget#stack QComboBox[udriveCombo=\"true\"]:disabled { color: %5; background: %6; }"
         "QStackedWidget#stack QComboBox[udriveCombo=\"true\"]::down-arrow:disabled { image: url(:/udrive/icons/chevron-disabled.svg); }"
-        "QStackedWidget#stack QComboBox[udriveCombo=\"true\"] QAbstractItemView { background: %1; color: %2; selection-background-color: %4; selection-color: %2; border: 1px solid %3; padding: 4px; }"
+        "QStackedWidget#stack QComboBox[udriveCombo=\"true\"] QAbstractItemView { background: %1; color: %2; selection-background-color: %4; selection-color: %11; border: 1px solid %3; border-radius: 8px; padding: 4px; outline: none; }"
+        "QStackedWidget#stack QComboBox[udriveCombo=\"true\"] QAbstractItemView::item { min-height: 24px; padding: 4px 8px; border: none; border-radius: 5px; }"
+        "QStackedWidget#stack QComboBox[udriveCombo=\"true\"] QAbstractItemView::item:hover { background: %6; }"
+        "QStackedWidget#stack QComboBox[udriveCombo=\"true\"] QAbstractItemView::item:selected { background: %4; color: %11; }"
+        "QStackedWidget#stack QComboBox[udriveCombo=\"true\"] { combobox-popup: 0; }"
+        "QComboBox#languageDropdown QListView#driveLanguagePopup { background: %9; color: %2; border: 1px solid %10; border-radius: 9px; padding: 5px; outline: none; }"
+        "QComboBox#languageDropdown QListView#driveLanguagePopup::item { min-height: 24px; padding: 6px 10px; border: none; border-radius: 6px; }"
+        "QComboBox#languageDropdown QListView#driveLanguagePopup::item:hover { background: %6; }"
+        "QComboBox#languageDropdown QListView#driveLanguagePopup::item:selected { background: %4; color: %11; }"
         "QStackedWidget#stack QComboBox#driveSpaces { min-height: 20px; padding: 6px 28px 6px 10px; border-radius: 8px; border-color: %10; background: %9; font-size: 13px; font-weight: 500; }"
         "QStackedWidget#stack QComboBox#driveSpaces:hover, QStackedWidget#stack QComboBox#driveSpaces:focus { border-color: %11; }"
         "QStackedWidget#stack QComboBox#driveSpaces::drop-down { width: 24px; }"

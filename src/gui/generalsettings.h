@@ -19,6 +19,8 @@
 #include <QWidget>
 #include <QPointer>
 
+class QDialog;
+
 namespace OCC {
 class IgnoreListEditor;
 class SyncLogDialog;
@@ -56,9 +58,11 @@ protected:
 private:
     void reloadConfig();
     void loadLanguageNamesIntoDropdown();
+    void showLanguageRestartNotice();
 
     Ui::GeneralSettings *_ui;
     QPointer<IgnoreListEditor> _ignoreEditor;
+    QPointer<QDialog> _languageRestartNotice;
     bool _currentlyLoading;
 };
 

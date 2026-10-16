@@ -227,6 +227,9 @@
     </context>
     <context>
         <name>OCC::GeneralSettings</name>
+        <message><source>Language saved</source><translation>បានរក្សាទុកភាសា</translation></message>
+        <message><source>Restart UDrive to apply your new language.</source><translation>ចាប់ផ្ដើម UDrive ឡើងវិញ ដើម្បីអនុវត្តភាសាថ្មីរបស់អ្នក។</translation></message>
+        <message><source>OK</source><translation>យល់ព្រម</translation></message>
         <message>
             <source>Form</source>
             <translation>ទម្រង់</translation>
@@ -474,6 +477,10 @@
     <context>
         <name>OCC::SettingsDialog</name>
         <message>
+            <source>Go to Personal</source>
+            <translation>ទៅកាន់ផ្ទាល់ខ្លួន</translation>
+        </message>
+        <message>
             <source>Hide</source>
             <translation>លាក់</translation>
         </message>
@@ -548,6 +555,10 @@
     </context>
     <context>
         <name>OCC::UDriveFileBrowser</name>
+        <message>
+            <source>Clear search</source>
+            <translation>សម្អាតការស្វែងរក</translation>
+        </message>
         <message><source>Select all</source><translation>ជ្រើសរើសទាំងអស់</translation></message>
         <message><source>Select all files in the current results.</source><translation>ជ្រើសរើសឯកសារទាំងអស់នៅក្នុងលទ្ធផលបច្ចុប្បន្ន។</translation></message>
         <message><source>%1 selected. Select one item to use file actions.</source><translation>បានជ្រើសរើស %1 ធាតុ។ ជ្រើសរើសធាតុមួយដើម្បីប្រើសកម្មភាពឯកសារ។</translation></message>
@@ -1383,6 +1394,22 @@
     <context>
         <name>OCC::NetworkSettings</name>
         <message>
+            <source>Port</source>
+            <translation>Port</translation>
+        </message>
+        <message>
+            <source>Username</source>
+            <translation>ឈ្មោះអ្នកប្រើ</translation>
+        </message>
+        <message>
+            <source>Password</source>
+            <translation>ពាក្យសម្ងាត់</translation>
+        </message>
+        <message>
+            <source>Enter a Proxy hostname.</source>
+            <translation>សូមបញ្ចូល Hostname របស់ Proxy។</translation>
+        </message>
+        <message>
             <source>Form</source>
             <translation>ទម្រង់</translation>
         </message>
@@ -1392,23 +1419,23 @@
         </message>
         <message>
             <source>Proxy Settings</source>
-            <translation>ការកំណត់ប្រូកស៊ី</translation>
+            <translation>ការកំណត់ Proxy</translation>
         </message>
         <message>
             <source>No Proxy</source>
-            <translation>មិនប្រើប្រូកស៊ី</translation>
+            <translation>មិនប្រើ Proxy</translation>
         </message>
         <message>
             <source>Use system proxy</source>
-            <translation>ប្រើប្រូកស៊ីប្រព័ន្ធ</translation>
+            <translation>ប្រើ Proxy របស់ប្រព័ន្ធ</translation>
         </message>
         <message>
             <source>Host</source>
-            <translation>ម៉ាស៊ីន</translation>
+            <translation>Host</translation>
         </message>
         <message>
             <source>Proxy Hostname</source>
-            <translation>ឈ្មោះម៉ាស៊ីនប្រូកស៊ី</translation>
+            <translation>Hostname របស់ Proxy</translation>
         </message>
         <message>
             <source>:</source>
@@ -1416,43 +1443,43 @@
         </message>
         <message>
             <source>Proxy Port Number</source>
-            <translation>លេខច្រកប្រូកស៊ី</translation>
+            <translation>លេខ Port របស់ Proxy</translation>
         </message>
         <message>
             <source>Proxy server requires authentication</source>
-            <translation>ម៉ាស៊ីនមេប្រូកស៊ីតម្រូវឱ្យផ្ទៀងផ្ទាត់អត្តសញ្ញាណ</translation>
+            <translation>ម៉ាស៊ីនមេ Proxy តម្រូវឱ្យចូលគណនី</translation>
         </message>
         <message>
             <source>Note: proxy settings have no effects for accounts on localhost</source>
-            <translation>ចំណាំ៖ ការកំណត់ប្រូកស៊ីមិនមានឥទ្ធិពលលើគណនី localhost ទេ</translation>
+            <translation>ចំណាំ៖ ការកំណត់ Proxy មិនមានឥទ្ធិពលលើគណនី localhost ទេ</translation>
         </message>
         <message>
             <source>Specify proxy manually</source>
-            <translation>កំណត់ប្រូកស៊ីដោយដៃ</translation>
+            <translation>កំណត់ Proxy ដោយដៃ</translation>
         </message>
         <message>
             <source>Proxy type</source>
-            <translation>ប្រភេទប្រូកស៊ី</translation>
+            <translation>ប្រភេទ Proxy</translation>
         </message>
         <message>
             <source>Hostname of proxy server</source>
-            <translation>ឈ្មោះម៉ាស៊ីនមេប្រូកស៊ី</translation>
+            <translation>Hostname របស់ Proxy</translation>
         </message>
         <message>
             <source>Username for proxy server</source>
-            <translation>ឈ្មោះអ្នកប្រើសម្រាប់ម៉ាស៊ីនមេប្រូកស៊ី</translation>
+            <translation>ឈ្មោះអ្នកប្រើសម្រាប់ Proxy</translation>
         </message>
         <message>
             <source>Password for proxy server</source>
-            <translation>ពាក្យសម្ងាត់សម្រាប់ម៉ាស៊ីនមេប្រូកស៊ី</translation>
+            <translation>ពាក្យសម្ងាត់សម្រាប់ Proxy</translation>
         </message>
         <message>
             <source>HTTP(S) proxy</source>
-            <translation>ប្រូកស៊ី HTTP(S)</translation>
+            <translation>HTTP(S) Proxy</translation>
         </message>
         <message>
             <source>SOCKS5 proxy</source>
-            <translation>ប្រូកស៊ី SOCKS5</translation>
+            <translation>SOCKS5 Proxy</translation>
         </message>
     </context>
     <context>

@@ -54,6 +54,10 @@ private Q_SLOTS:
         for (const auto *label : {"Sort by", "Recent", "A-Z", "Z-A", "Newest", "Oldest", "Largest", "Smallest", "Select all", "Select all files in the current results."})
             QVERIFY2(!translator.translate("OCC::UDriveFileBrowser", label).isEmpty(), label);
         QVERIFY(translator.translate("OCC::UDriveFileBrowser", "%1 selected. Select one item to use file actions.").contains(QStringLiteral("%1")));
+        for (const auto *source : {"Language saved", "Restart UDrive to apply your new language.", "OK"}) {
+            const auto translated = translator.translate("OCC::GeneralSettings", source);
+            QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
+        }
         QVERIFY(translator.translate("OCC::UDriveFileBrowser", "Sort by: %1").contains(QStringLiteral("%1")));
         for (const auto *source : {"Delete permanently…", "Item permanently deleted.", "Open on Web", "Open this item in your web browser",
                  "The selected item changed. Review it and confirm again."}) {

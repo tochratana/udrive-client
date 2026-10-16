@@ -46,6 +46,9 @@ bool OWNCLOUDRESOURCES_EXPORT hasDarkTheme();
  */
 bool OWNCLOUDRESOURCES_EXPORT hasMonoTheme();
 
+/** Register the bundled Khmer font after creating the GUI application. */
+bool OWNCLOUDRESOURCES_EXPORT loadUDriveFonts();
+
 QIcon OWNCLOUDRESOURCES_EXPORT getCoreIcon(const QString &icon_name);
 
 QIcon OWNCLOUDRESOURCES_EXPORT loadIcon(const QString &flavor, const QString &name, IconType iconType);

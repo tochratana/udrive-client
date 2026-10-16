@@ -24,6 +24,9 @@
 
 #include <QList>
 #include <QNetworkProxy>
+#include <QListView>
+#include <QStyledItemDelegate>
+#include <QStyle>
 #include <QString>
 #include <QtGui/QtEvents>
 
@@ -74,6 +77,26 @@ NetworkSettings::NetworkSettings(QWidget *parent)
         this, &NetworkSettings::checkAccountLocalhost);
 
     loadProxySettings();
+    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+        setProperty("udriveNetwork", true);
+        _ui->verticalLayout_5->setContentsMargins(0, 0, 0, 0);
+        _ui->verticalLayout_4->setSpacing(10);
+        _ui->manualProxyLayout->setContentsMargins(24, 12, 0, 0);
+        _ui->manualSettings->setMaximumWidth(760);
+        _ui->manualSettings->setVisible(_ui->manualProxyRadioButton->isChecked());
+        connect(_ui->manualProxyRadioButton, &QAbstractButton::toggled, _ui->manualSettings, &QWidget::setVisible);
+        connect(_ui->manualProxyRadioButton, &QAbstractButton::toggled, this, &NetworkSettings::checkEmptyProxyHost);
+        _ui->typeComboBox->setProperty("udriveCombo", true);
+        auto *list = new QListView(_ui->typeComboBox);
+        list->setFrameShape(QFrame::NoFrame);
+        list->setUniformItemSizes(true);
+        _ui->typeComboBox->setView(list);
+        _ui->typeComboBox->setItemDelegate(new QStyledItemDelegate(_ui->typeComboBox));
+        _ui->hostLineEdit->setPlaceholderText(QStringLiteral("proxy.example.com"));
+        for (auto *input : {_ui->hostLineEdit, _ui->userLineEdit, _ui->passwordLineEdit})
+            input->setProperty("proxyInput", true);
+        _ui->portSpinBox->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    }
     removeBWLimitSettings();
     loadMeteredSettings();
 
@@ -212,6 +235,17 @@ void NetworkSettings::saveMeteredSettings()
 
 void NetworkSettings::checkEmptyProxyHost()
 {
+    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+        const bool missing = _ui->hostLineEdit->isEnabled() && _ui->hostLineEdit->text().trimmed().isEmpty();
+        if (_ui->hostLineEdit->property("proxyHostMissing").toBool() != missing) {
+            _ui->hostLineEdit->setProperty("proxyHostMissing", missing);
+            _ui->hostLineEdit->style()->unpolish(_ui->hostLineEdit);
+            _ui->hostLineEdit->style()->polish(_ui->hostLineEdit);
+            _ui->hostLineEdit->update();
+        }
+        _ui->proxyHostHint->setVisible(missing);
+        return;
+    }
     if (_ui->hostLineEdit->isEnabled() && _ui->hostLineEdit->text().isEmpty()) {
         _ui->hostLineEdit->setStyleSheet(QStringLiteral("border: 1px solid red"));
     } else {

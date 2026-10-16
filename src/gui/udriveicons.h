@@ -89,10 +89,17 @@ public:
             painter->drawEllipse(QRectF(8, 3, 8, 18));
             line({{3, 12}, {21, 12}});
             break;
-        case Symbol::Refresh:
-            painter->drawArc(QRectF(4, 4, 16, 16), 35 * 16, 285 * 16);
-            line({{16, 3}, {21, 3}, {21, 8}});
+        case Symbol::Refresh: {
+            QPainterPath curve;
+            curve.moveTo(20, 8);
+            curve.cubicTo(18.5, 5.2, 15.5, 3.5, 12, 3.5);
+            curve.cubicTo(7.3, 3.5, 3.5, 7.3, 3.5, 12);
+            curve.cubicTo(3.5, 16.7, 7.3, 20.5, 12, 20.5);
+            curve.cubicTo(15.7, 20.5, 18.9, 18.1, 20, 14.8);
+            painter->drawPath(curve);
+            line({{14.5, 8}, {20, 8}, {20, 2.5}});
             break;
+        }
         case Symbol::Up:
             line({{6, 10}, {12, 4}, {18, 10}});
             line({{12, 4}, {12, 20}});

@@ -73,7 +73,7 @@ T.Button {
                 text: control.text
                 color: control.checked ? (control.dark ? "#49DA78" : "#087F3C") : control.textColor
                 font.pixelSize: 13
-                font.weight: control.checked ? Font.DemiBold : Font.Normal
+                font.weight: Font.Bold
                 elide: Text.ElideRight
             }
             Label {
