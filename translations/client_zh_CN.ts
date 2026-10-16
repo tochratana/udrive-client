@@ -563,8 +563,8 @@
         <message><source>Select all files in the current results.</source><translation>选择当前结果中的所有文件。</translation></message>
         <message><source>%1 selected. Select one item to use file actions.</source><translation>已选择 %1 个项目。请选择一个项目以使用文件操作。</translation></message>
         <message>
-            <source>Delete permanently…</source>
-            <translation>永久删除…</translation>
+            <source>Delete permanently</source>
+            <translation>永久删除</translation>
         </message>
         <message>
             <source>Item permanently deleted.</source>
@@ -1016,6 +1016,50 @@
         <message>
             <source>Downloading %1…</source>
             <translation>正在下载 %1…</translation>
+        </message>
+        <message>
+            <source>Share</source>
+            <translation>共享</translation>
+        </message>
+        <message>
+            <source>Share…</source>
+            <translation>共享…</translation>
+        </message>
+        <message>
+            <source>Share this item with other users</source>
+            <translation>与其他用户共享此项目</translation>
+        </message>
+        <message>
+            <source>Shared by me</source>
+            <translation>我共享的</translation>
+        </message>
+        <message>
+            <source>Shared with me</source>
+            <translation>与我共享的</translation>
+        </message>
+        <message>
+            <source>Share direction</source>
+            <translation>共享方向</translation>
+        </message>
+        <message>
+            <source>Search files shared by me</source>
+            <translation>搜索我共享的文件</translation>
+        </message>
+        <message>
+            <source>Loading files shared by you…</source>
+            <translation>正在加载您共享的文件…</translation>
+        </message>
+        <message>
+            <source>Could not load files shared by you. %1</source>
+            <translation>无法加载您共享的文件。%1</translation>
+        </message>
+        <message>
+            <source>%1 shared items shown; some items are no longer available.</source>
+            <translation>已显示 %1 个共享项目；部分项目已不可用。</translation>
+        </message>
+        <message>
+            <source>No files shared by you yet.</source>
+            <translation>您尚未共享任何文件。</translation>
         </message>
     </context>
     <context>

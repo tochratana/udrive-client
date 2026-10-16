@@ -27,6 +27,7 @@ enum class Symbol {
     Trash,
     Restore,
     Star,
+    StarFilled,
     Link,
     Close,
     Search,
@@ -64,6 +65,7 @@ public:
         const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
         const QColor color = mode == QIcon::Disabled ? QColor(dark ? "#939D97" : "#7D8781")
             : _tint.isValid()                        ? _tint
+            : _symbol == Symbol::StarFilled           ? QColor("#FFA000")
             : _primary                               ? QColor("#12351D")
                                                      : QColor(dark ? "#EDEEF0" : "#2B3035");
         painter->save();
@@ -162,18 +164,24 @@ public:
             line({{12, 8}, {12, 12}, {15, 14}});
             break;
         case Symbol::Star:
+        case Symbol::StarFilled:
+            if (_symbol == Symbol::StarFilled) painter->setBrush(color);
             line({{12, 3}, {14.8, 8.7}, {21, 9.6}, {16.5, 14}, {17.6, 20.2}, {12, 17.3}, {6.4, 20.2}, {7.5, 14}, {3, 9.6}, {9.2, 8.7}, {12, 3}});
             break;
         case Symbol::Link: {
             QPainterPath path;
-            path.moveTo(9, 15);
-            path.cubicTo(6, 18, 4, 18, 3, 16);
-            path.cubicTo(1, 13, 4, 10, 7, 8);
-            path.moveTo(15, 9);
-            path.cubicTo(18, 6, 20, 6, 21, 8);
-            path.cubicTo(23, 11, 20, 14, 17, 16);
+            path.moveTo(9, 7);
+            path.lineTo(7, 7);
+            path.cubicTo(4.24, 7, 2, 9.24, 2, 12);
+            path.cubicTo(2, 14.76, 4.24, 17, 7, 17);
+            path.lineTo(9, 17);
+            path.moveTo(15, 7);
+            path.lineTo(17, 7);
+            path.cubicTo(19.76, 7, 22, 9.24, 22, 12);
+            path.cubicTo(22, 14.76, 19.76, 17, 17, 17);
+            path.lineTo(15, 17);
             painter->drawPath(path);
-            line({{8, 16}, {16, 8}});
+            line({{8, 12}, {16, 12}});
             break;
         }
         case Symbol::Close:

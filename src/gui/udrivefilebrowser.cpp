@@ -41,6 +41,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHeaderView>
+#include <QHelpEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
@@ -50,6 +51,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QToolButton>
+#include <QToolTip>
 #include <QSaveFile>
 #include <QSignalBlocker>
 #include <QStyle>
@@ -70,7 +72,9 @@
 namespace OCC {
 namespace {
 enum Roles { PathRole = Qt::UserRole + 1, DirectoryRole, SortRole, RootRole, SpaceRole,
-    PermissionsRole, FavoriteRole, FavoriteKnownRole, EtagRole, LinkRole, RestorePathRole, ThumbnailRole, OpenedRole };
+    PermissionsRole, FavoriteRole, FavoriteKnownRole, EtagRole, LinkRole, RestorePathRole, ThumbnailRole, OpenedRole, TrashedRole };
+
+enum RowAction { RowFavorite, RowShare, RowLink, RowMore };
 
 QMenu *createFileMenu(QWidget *parent)
 {
@@ -276,10 +280,12 @@ private:
 class FileRowDelegate : public QStyledItemDelegate
 {
 public:
-    FileRowDelegate(QTreeView *tree, std::function<void(const QModelIndex &, int)> action)
+    FileRowDelegate(QTreeView *tree, std::function<void(const QModelIndex &, int)> action,
+        std::function<bool(const QModelIndex &, int)> enabled)
         : QStyledItemDelegate(tree)
         , _tree(tree)
         , _action(std::move(action))
+        , _enabled(std::move(enabled))
     {
     }
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
@@ -305,13 +311,24 @@ public:
         }
         if (index.column() == 4) {
             QStyledItemDelegate::paint(painter, option, index);
-            const auto mode = _tree->isEnabled() ? QIcon::Normal : QIcon::Disabled;
             const auto name = index.siblingAtColumn(0);
-            if (name.data(FavoriteRole).toBool())
-                UDriveIcons::icon(UDriveIcons::Symbol::Star).paint(painter, actionRect(option.rect, 0), Qt::AlignCenter, mode);
-            if (name.data(LinkRole).toUrl().isValid() && !name.data(LinkRole).toUrl().isEmpty())
-                UDriveIcons::icon(UDriveIcons::Symbol::Link).paint(painter, actionRect(option.rect, 1), Qt::AlignCenter, mode);
-            UDriveIcons::icon(UDriveIcons::Symbol::MoreVertical).paint(painter, actionRect(option.rect, 2), Qt::AlignCenter, mode);
+            const UDriveIcons::Symbol symbols[]{UDriveIcons::Symbol::StarFilled, UDriveIcons::Symbol::Share,
+                UDriveIcons::Symbol::Link, UDriveIcons::Symbol::MoreVertical};
+            for (int action = RowFavorite; action <= RowMore; ++action) {
+                if (!visible(name, action)) continue;
+                const bool enabled = _enabled(name, action);
+                const QRect icon = actionRect(option.rect, action);
+                if (enabled && option.state.testFlag(QStyle::State_MouseOver)
+                    && hitRect(icon).contains(_tree->viewport()->mapFromGlobal(QCursor::pos()))) {
+                    painter->save();
+                    painter->setPen(Qt::NoPen);
+                    auto color = option.palette.color(QPalette::Text); color.setAlpha(22);
+                    painter->setBrush(color);
+                    painter->drawRoundedRect(hitRect(icon), 6, 6);
+                    painter->restore();
+                }
+                UDriveIcons::icon(symbols[action]).paint(painter, icon, Qt::AlignCenter, enabled ? QIcon::Normal : QIcon::Disabled);
+            }
             return;
         }
         QStyledItemDelegate::paint(painter, option, index);
@@ -327,9 +344,10 @@ public:
         if (event->type() == QEvent::MouseButtonRelease) {
             const auto *mouse = static_cast<QMouseEvent *>(event);
             if (mouse->button() == Qt::LeftButton && index.column() == 4) {
-                for (int action = 0; action < 3; ++action)
-                    if (actionRect(option.rect, action).adjusted(-6, -10, 6, 10).contains(mouse->position().toPoint())) {
-                        _action(index.siblingAtColumn(0), action);
+                const auto name = index.siblingAtColumn(0);
+                for (int action = RowFavorite; action <= RowMore; ++action)
+                    if (visible(name, action) && hitRect(actionRect(option.rect, action)).contains(mouse->position().toPoint())) {
+                        if (_enabled(name, action)) _action(name, action);
                         return true;
                     }
             }
@@ -337,10 +355,35 @@ public:
         return QStyledItemDelegate::editorEvent(event, model, option, index);
     }
 
+    bool helpEvent(QHelpEvent *event, QAbstractItemView *view, const QStyleOptionViewItem &option, const QModelIndex &index) override
+    {
+        if (event->type() == QEvent::ToolTip && index.column() == 4) {
+            const auto name = index.siblingAtColumn(0);
+            const char *labels[]{QT_TRANSLATE_NOOP("OCC::UDriveFileBrowser", "Remove from Favorites"),
+                QT_TRANSLATE_NOOP("OCC::UDriveFileBrowser", "Share this item with other users"),
+                QT_TRANSLATE_NOOP("OCC::UDriveFileBrowser", "Copy sign-in link"), QT_TRANSLATE_NOOP("OCC::UDriveFileBrowser", "Actions")};
+            for (int action = RowFavorite; action <= RowMore; ++action) {
+                if (visible(name, action) && hitRect(actionRect(option.rect, action)).contains(event->pos())) {
+                    QToolTip::showText(event->globalPos(), QCoreApplication::translate("OCC::UDriveFileBrowser", labels[action]), view->viewport());
+                    return true;
+                }
+            }
+            QToolTip::hideText();
+            return true;
+        }
+        return QStyledItemDelegate::helpEvent(event, view, option, index);
+    }
+
 private:
-    static QRect actionRect(const QRect &row, int action) { return QRect(row.right() - 104 + action * 34, row.center().y() - 9, 18, 18); }
+    static QRect actionRect(const QRect &row, int action) { return QRect(row.right() - 138 + action * 34, row.center().y() - 9, 18, 18); }
+    static QRect hitRect(const QRect &icon) { return icon.adjusted(-5, -5, 5, 5); }
+    static bool visible(const QModelIndex &name, int action)
+    {
+        return action == RowMore || (!name.data(TrashedRole).toBool() && (action != RowFavorite || name.data(FavoriteRole).toBool()));
+    }
     QTreeView *_tree;
     std::function<void(const QModelIndex &, int)> _action;
+    std::function<bool(const QModelIndex &, int)> _enabled;
 };
 
 class FileTileDelegate : public QStyledItemDelegate
@@ -1250,6 +1293,40 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     headingRow->setSpacing(8);
     headingRow->setAlignment(Qt::AlignVCenter);
     headingRow->addWidget(_heading);
+    _shareScope = new QPushButton(tr("Shared by me"), this);
+    _shareScope->setObjectName(QStringLiteral("driveShareScope"));
+    _shareScope->setProperty("driveToolbarButton", true);
+    _shareScope->setAccessibleName(tr("Share direction"));
+    _shareScope->setFixedHeight(34);
+    auto *scopeMenu = createFileMenu(_shareScope);
+    auto *scopeGroup = new QActionGroup(scopeMenu);
+    scopeGroup->setExclusive(true);
+    for (int i = 0; i < 2; ++i) {
+        auto *action = scopeMenu->addAction(i == 0 ? tr("Shared by me") : tr("Shared with me"));
+        action->setObjectName(i == 0 ? QStringLiteral("driveSharedByMe") : QStringLiteral("driveSharedWithMe"));
+        action->setCheckable(true);
+        action->setChecked(i == 0);
+        scopeGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, action, i] {
+            if (_sharedByMe == (i == 0)) return;
+            _sharedByMe = i == 0;
+            _shareScope->setText(action->text());
+            if (_section != Section::Shares) return;
+            cancelListing();
+            cancelDownload();
+            _spaceId.clear();
+            _root.clear();
+            _path.clear();
+            updateSpaces();
+        });
+    }
+    _shareScope->setMenu(scopeMenu);
+    QTimer::singleShot(0, this, [this, scopeMenu] {
+        scopeMenu->ensurePolished();
+        _shareScope->setMinimumWidth(scopeMenu->sizeHint().width());
+    });
+    connect(scopeMenu, &QMenu::aboutToShow, this, [this, scopeMenu] { scopeMenu->setFixedWidth(_shareScope->width()); });
+    headingRow->addWidget(_shareScope);
     headingRow->addWidget(_spaces);
     headingRow->addStretch(1);
     _selectAll = new SelectAllCheckBox(tr("Select all"), this);
@@ -1360,19 +1437,21 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _tree->header()->setSectionResizeMode(3, QHeaderView::Interactive);
     _tree->setColumnHidden(3, true);
     _tree->header()->setSectionResizeMode(4, QHeaderView::Fixed);
-    _tree->header()->resizeSection(4, 120);
+    _tree->header()->resizeSection(4, 154);
     _tree->header()->setMinimumSectionSize(70);
     _tree->setMouseTracking(true);
     _tree->setItemDelegate(new FileRowDelegate(_tree, [this](const QModelIndex &index, int action) {
         selectOnly(index);
         updateActions();
-        if (action == 0 && index.data(FavoriteRole).toBool() && _favoriteAction->isEnabled())
+        if (action == RowFavorite && index.data(FavoriteRole).toBool() && _favoriteAction->isEnabled())
             _favoriteAction->trigger();
-        else if (action == 1 && _linkAction->isEnabled())
+        else if (action == RowShare && _shareAction->isEnabled())
+            _shareAction->trigger();
+        else if (action == RowLink && _linkAction->isEnabled())
             _linkAction->trigger();
-        else if (action == 2 && _fileMenu->isEnabled())
+        else if (action == RowMore && _fileMenu->isEnabled())
             _fileMenu->popup(QCursor::pos());
-    }));
+    }, [this](const QModelIndex &index, int action) { return rowActionEnabled(index, action); }));
     _tiles = new QListView(this);
     _tiles->setObjectName(QStringLiteral("driveTiles"));
     _tiles->setAccessibleName(tr("Files in tiles view"));
@@ -1431,15 +1510,15 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     actions->addWidget(_restoreButton);
     _fileMenu = createFileMenu(this);
     _fileMenu->setObjectName(QStringLiteral("driveActionsMenu"));
-    _shareAction = new QAction(tr("Share…"), this);
+    _shareAction = new QAction(tr("Share"), this);
     _shareAction->setObjectName(QStringLiteral("driveShareAction"));
     _shareAction->setToolTip(tr("Share this item with other users"));
-    _renameAction = new QAction(tr("Rename…"), this);
-    _copyAction = new QAction(tr("Make a copy…"), this);
-    _moveAction = new QAction(tr("Move to folder…"), this);
-    _deleteAction = new QAction(tr("Move to Deleted files…"), this);
+    _renameAction = new QAction(tr("Rename"), this);
+    _copyAction = new QAction(tr("Make a copy"), this);
+    _moveAction = new QAction(tr("Move to folder"), this);
+    _deleteAction = new QAction(tr("Move to Deleted files"), this);
     _restoreAction = new QAction(tr("Restore"), this);
-    _permanentDeleteAction = new QAction(tr("Delete permanently…"), this);
+    _permanentDeleteAction = new QAction(tr("Delete permanently"), this);
     _permanentDeleteAction->setObjectName(QStringLiteral("drivePermanentDelete"));
     _favoriteAction = new QAction(tr("Add to Favorites"), this);
     _favoriteAction->setObjectName(QStringLiteral("driveFavorite"));
@@ -1587,6 +1666,9 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         const QString spaceId = item.data(SpaceRole).toString();
 
         UDriveShareDialog dialog(_state, fileName, isFolder, path, link, spaceId, this);
+        connect(&dialog, &QDialog::finished, this, [this] {
+            if (sharedByMeOverview()) refresh();
+        });
         dialog.exec();
     });
     connect(_linkAction, &QAction::triggered, this, [this] {
@@ -1823,7 +1905,7 @@ void UDriveFileBrowser::updateBreadcrumbs()
         }
         delete item;
     }
-    _breadcrumbs->setVisible(_section != Section::Favorites && _section != Section::Trash && (!_workspaceLayout || !_path.isEmpty()));
+    _breadcrumbs->setVisible(_section != Section::Favorites && _section != Section::Trash && !sharedByMeOverview() && (!_workspaceLayout || !_path.isEmpty()));
     const QString rootName = _spaceName.isEmpty() ? _heading->text() : _spaceName;
     _rootButton->setText(_rootButton->fontMetrics().elidedText(rootName, Qt::ElideMiddle, 140).replace(QLatin1Char('&'), QStringLiteral("&&")));
     _rootButton->setToolTip(rootName);
@@ -1889,14 +1971,16 @@ void UDriveFileBrowser::updateSpaces()
     case Section::Favorites: _heading->setText(tr("Favorites")); break;
     case Section::Trash: _heading->setText(tr("Deleted files")); break;
     }
-    const bool folderView = _section != Section::Favorites && _section != Section::Trash;
+    _shareScope->setVisible(_section == Section::Shares);
+    const bool folderView = _section != Section::Favorites && _section != Section::Trash && !sharedByMeOverview();
     _newButton->setVisible(folderView && !_workspaceLayout);
     _breadcrumbs->setVisible(folderView && (!_workspaceLayout || !_path.isEmpty()));
     const QString searchHint = _section == Section::Favorites ? tr("Search Favorites")
-        : _section == Section::Trash ? tr("Search Deleted files") : tr("Search this folder");
+        : _section == Section::Trash ? tr("Search Deleted files")
+        : sharedByMeOverview() ? tr("Search files shared by me") : tr("Search this folder");
     _search->setPlaceholderText(searchHint);
     _search->setAccessibleName(searchHint);
-    _tree->setColumnHidden(3, _section != Section::Favorites && _section != Section::Trash);
+    _tree->setColumnHidden(3, _section != Section::Favorites && _section != Section::Trash && !sharedByMeOverview());
     _model->setHeaderData(2, Qt::Horizontal, _section == Section::Trash ? tr("Deleted") : tr("Modified"));
     const QSignalBlocker blocker(_spaces);
     const QString previous = _spaceId;
@@ -1920,7 +2004,7 @@ void UDriveFileBrowser::updateSpaces()
     _spaces->setCurrentIndex(previousIndex < 0 ? (_spaces->count() ? 0 : -1) : previousIndex);
     // A single space is selected automatically; only show a selector when
     // there is a real choice. Favorites already spans all spaces.
-    _spaces->setVisible(_section != Section::Favorites && _spaces->count() > 1);
+    _spaces->setVisible(_section != Section::Favorites && !sharedByMeOverview() && _spaces->count() > 1);
     _spaces->setEnabled(canBrowse() && _spaces->count());
     selectSpace();
 }
@@ -2065,6 +2149,7 @@ void UDriveFileBrowser::refresh()
         return;
     }
     if (_section == Section::Favorites) { refreshFavorites(); return; }
+    if (sharedByMeOverview()) { refreshSharedByMe(); return; }
     if (_root.isEmpty()) {
         setMessage(_state->account()->spacesManager()->isReady() ? tr("No spaces are available in this section.")
                                                                  : tr("Waiting for your spaces. Use Sync to check your connection."));
@@ -2135,6 +2220,7 @@ void UDriveFileBrowser::appendEntry(const QString &href, const QMap<QString, QSt
     auto *item = new QStandardItem(UDriveIcons::fileIcon(name, directory), name);
     item->setData(relative, PathRole);
     item->setData(directory, DirectoryRole);
+    item->setData(trash, TrashedRole);
     item->setData(root, RootRole);
     item->setData(entrySpace.isEmpty() ? _spaceId : entrySpace, SpaceRole);
     item->setData(properties.value(QStringLiteral("permissions")), PermissionsRole);
@@ -2179,7 +2265,6 @@ void UDriveFileBrowser::appendEntry(const QString &href, const QMap<QString, QSt
     location->setData(location->text(), SortRole);
     size->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
     auto *actions = new QStandardItem;
-    actions->setToolTip(tr("Favorite, copy sign-in link, or more actions"));
     _model->appendRow({item, size, date, location, actions});
 }
 
@@ -2200,11 +2285,26 @@ QString UDriveFileBrowser::localPath(const QString &remotePath, const QUrl &root
     return {};
 }
 
+bool UDriveFileBrowser::rowActionEnabled(const QModelIndex &index, int action) const
+{
+    if (!index.isValid() || !canBrowse() || _listing || _report || _operation) return false;
+    if (action == RowMore) return true;
+    if (index.data(TrashedRole).toBool()) return false;
+    if (action == RowFavorite) return index.data(FavoriteKnownRole).toBool();
+    if (action == RowShare) {
+        const QString permissions = index.data(PermissionsRole).toString();
+        return !_download && (permissions.isEmpty() || permissions.contains(QLatin1Char('R')));
+    }
+    const QUrl link = index.data(LinkRole).toUrl();
+    return action == RowLink && (link.scheme() == QStringLiteral("https") || link.scheme() == QStringLiteral("http"));
+}
+
 void UDriveFileBrowser::updateActions()
 {
     const auto index = selectedItem();
     const bool valid = index.isValid() && canBrowse() && !_listing && !_report && !_operation;
     const bool trash = _section == Section::Trash;
+    const bool overview = sharedByMeOverview();
     const bool directory = index.data(DirectoryRole).toBool();
     const bool local = valid && !trash && !directory && !localPath(index.data(PathRole).toString(), selectedRoot()).isEmpty();
     bool pdf = false;
@@ -2217,35 +2317,37 @@ void UDriveFileBrowser::updateActions()
             : local || directory ? QString()
                                  : tr("Download this file to open it on your computer."));
     _downloadButton->setEnabled(valid && !trash && !directory && !_download);
-    const bool navigate = canBrowse() && !_root.isEmpty() && _section != Section::Favorites && !trash && !_operation;
+    const bool navigate = canBrowse() && !_root.isEmpty() && _section != Section::Favorites && !overview && !trash && !_operation;
     _breadcrumbs->setEnabled(navigate);
     _rootButton->setEnabled(navigate && !_path.isEmpty());
-    _refreshButton->setEnabled(canBrowse() && !_root.isEmpty());
+    _refreshButton->setEnabled(canBrowse() && (!_root.isEmpty() || overview));
+    _shareScope->setEnabled(canBrowse() && !_operation);
     if (_search)
-        _search->setEnabled(canBrowse() && !_root.isEmpty());
+        _search->setEnabled(canBrowse() && (!_root.isEmpty() || overview));
     _spaces->setEnabled(canBrowse() && _spaces->count());
     const bool writableFolder =
-        canBrowse() && !_root.isEmpty() && !_listing && !_report && !_operation && !_download && !trash && _section != Section::Favorites;
+        canBrowse() && !_root.isEmpty() && !_listing && !_report && !_operation && !_download && !trash && _section != Section::Favorites && !overview;
     _newFolderAction->setEnabled(writableFolder && (!_folderPermissionsKnown || _folderPermissions.contains(QLatin1Char('K'))));
     _uploadAction->setEnabled(writableFolder && (!_folderPermissionsKnown || _folderPermissions.contains(QLatin1Char('C'))));
     _newButton->setEnabled(_newFolderAction->isEnabled() || _uploadAction->isEnabled());
     const QString permissions = index.data(PermissionsRole).toString();
-    _renameAction->setEnabled(valid && !trash && !_download && (permissions.isEmpty() || permissions.contains(QLatin1Char('N'))));
+    _renameAction->setEnabled(valid && !trash && !overview && !_download && (permissions.isEmpty() || permissions.contains(QLatin1Char('N'))));
     _copyAction->setEnabled(
-        valid && !trash && !_download && (!_folderPermissionsKnown || _folderPermissions.contains(directory ? QLatin1Char('K') : QLatin1Char('C'))));
-    _moveAction->setEnabled(valid && !trash && !_download && (permissions.isEmpty() || permissions.contains(QLatin1Char('V'))));
-    _deleteAction->setEnabled(valid && !trash && !_download && (permissions.isEmpty() || permissions.contains(QLatin1Char('D'))));
+        valid && !trash && !overview && !_download && (!_folderPermissionsKnown || _folderPermissions.contains(directory ? QLatin1Char('K') : QLatin1Char('C'))));
+    _moveAction->setEnabled(valid && !trash && !overview && !_download && (permissions.isEmpty() || permissions.contains(QLatin1Char('V'))));
+    _deleteAction->setEnabled(valid && !trash && !overview && !_download && (permissions.isEmpty() || permissions.contains(QLatin1Char('D'))));
     _restoreAction->setVisible(trash);
     _restoreAction->setEnabled(valid && trash && !index.data(RestorePathRole).toString().isEmpty());
     _permanentDeleteAction->setVisible(trash);
     _permanentDeleteAction->setEnabled(valid && trash);
     _favoriteAction->setVisible(!trash);
-    _favoriteAction->setEnabled(valid && !trash && index.data(FavoriteKnownRole).toBool());
+    _favoriteAction->setEnabled(rowActionEnabled(index, RowFavorite));
     _favoriteAction->setText(index.data(FavoriteRole).toBool() ? tr("Remove from Favorites") : tr("Add to Favorites"));
+    _favoriteAction->setIcon(UDriveIcons::icon(index.data(FavoriteRole).toBool() ? UDriveIcons::Symbol::StarFilled : UDriveIcons::Symbol::Star));
     const QUrl link = index.data(LinkRole).toUrl();
-    _linkAction->setEnabled(valid && !trash && (link.scheme() == QStringLiteral("https") || link.scheme() == QStringLiteral("http")));
+    _linkAction->setEnabled(rowActionEnabled(index, RowLink));
     _linkAction->setVisible(!trash);
-    _shareAction->setEnabled(valid && !trash && !_download && (permissions.isEmpty() || permissions.contains(QLatin1Char('R'))));
+    _shareAction->setEnabled(rowActionEnabled(index, RowShare));
     _shareAction->setVisible(!trash);
     const bool hasWeb = (link.scheme() == QStringLiteral("https") || link.scheme() == QStringLiteral("http")) ||
                         (_webUrl.scheme() == QStringLiteral("https") || _webUrl.scheme() == QStringLiteral("http"));
@@ -2262,6 +2364,7 @@ void UDriveFileBrowser::updateActions()
     _shareButton->setEnabled(_shareAction->isEnabled());
     _restoreButton->setVisible(index.isValid() && trash);
     _restoreButton->setEnabled(valid && trash && !index.data(RestorePathRole).toString().isEmpty());
+    _tree->viewport()->update();
     updateSelectionState();
     Q_EMIT creationAvailabilityChanged();
 }
@@ -2274,7 +2377,7 @@ void UDriveFileBrowser::activateSelection()
     if (index.data(DirectoryRole).toBool()) {
         cancelDownload();
         closePdf();
-        if (_section == Section::Favorites) {
+        if (_section == Section::Favorites || sharedByMeOverview()) {
             const QString spaceId = index.data(SpaceRole).toString();
             for (auto *space : _state->account()->spacesManager()->spaces()) {
                 if (space->id() != spaceId) continue;
@@ -2385,6 +2488,86 @@ QUrl UDriveFileBrowser::trashRoot() const
 {
     if (!_state || !_state->account() || !validName(_driveId)) return {};
     return Utility::concatUrlPath(_state->account()->url(), QStringLiteral("dav/spaces/trash-bin/") + _driveId);
+}
+
+void UDriveFileBrowser::refreshSharedByMe()
+{
+    setMessage(tr("Loading files shared by you…"));
+    auto *job = new JsonJob(_state->account(), _state->account()->url(),
+        QStringLiteral("graph/v1beta1/me/drive/sharedByMe"), "GET", SimpleNetworkJob::UrlQuery{}, QNetworkRequest{}, this);
+    _report = job;
+    job->setTimeout(std::chrono::seconds(30));
+    job->addNewReplyHook([job](QNetworkReply *reply) {
+        QObject::connect(reply, &QIODevice::readyRead, job, [job, reply] {
+            if (reply->bytesAvailable() > 4 * 1024 * 1024) job->abort();
+        });
+    });
+    connect(job, &JsonJob::finishedSignal, this, [this, job] {
+        if (_report != job || !sharedByMeOverview() || !canBrowse()) return;
+        _report.clear();
+        const auto value = job->data().value(QStringLiteral("value"));
+        if (!job->reply() || job->reply()->error() != QNetworkReply::NoError || job->httpStatusCode() != 200 || !value.isArray()) {
+            setMessage(tr("Could not load files shared by you. %1").arg(job->errorString()));
+            updateActions();
+            return;
+        }
+        QSet<QString> seen;
+        int unavailable = 0;
+        const auto entries = value.toArray();
+        for (const auto &entry : entries) {
+            if (_model->rowCount() >= 1000) { ++unavailable; break; }
+            const auto item = entry.toObject();
+            const auto parent = item.value(QStringLiteral("parentReference")).toObject();
+            const QString driveId = parent.value(QStringLiteral("driveId")).toString();
+            const QString id = item.value(QStringLiteral("id")).toString();
+            const QString name = item.value(QStringLiteral("name")).toString();
+            const auto parentPath = parent.value(QStringLiteral("path"));
+            QString path = parentPath.toString();
+            if (path.startsWith(QLatin1Char('/'))) path.remove(0, 1);
+            while (path.startsWith(QStringLiteral("./"))) path.remove(0, 2);
+            if (path == QStringLiteral(".")) path.clear();
+            if (!path.isEmpty()) path += QLatin1Char('/');
+            path += name;
+            if (!parentPath.isString() || !validName(name) || !validPath(path) || !validName(id)
+                || driveId.isEmpty() || !id.startsWith(driveId + QLatin1Char('!')) || id.endsWith(QLatin1Char('!'))) {
+                ++unavailable;
+                continue;
+            }
+            if (seen.contains(id)) continue;
+            bool mapped = false;
+            for (const auto *space : _state->account()->spacesManager()->spaces()) {
+                if (space->disabled() || space->driveId() != driveId || id == space->id()) continue;
+                QUrl root = space->webDavUrl();
+                root.setPath(withoutTrailingSlash(root.path()));
+                if (!LocalDevelopment::allowsAuthenticatedUrl(root, _state->account()->url())
+                    || !root.query().isEmpty() || !root.fragment().isEmpty()) continue;
+                QMap<QString, QString> properties;
+                properties.insert(QStringLiteral("resourcetype"), item.contains(QStringLiteral("folder")) ? QStringLiteral("collection") : QString());
+                properties.insert(QStringLiteral("getetag"), item.value(QStringLiteral("eTag")).toString());
+                // This overview does not infer the owner's write permissions from
+                // the recipients' grants. Folder navigation reloads DAV permissions.
+                properties.insert(QStringLiteral("permissions"), QStringLiteral("R"));
+                if (item.value(QStringLiteral("size")).isDouble() && item.value(QStringLiteral("size")).toDouble() >= 0)
+                    properties.insert(QStringLiteral("getcontentlength"), QString::number(item.value(QStringLiteral("size")).toVariant().toLongLong()));
+                const auto modified = QDateTime::fromString(item.value(QStringLiteral("lastModifiedDateTime")).toString(), Qt::ISODate);
+                if (modified.isValid()) properties.insert(QStringLiteral("getlastmodified"), modified.toUTC().toString(QStringLiteral("ddd, dd MMM yyyy HH:mm:ss 'GMT'")));
+                const QUrl link(item.value(QStringLiteral("webUrl")).toString());
+                if (!link.isEmpty() && LocalDevelopment::allowsAuthenticatedUrl(link, _state->account()->url()))
+                    properties.insert(QStringLiteral("privatelink"), link.toString());
+                appendEntry(root.path() + QLatin1Char('/') + path, properties, root, space->id(), true);
+                seen.insert(id);
+                mapped = true;
+                break;
+            }
+            if (!mapped) ++unavailable;
+        }
+        setMessage(unavailable ? tr("%1 shared items shown; some items are no longer available.").arg(_model->rowCount())
+            : _model->rowCount() ? tr("%n item(s)", nullptr, _model->rowCount()) : tr("No files shared by you yet."));
+        updateActions();
+        scheduleThumbnails();
+    });
+    job->start();
+    updateActions();
 }
 
 void UDriveFileBrowser::refreshFavorites()

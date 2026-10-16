@@ -563,8 +563,8 @@
         <message><source>Select all files in the current results.</source><translation>ជ្រើសរើសឯកសារទាំងអស់នៅក្នុងលទ្ធផលបច្ចុប្បន្ន។</translation></message>
         <message><source>%1 selected. Select one item to use file actions.</source><translation>បានជ្រើសរើស %1 ធាតុ។ ជ្រើសរើសធាតុមួយដើម្បីប្រើសកម្មភាពឯកសារ។</translation></message>
         <message>
-            <source>Delete permanently…</source>
-            <translation>លុបជាអចិន្ត្រៃយ៍…</translation>
+            <source>Delete permanently</source>
+            <translation>លុបជាអចិន្ត្រៃយ៍</translation>
         </message>
         <message>
             <source>Item permanently deleted.</source>
@@ -1016,6 +1016,50 @@
         <message>
             <source>Downloading %1…</source>
             <translation>កំពុងទាញយក %1…</translation>
+        </message>
+        <message>
+            <source>Share</source>
+            <translation>ចែករំលែក</translation>
+        </message>
+        <message>
+            <source>Share…</source>
+            <translation>ចែករំលែក…</translation>
+        </message>
+        <message>
+            <source>Share this item with other users</source>
+            <translation>ចែករំលែកធាតុនេះជាមួយអ្នកប្រើផ្សេងទៀត</translation>
+        </message>
+        <message>
+            <source>Shared by me</source>
+            <translation>បានចែករំលែកដោយខ្ញុំ</translation>
+        </message>
+        <message>
+            <source>Shared with me</source>
+            <translation>បានចែករំលែកជាមួយខ្ញុំ</translation>
+        </message>
+        <message>
+            <source>Share direction</source>
+            <translation>ប្រភេទការចែករំលែក</translation>
+        </message>
+        <message>
+            <source>Search files shared by me</source>
+            <translation>ស្វែងរកឯកសារដែលខ្ញុំបានចែករំលែក</translation>
+        </message>
+        <message>
+            <source>Loading files shared by you…</source>
+            <translation>កំពុងផ្ទុកឯកសារដែលអ្នកបានចែករំលែក…</translation>
+        </message>
+        <message>
+            <source>Could not load files shared by you. %1</source>
+            <translation>មិនអាចផ្ទុកឯកសារដែលអ្នកបានចែករំលែកបានទេ។ %1</translation>
+        </message>
+        <message>
+            <source>%1 shared items shown; some items are no longer available.</source>
+            <translation>បានបង្ហាញធាតុដែលបានចែករំលែក %1។ ធាតុខ្លះលែងមានទៀតហើយ។</translation>
+        </message>
+        <message>
+            <source>No files shared by you yet.</source>
+            <translation>អ្នកមិនទាន់បានចែករំលែកឯកសារណាមួយនៅឡើយទេ។</translation>
         </message>
     </context>
     <context>

@@ -96,6 +96,8 @@ private:
     void closePdf();
     void setSection(Section section);
     void refreshFavorites();
+    void refreshSharedByMe();
+    bool sharedByMeOverview() const { return _section == Section::Shares && _sharedByMe; }
     QUrl trashRoot() const;
     QUrl selectedRoot() const;
     QModelIndex selectedItem() const;
@@ -116,6 +118,7 @@ private:
     void activateSelection();
     void downloadSelection();
     void updateActions();
+    bool rowActionEnabled(const QModelIndex &index, int action) const;
     void cancelListing();
     void scheduleThumbnails();
     void loadVisibleThumbnails();
@@ -128,6 +131,8 @@ private:
     bool _workspaceLayout = false;
     QPointer<AccountState> _state;
     Section _section = Section::Personal;
+    bool _sharedByMe = true;
+    QPushButton *_shareScope;
     QUrl _root;
     QUrl _webUrl;
     QString _spaceId;

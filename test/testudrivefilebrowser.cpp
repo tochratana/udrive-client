@@ -108,6 +108,9 @@ public:
     QList<QPair<QByteArray, QString>> requests;
     bool authenticated = true;
     QJsonObject personalQuota;
+    QJsonArray outgoingShares;
+    int outgoingDelay = 0;
+    int outgoingStatus = 200;
     QJsonObject recipientData;
     QList<QUrlQuery> recipientQueries;
     int recipientDelay = 0;
@@ -208,6 +211,14 @@ public:
                     } else if (parts.at(0) == "GET" && path == QStringLiteral("/ocs/v1.php/apps/files_sharing/api/v1/shares")) {
                         shareQueries.append(QUrlQuery(QUrl::fromEncoded(parts.at(1))));
                         respond(socket, 200, "application/json", R"({"ocs":{"meta":{"status":"ok","statuscode":100},"data":[]}})");
+                    } else if (parts.at(0) == "GET" && path == QStringLiteral("/graph/v1beta1/me/drive/sharedByMe")) {
+                        const auto body = QJsonDocument(QJsonObject{{"value", outgoingShares}}).toJson();
+                        const int status = outgoingStatus;
+                        const QPointer<QTcpSocket> guard(socket);
+                        QTimer::singleShot(outgoingDelay, this, [this, guard, body, status] {
+                            if (guard && guard->state() == QAbstractSocket::ConnectedState)
+                                respond(guard, status, "application/json", body);
+                        });
                     } else if (path == QStringLiteral("/graph/v1.0/me/drives")) {
                         QJsonArray drives;
                         QStringList ids {QStringLiteral("personal"), QStringLiteral("team")};
@@ -1434,8 +1445,23 @@ private Q_SLOTS:
         QVERIFY(notice.isNull());
     }
 
+    void rowActionsTargetTheClickedFile_data()
+    {
+        QTest::addColumn<QString>("viewAction");
+        QTest::newRow("table") << QStringLiteral("driveViewDefault");
+        QTest::newRow("condensed") << QStringLiteral("driveViewCondensed");
+    }
+
     void rowActionsTargetTheClickedFile()
     {
+        QFETCH(QString, viewAction);
+        auto settings = ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"));
+        const QVariant previousView = settings->value(QStringLiteral("viewMode"));
+        const auto restoreSettings = qScopeGuard([previousView] {
+            auto settings = ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"));
+            if (previousView.isValid()) settings->setValue(QStringLiteral("viewMode"), previousView);
+            else settings->remove(QStringLiteral("viewMode"));
+        });
         DriveServer server;
         server.favorites.insert("/dav/personal/a&b.txt");
         auto *account = new Account(QUuid::createUuid(), "test", server.url());
@@ -1447,6 +1473,7 @@ private Q_SLOTS:
         browser.show();
         auto *tree = browser.findChild<QTreeView *>("driveFiles");
         QTRY_COMPARE(tree->model()->rowCount(), 7);
+        browser.findChild<QAction *>(viewAction)->trigger();
         QCOMPARE(tree->model()->columnCount(), 5);
         select(tree, "denied.txt");
         QModelIndex target;
@@ -1455,6 +1482,8 @@ private Q_SLOTS:
                 target = tree->model()->index(row, 4);
         QVERIFY(target.isValid());
         QRect row = tree->visualRect(target);
+        if (qEnvironmentVariableIsSet("UDRIVE_ROW_TEST_CAPTURE"))
+            browser.grab().save(QStringLiteral("/tmp/udrive-row-actions-%1.png").arg(viewAction));
         qApp->clipboard()->setText("before");
         QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(row.right() - 61, row.center().y()));
         QCOMPARE(qApp->clipboard()->text(), server.url("/f/dav/personal/a&b.txt").toString());
@@ -1467,11 +1496,36 @@ private Q_SLOTS:
         QVERIFY(webAction->isEnabled());
         QVERIFY(!browser.findChild<QPushButton *>("driveOnline"));
         actions->hide();
-        QSignalSpy completed(&browser, &UDriveFileBrowser::operationFinished);
+        select(tree, "denied.txt");
+        // Direct Share must target the clicked row, without sending an invitation.
+        bool opened = false;
+        QTimer::singleShot(0, &browser, [&] {
+            auto *dialog = browser.findChild<UDriveShareDialog *>();
+            if (!dialog) return;
+            opened = dialog->windowTitle().contains(QStringLiteral("a&b.txt"));
+            dialog->reject();
+        });
         QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(row.right() - 95, row.center().y()));
+        QVERIFY(opened);
+        QCOMPARE(server.sharePosts, 0);
+        QCOMPARE(tree->selectionModel()->selectedRows().size(), 1);
+        QCOMPARE(tree->currentIndex().siblingAtColumn(0).data().toString(), QStringLiteral("a&b.txt"));
+        QSignalSpy completed(&browser, &UDriveFileBrowser::operationFinished);
+        QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(row.right() - 129, row.center().y()));
         QTRY_COMPARE(completed.count(), 1);
         QVERIFY(completed.first().first().toBool());
         QVERIFY(!server.favorites.contains("/dav/personal/a&b.txt"));
+        server.readOnly = true;
+        browser.findChild<QPushButton *>("driveRefresh")->click();
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        select(tree, "a&b.txt");
+        auto *share = browser.findChild<QAction *>("driveShareAction");
+        QVERIFY(!share->isEnabled());
+        QSignalSpy sharing(share, &QAction::triggered);
+        row = tree->visualRect(tree->currentIndex().siblingAtColumn(4));
+        QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(row.right() - 95, row.center().y()));
+        QCOMPARE(sharing.count(), 0);
+        QCOMPARE(server.sharePosts, 0);
         QVERIFY(server.authenticated);
     }
 
@@ -2443,6 +2497,7 @@ private Q_SLOTS:
         QVERIFY(!server.uploaded.contains("/dav/personal/pending upload.txt"));
         server.holdUpload = false;
         browser.showShares();
+        browser.findChild<QAction *>(QStringLiteral("driveSharedWithMe"))->trigger();
         QTRY_COMPARE(tree->model()->rowCount(), 1);
         QCOMPARE(tree->model()->index(0, 0).data().toString(), QStringLiteral("Shared document.pdf"));
         QVERIFY(server.authenticated);
@@ -2642,7 +2697,7 @@ private Q_SLOTS:
         QAction *action = browser.findChild<QAction *>("drivePermanentDelete");
         if (!permanent)
             for (auto *candidate : browser.findChild<QMenu *>("driveActionsMenu")->actions())
-                if (candidate->text() == QStringLiteral("Move to Deleted files…")) action = candidate;
+                if (candidate->text() == QStringLiteral("Move to Deleted files")) action = candidate;
         QVERIFY(action && action->isEnabled());
         action->trigger(); // Returns immediately; no nested event loop.
         QPointer<DeleteConfirmDialog> dialog = browser.findChild<DeleteConfirmDialog *>();
@@ -2718,7 +2773,7 @@ private Q_SLOTS:
         QAction *action = browser->findChild<QAction *>("drivePermanentDelete");
         if (!permanent)
             for (auto *candidate : browser->findChild<QMenu *>("driveActionsMenu")->actions())
-                if (candidate->text() == QStringLiteral("Move to Deleted files…")) action = candidate;
+                if (candidate->text() == QStringLiteral("Move to Deleted files")) action = candidate;
         QVERIFY(action && action->isEnabled()); action->trigger();
         QPointer<DeleteConfirmDialog> dialog = browser->findChild<DeleteConfirmDialog *>();
         QVERIFY(dialog && dialog->isVisible());
@@ -2854,6 +2909,140 @@ private Q_SLOTS:
 
         // Cleanup
         settings.remove(QStringLiteral("UDrive/sidebarVisible"));
+    }
+
+    void outgoingAndIncomingShares()
+    {
+        DriveServer server(true);
+        const auto sharedItem = [](const QString &drive, const QString &name, const QString &id, bool folder = false) {
+            QJsonObject item{{"id", QStringLiteral("%1!%2").arg(drive, id)}, {"name", name}, {"size", 1234},
+                {"eTag", "shared-tag"}, {"lastModifiedDateTime", "2026-10-16T08:00:00Z"},
+                {"parentReference", QJsonObject{{"driveId", drive}, {"path", "."}}}};
+            item.insert(folder ? QStringLiteral("folder") : QStringLiteral("file"), QJsonObject{});
+            return item;
+        };
+        const auto personalFile = sharedItem(QStringLiteral("personal"), QStringLiteral("a&b.txt"), QStringLiteral("file-a"));
+        const auto teamFile = sharedItem(QStringLiteral("team"), QStringLiteral("Roadmap.pdf"), QStringLiteral("file-b"));
+        server.outgoingShares = {personalFile, personalFile, teamFile}; // One row per file, not per recipient.
+        auto *account = new Account(QUuid::createUuid(), QStringLiteral("test"), server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        browser.resize(1150, 800);
+        browser.show();
+        auto *tree = browser.findChild<QTreeView *>(QStringLiteral("driveFiles"));
+        auto *scope = browser.findChild<QPushButton *>(QStringLiteral("driveShareScope"));
+        auto *outgoing = browser.findChild<QAction *>(QStringLiteral("driveSharedByMe"));
+        auto *incoming = browser.findChild<QAction *>(QStringLiteral("driveSharedWithMe"));
+        auto *refresh = browser.findChild<QPushButton *>(QStringLiteral("driveRefresh"));
+        auto *search = browser.findChild<QLineEdit *>(QStringLiteral("driveSearch"));
+        auto *status = browser.findChild<QLabel *>(QStringLiteral("driveStatus"));
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        QVERIFY(!scope->isVisible());
+        browser.showShares();
+        QTRY_COMPARE(tree->model()->rowCount(), 2);
+        QVERIFY(scope->isVisible());
+        QVERIFY(outgoing->isChecked());
+        QCOMPARE(scope->text(), QStringLiteral("Shared by me"));
+        // Two account-scoped browsers must not reuse each other's outgoing list.
+        DriveServer otherServer;
+        otherServer.outgoingShares = {sharedItem(QStringLiteral("personal"), QStringLiteral("other-account.txt"), QStringLiteral("other"))};
+        auto *otherAccount = new Account(QUuid::createUuid(), QStringLiteral("test"), otherServer.url());
+        otherAccount->setCredentials(new Credentials("browser-test-token", "test-refresh-token", otherAccount));
+        otherAccount->credentials()->fetchFromKeychain();
+        AccountState otherState(otherAccount);
+        UDriveFileBrowser otherBrowser(&otherState);
+        auto *otherTree = otherBrowser.findChild<QTreeView *>(QStringLiteral("driveFiles"));
+        QTRY_COMPARE(otherTree->model()->rowCount(), 7);
+        otherBrowser.showShares();
+        QTRY_COMPARE(otherTree->model()->rowCount(), 1);
+        QCOMPARE(otherTree->model()->index(0, 0).data().toString(), QStringLiteral("other-account.txt"));
+        QCOMPARE(tree->model()->rowCount(), 2);
+        QVERIFY(!select(tree, QStringLiteral("other-account.txt")).isValid());
+        QVERIFY(otherServer.authenticated);
+        QVERIFY(select(tree, QStringLiteral("a&b.txt")).isValid());
+        QVERIFY(!browser.canCreate());
+        QVERIFY(!browser.renameSelected(QStringLiteral("changed.txt")));
+        QVERIFY(!browser.copySelected(QStringLiteral("copy.txt")));
+        QVERIFY(!browser.deleteSelected());
+        QVERIFY(search->isEnabled());
+        QVERIFY(refresh->isEnabled());
+        QTemporaryDir destination;
+        QSignalSpy downloaded(&browser, &UDriveFileBrowser::downloadFinished);
+        QVERIFY(browser.saveSelectedFile(destination.filePath(QStringLiteral("shared.txt"))));
+        QTRY_COMPARE(downloaded.size(), 1);
+        QVERIFY(downloaded.first().at(0).toBool());
+        QCOMPARE(contents(destination.filePath(QStringLiteral("shared.txt"))), server.fileContent);
+        QVERIFY(server.requests.contains({"GET", "/dav/personal/a&b.txt"}));
+        search->setText(QStringLiteral("Roadmap"));
+        QCOMPARE(tree->model()->rowCount(), 1);
+        search->clear();
+        incoming->trigger();
+        QTRY_COMPARE(tree->model()->rowCount(), 1);
+        QCOMPARE(tree->model()->index(0, 0).data().toString(), QStringLiteral("Shared document.pdf"));
+        QCOMPARE(scope->text(), QStringLiteral("Shared with me"));
+        outgoing->trigger();
+        QTRY_COMPARE(tree->model()->rowCount(), 2);
+
+        // A late outgoing response cannot replace the incoming view.
+        server.outgoingDelay = 200;
+        refresh->click();
+        incoming->trigger();
+        QTRY_COMPARE(tree->model()->rowCount(), 1);
+        QTest::qWait(250);
+        QCOMPARE(tree->model()->index(0, 0).data().toString(), QStringLiteral("Shared document.pdf"));
+        server.outgoingDelay = 0;
+        server.outgoingStatus = 500;
+        outgoing->trigger();
+        QTRY_VERIFY(status->text().startsWith(QStringLiteral("Could not load files shared by you.")));
+        QCOMPARE(tree->model()->rowCount(), 0);
+        server.outgoingStatus = 200;
+        server.outgoingShares = {};
+        refresh->click();
+        QTRY_COMPARE(status->text(), QStringLiteral("No files shared by you yet."));
+        QVERIFY(refresh->isEnabled());
+
+        // Invalid paths and unknown spaces do not become actionable file rows.
+        auto invalid = personalFile;
+        invalid.insert(QStringLiteral("parentReference"), QJsonObject{{"driveId", "personal"}, {"path", "../outside"}});
+        auto missingPath = sharedItem(QStringLiteral("personal"), QStringLiteral("do-not-guess.txt"), QStringLiteral("missing-path"));
+        missingPath.insert(QStringLiteral("parentReference"), QJsonObject{{"driveId", "personal"}});
+        server.outgoingShares = {personalFile, invalid, missingPath, sharedItem(QStringLiteral("unknown"), QStringLiteral("hidden.txt"), QStringLiteral("file-c"))};
+        refresh->click();
+        QTRY_COMPARE(tree->model()->rowCount(), 1);
+        QVERIFY(status->text().contains(QStringLiteral("some items")));
+        server.outgoingShares = {sharedItem(QStringLiteral("personal"), QStringLiteral("Docs"), QStringLiteral("docs"), true)};
+        refresh->click();
+        QTRY_VERIFY(select(tree, QStringLiteral("Docs")).isValid());
+        Q_EMIT tree->activated(tree->currentIndex());
+        QTRY_COMPARE(tree->model()->rowCount(), 1);
+        QCOMPARE(tree->model()->index(0, 0).data().toString(), QStringLiteral("Budget 2026.pdf"));
+        QVERIFY(!scope->isVisible());
+        QVERIFY(server.authenticated);
+    }
+
+    void outgoingSharesWithoutIncomingSpace()
+    {
+        DriveServer server;
+        server.outgoingShares = {QJsonObject{{"id", "personal!file"}, {"name", "a&b.txt"}, {"file", QJsonObject{}},
+            {"parentReference", QJsonObject{{"driveId", "personal"}, {"path", "/"}}}}};
+        auto *account = new Account(QUuid::createUuid(), QStringLiteral("test"), server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        auto *tree = browser.findChild<QTreeView *>(QStringLiteral("driveFiles"));
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        browser.showShares();
+        QTRY_COMPARE(tree->model()->rowCount(), 1);
+        QVERIFY(browser.findChild<QPushButton *>(QStringLiteral("driveRefresh"))->isEnabled());
+        server.outgoingDelay = 200;
+        browser.findChild<QPushButton *>(QStringLiteral("driveRefresh"))->click();
+        state.signOutByUi();
+        QTest::qWait(250);
+        QCOMPARE(tree->model()->rowCount(), 0);
+        QVERIFY(!browser.findChild<QPushButton *>(QStringLiteral("driveRefresh"))->isEnabled());
     }
 
     void shareDialogBasic_data()

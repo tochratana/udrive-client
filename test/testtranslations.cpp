@@ -59,7 +59,7 @@ private Q_SLOTS:
             QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
         }
         QVERIFY(translator.translate("OCC::UDriveFileBrowser", "Sort by: %1").contains(QStringLiteral("%1")));
-        for (const auto *source : {"Delete permanently…", "Item permanently deleted.", "Open on Web", "Open this item in your web browser",
+        for (const auto *source : {"Delete permanently", "Item permanently deleted.", "Open on Web", "Open this item in your web browser",
                  "The selected item changed. Review it and confirm again."}) {
             const auto translated = translator.translate("OCC::UDriveFileBrowser", source);
             QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
@@ -84,6 +84,13 @@ private Q_SLOTS:
                  "Could not search users and groups. Try again.", "User · %1", "Group · %1",
                  "No matching users or groups. Try another name or email.", "Select a user or group, then click Share.", "Selected: %1"}) {
             const auto translated = translator.translate("OCC::UDriveShareDialog", source);
+            QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
+            if (QString::fromUtf8(source).contains(QStringLiteral("%1"))) QVERIFY(translated.contains(QStringLiteral("%1")));
+        }
+        for (const auto *source : {"Share", "Rename", "Make a copy", "Move to folder", "Move to Deleted files", "Share this item with other users", "Shared by me", "Shared with me", "Share direction", "Search files shared by me",
+                 "Loading files shared by you…", "No files shared by you yet.", "Could not load files shared by you. %1",
+                 "%1 shared items shown; some items are no longer available."}) {
+            const auto translated = translator.translate("OCC::UDriveFileBrowser", source);
             QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
             if (QString::fromUtf8(source).contains(QStringLiteral("%1"))) QVERIFY(translated.contains(QStringLiteral("%1")));
         }
