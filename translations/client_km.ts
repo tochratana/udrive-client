@@ -486,7 +486,7 @@
         </message>
         <message>
             <source>Quit %1</source>
-            <translation>ចាកចេញពី %1</translation>
+            <translation>Quit %1</translation>
         </message>
         <message>
             <source>Are you sure you want to quit %1?</source>
@@ -1167,7 +1167,7 @@
         </message>
         <message>
             <source>Quit UDrive</source>
-            <translation>ចាកចេញពី UDrive</translation>
+            <translation>Quit UDrive</translation>
         </message>
         <message>
             <source>Storage</source>
@@ -1537,7 +1537,7 @@
         <name>OCC::ownCloudGui</name>
         <message>
             <source>Quit %1</source>
-            <translation>ចាកចេញពី %1</translation>
+            <translation>Quit %1</translation>
         </message>
     </context>
     <context>

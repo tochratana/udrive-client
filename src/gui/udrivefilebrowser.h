@@ -197,4 +197,21 @@ class DeleteConfirmDialog : public QDialog
 public:
     explicit DeleteConfirmDialog(const QString &fileName, bool isFolder, QWidget *parent = nullptr, bool permanent = false);
 };
+
+class UDriveInputDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    explicit UDriveInputDialog(const QString &title, const QString &label, const QString &initialText = {},
+                               const QString &confirmButtonText = {}, QWidget *parent = nullptr,
+                               bool allowEmpty = false);
+    QString text() const;
+    static QString getText(QWidget *parent, const QString &title, const QString &label,
+                           const QString &initialText = {}, const QString &confirmButtonText = {},
+                           bool *ok = nullptr, bool allowEmpty = false);
+
+private:
+    QLineEdit *_lineEdit = nullptr;
+    QPushButton *_confirmButton = nullptr;
+};
 }

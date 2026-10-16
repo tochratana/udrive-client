@@ -81,6 +81,10 @@ private Q_SLOTS:
         }
         const auto storage = translator.translate("OCC::SettingsDialog", "%1 of %2 used");
         QVERIFY(storage.contains(QStringLiteral("%1")) && storage.contains(QStringLiteral("%2")));
+        if (locale == QStringLiteral("km")) {
+            QCOMPARE(translator.translate("OCC::ownCloudGui", "Quit %1"), QStringLiteral("Quit %1"));
+            QCOMPARE(translator.translate("UDriveSidebar", "Quit UDrive"), QStringLiteral("Quit UDrive"));
+        }
         QVERIFY(qApp->installTranslator(&translator));
         struct Cleanup
         {

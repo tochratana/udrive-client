@@ -329,7 +329,7 @@ SettingsDialog::SettingsDialog(ownCloudGui *gui, QWidget *parent)
         _ui->verticalLayout_2->setSpacing(12);
         _ui->verticalLayout_2->setContentsMargins(10, 0, 10, 10);
         createWorkspaceHeader();
-        _ui->quickWidget->setFixedWidth(236);
+        _ui->quickWidget->setFixedWidth(_sidebarVisible ? 236 : 56);
         const auto *screen = QApplication::screenAt(QCursor::pos());
         const QSize initialSize(1280, 820);
         resize(screen ? initialSize.boundedTo(screen->availableSize() * 0.9) : initialSize);
@@ -339,6 +339,10 @@ SettingsDialog::SettingsDialog(ownCloudGui *gui, QWidget *parent)
 
     // People perceive this as a Window, so also make Ctrl+W work
     addAction(tr("Hide"), Qt::CTRL | Qt::Key_W, this, &SettingsDialog::hide);
+    if (udrive) {
+        addAction(tr("Toggle Sidebar"), Qt::CTRL | Qt::Key_B, this, &SettingsDialog::toggleSidebar);
+        addAction(tr("Toggle Sidebar"), Qt::CTRL | Qt::Key_Backslash, this, &SettingsDialog::toggleSidebar);
+    }
 
     if (!udrive) {
         _ui->quickWidget->setFixedHeight(minimumHeight() * 0.13);
@@ -434,11 +438,14 @@ void SettingsDialog::createWorkspaceHeader()
     auto *row = new QHBoxLayout(header);
     row->setContentsMargins(18, 6, 18, 8);
     row->setSpacing(12);
-    auto *brand = new QWidget(header);
-    brand->setFixedWidth(224);
-    auto *brandRow = new QHBoxLayout(brand);
+    _brandWidget = new QWidget(header);
+    _brandWidget->setObjectName(QStringLiteral("driveBrand"));
+    _brandWidget->setFixedWidth(224);
+    auto *brandRow = new QHBoxLayout(_brandWidget);
     brandRow->setContentsMargins(0, 0, 0, 0);
-    auto *home = new QPushButton(brand);
+    brandRow->setSpacing(8);
+
+    auto *home = new QPushButton(_brandWidget);
     home->setObjectName(QStringLiteral("driveHome"));
     home->setFixedHeight(40);
     home->setCursor(Qt::PointingHandCursor);
@@ -466,7 +473,7 @@ void SettingsDialog::createWorkspaceHeader()
         if (auto *files = qobject_cast<UDriveFileBrowser *>(_ui->stack->currentWidget()))
             files->showHome();
     });
-    row->addWidget(brand);
+    row->addWidget(_brandWidget);
     _searchStack = new QStackedWidget(header);
     _searchStack->setObjectName(QStringLiteral("driveHeaderSearch"));
     _searchStack->setMaximumWidth(720);
@@ -513,6 +520,11 @@ void SettingsDialog::createWorkspaceHeader()
     _ui->verticalLayout_2->addLayout(body, 1);
     connect(this, &SettingsDialog::currentPageChanged, this, &SettingsDialog::updateWorkspaceHeader);
     connect(this, &SettingsDialog::currentAccountChanged, this, &SettingsDialog::updateWorkspaceHeader);
+
+    auto settings = ConfigFile::makeQSettings();
+    if (!settings.value(QStringLiteral("UDrive/sidebarVisible"), true).toBool()) {
+        setSidebarVisible(false);
+    }
 }
 
 void SettingsDialog::showAccountPopup()
@@ -1083,6 +1095,33 @@ void SettingsDialog::runFolderWizard(Account *account)
     accountView(_currentAccount)->slotAddFolder();
 }
 
+void SettingsDialog::toggleSidebar()
+{
+    setSidebarVisible(!isSidebarVisible());
+}
+
+bool SettingsDialog::isSidebarVisible() const
+{
+    return _sidebarVisible;
+}
+
+void SettingsDialog::setSidebarVisible(bool visible)
+{
+    if (_sidebarVisible == visible) {
+        return;
+    }
+    _sidebarVisible = visible;
+    if (_ui->quickWidget) {
+        _ui->quickWidget->setFixedWidth(visible ? 236 : 56);
+        _ui->quickWidget->setVisible(true);
+    }
+    if (_brandWidget) {
+        _brandWidget->setFixedWidth(visible ? 224 : 140);
+    }
+    auto settings = ConfigFile::makeQSettings();
+    settings.setValue(QStringLiteral("UDrive/sidebarVisible"), visible);
+    Q_EMIT sidebarVisibilityChanged(visible);
+}
 
 } // namespace OCC
 

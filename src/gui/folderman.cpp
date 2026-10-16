@@ -317,7 +317,7 @@ void FolderMan::loadSpacesAndCreateFolders(AccountState *accountState, bool useV
 
             folderDef.setPriority(space->sortPriority());
 
-            QString localPath = findGoodPathForNewSyncFolder(localDir, folderDef.displayName(), NewFolderType::SpacesFolder, space->accountId());
+            QString localPath = findGoodPathForNewSyncFolder(localDir, space->defaultFolderName(), NewFolderType::SpacesFolder, space->accountId());
             folderDef.setLocalPath(localPath);
             folderDef.setTargetPath({});
 
@@ -424,7 +424,7 @@ void FolderMan::onSpacesAdded(const QUuid &accountId, QList<GraphApi::Space *> s
             qCInfo(lcFolderMan) << "Adding sync connection for newly discovered space" << newSpace->displayName();
 
             const QString localDir(accountState->account()->defaultSyncRoot());
-            const QString folderName = findGoodPathForNewSyncFolder(localDir, newSpace->displayName(), NewFolderType::SpacesFolder, accountId);
+            const QString folderName = findGoodPathForNewSyncFolder(localDir, newSpace->defaultFolderName(), NewFolderType::SpacesFolder, accountId);
 
             // I'm recycling the routine used in the folder wizard to add a new space from gui for now. No I don't
             // like it but I am out of steam trying to collate all these barely different methods of creating a folder
@@ -1215,7 +1215,7 @@ void FolderMan::addFolderFromGui(AccountState *accountState, const SyncConnectio
 
 QString FolderMan::suggestSyncFolder(NewFolderType folderType, const QUuid &accountUuid)
 {
-    return FolderMan::instance()->findGoodPathForNewSyncFolder(QDir::homePath(), Theme::instance()->appName(), folderType, accountUuid);
+    return FolderMan::instance()->findGoodPathForNewSyncFolder(QDir::homePath(), Theme::instance()->appNameGUI(), folderType, accountUuid);
 }
 
 bool FolderMan::prepareFolder(const QString &folder)

@@ -41,9 +41,13 @@
 #include <QAction>
 #include <QDir>
 #include <QFileInfo>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QSortFilterProxyModel>
 #include <QStandardItemModel>
+#include <QVBoxLayout>
 #include <QtQuickWidgets/QtQuickWidgets>
 
 namespace {
@@ -431,35 +435,82 @@ void AccountView::addModalAccountWidget(AccountModalWidget *widget)
 }
 
 
+ConfirmRemoveAccountDialog::ConfirmRemoveAccountDialog(const QString &accountDisplayName, QWidget *parent)
+    : QDialog(parent)
+{
+    setObjectName(QStringLiteral("confirmRemoveAccountDialog"));
+    setWindowTitle(tr("Confirm Account Removal"));
+    setModal(true);
+    setWindowFlags((windowFlags() | Qt::Dialog) & ~Qt::WindowContextHelpButtonHint);
+    setMinimumWidth(440);
+
+    const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+    const QString bg = dark ? QStringLiteral("#242528") : QStringLiteral("#FFFFFF");
+    const QString text = dark ? QStringLiteral("#EDEDED") : QStringLiteral("#1F2328");
+    const QString border = dark ? QStringLiteral("#3E4146") : QStringLiteral("#D0D7DE");
+    const QString cancelBg = dark ? QStringLiteral("#2E3135") : QStringLiteral("#F3F4F6");
+    const QString cancelHover = dark ? QStringLiteral("#383B40") : QStringLiteral("#E5E7EB");
+    const QString cancelPressed = dark ? QStringLiteral("#25282B") : QStringLiteral("#D1D5DB");
+
+    setStyleSheet(QStringLiteral(
+        "QDialog#confirmRemoveAccountDialog { background-color: %1; }"
+        "QLabel#confirmRemoveAccountMessage { color: %3; font-size: 13px; line-height: 1.4; }"
+        "QPushButton#cancelRemoveAccountButton { background-color: %4; color: %3; border: 1px solid %2; border-radius: 8px; padding: 7px 16px; font-size: 13px; font-weight: 500; min-width: 80px; min-height: 20px; }"
+        "QPushButton#cancelRemoveAccountButton:hover { background-color: %5; }"
+        "QPushButton#cancelRemoveAccountButton:pressed { background-color: %6; }"
+        "QPushButton#cancelRemoveAccountButton:focus { border: 1px solid #22C55E; }"
+        "QPushButton#removeAccountButton { background-color: #E03838; color: #FFFFFF; border: none; border-radius: 8px; padding: 7px 18px; font-size: 13px; font-weight: 600; min-width: 110px; min-height: 20px; }"
+        "QPushButton#removeAccountButton:hover { background-color: #EF4444; }"
+        "QPushButton#removeAccountButton:pressed { background-color: #B91C1C; }"
+        "QPushButton#removeAccountButton:focus { border: 2px solid #FCA5A5; }"
+    ).arg(bg, border, text, cancelBg, cancelHover, cancelPressed));
+
+    auto *mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(22, 20, 22, 16);
+    mainLayout->setSpacing(18);
+
+    auto *messageLabel = new QLabel(this);
+    messageLabel->setObjectName(QStringLiteral("confirmRemoveAccountMessage"));
+    messageLabel->setTextFormat(Qt::RichText);
+    messageLabel->setWordWrap(true);
+    messageLabel->setText(tr("<p>Do you really want to remove the connection to the account <i>%1</i>?</p>"
+                             "<p><b>Note:</b> This will <b>not</b> delete any files.</p>")
+                              .arg(accountDisplayName));
+    mainLayout->addWidget(messageLabel);
+
+    auto *buttonsLayout = new QHBoxLayout;
+    buttonsLayout->setSpacing(10);
+    buttonsLayout->addStretch(1);
+
+    auto *cancelButton = new QPushButton(tr("Cancel"), this);
+    cancelButton->setObjectName(QStringLiteral("cancelRemoveAccountButton"));
+    cancelButton->setCursor(Qt::PointingHandCursor);
+    cancelButton->setDefault(true);
+    connect(cancelButton, &QPushButton::clicked, this, &QDialog::reject);
+    buttonsLayout->addWidget(cancelButton);
+
+    auto *removeButton = new QPushButton(tr("Remove connection"), this);
+    removeButton->setObjectName(QStringLiteral("removeAccountButton"));
+    removeButton->setCursor(Qt::PointingHandCursor);
+    connect(removeButton, &QPushButton::clicked, this, &QDialog::accept);
+    buttonsLayout->addWidget(removeButton);
+
+    mainLayout->addLayout(buttonsLayout);
+}
+
 void AccountView::slotDeleteAccount()
 {
     if (!_accountState) {
         return;
     }
 
-    // Deleting the account potentially deletes 'this', so
-    // the QMessageBox should be destroyed before that happens.
-    // todo: this is an unnecessarily complicated def for the message box and should exec instead of open.
-    auto messageBox = new QMessageBox(QMessageBox::Question, tr("Confirm Account Removal"),
-        tr("<p>Do you really want to remove the connection to the account <i>%1</i>?</p>"
-           "<p><b>Note:</b> This will <b>not</b> delete any files.</p>")
-            .arg(_accountState->account()->displayNameWithHost()),
-        QMessageBox::NoButton, this);
-    messageBox->setObjectName("confirmRemoveAccountDialog");
-    auto yesButton = messageBox->addButton(tr("Remove connection"), QMessageBox::YesRole);
-    yesButton->setObjectName("removeAccountButton");
-    auto noButton = messageBox->addButton(tr("Cancel"), QMessageBox::NoRole);
-    noButton->setObjectName("cancelRemoveAccountButton");
-
-    messageBox->setAttribute(Qt::WA_DeleteOnClose);
-    connect(messageBox, &QMessageBox::finished, this, [this, messageBox, yesButton]{
-        if (messageBox->clickedButton() == yesButton) {
-            auto manager = AccountManager::instance();
-            manager->deleteAccount(_accountState);
-            manager->save();
-        }
-    });
-    messageBox->open();
+    AccountState *accountState = _accountState.data();
+    ConfirmRemoveAccountDialog dialog(accountState->account()->displayNameWithHost(), this);
+    if (dialog.exec() == QDialog::Accepted) {
+        auto manager = AccountManager::instance();
+        manager->deleteAccount(accountState);
+        manager->save();
+    }
 }
 
 } // namespace OCC

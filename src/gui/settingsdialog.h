@@ -50,6 +50,7 @@ class OWNCLOUDGUI_EXPORT SettingsDialog : public QMainWindow
     Q_PROPERTY(bool canCreateFiles READ canCreateFiles NOTIFY workspaceChanged)
     Q_PROPERTY(QString storageLabel READ storageLabel NOTIFY workspaceChanged)
     Q_PROPERTY(double storageFraction READ storageFraction NOTIFY workspaceChanged)
+    Q_PROPERTY(bool sidebarVisible READ isSidebarVisible WRITE setSidebarVisible NOTIFY sidebarVisibilityChanged)
     QML_ELEMENT
     QML_UNCREATABLE("C++ only")
     OC_DECLARE_WIDGET_FOCUS
@@ -83,6 +84,9 @@ public Q_SLOTS:
     QString storageLabel() const;
     double storageFraction() const;
     void runFolderWizard(Account *account);
+    void toggleSidebar();
+    void setSidebarVisible(bool visible);
+    bool isSidebarVisible() const;
 
 
 Q_SIGNALS:
@@ -90,6 +94,7 @@ Q_SIGNALS:
     void currentPageChanged();
     // I think this only goes to qml
     void currentAccountChanged();
+    void sidebarVisibilityChanged(bool visible);
 
 protected Q_SLOTS:
     void onAccountAdded(AccountState *state);
@@ -105,9 +110,11 @@ private:
     void createWorkspaceHeader();
     void updateWorkspaceHeader();
     void showAccountPopup();
+    QWidget *_brandWidget = nullptr;
     QPointer<QWidget> _accountPopup;
     QStackedWidget *_searchStack = nullptr;
     QPushButton *_profileButton = nullptr;
+    bool _sidebarVisible = true;
     Ui::SettingsDialog *const _ui;
 
 

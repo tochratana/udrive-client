@@ -2,6 +2,7 @@
 #include "gui/udrivefilebrowser.h"
 #include "gui/settingsdialog.h"
 #include "gui/accountmanager.h"
+#include "gui/accountview.h"
 #include "gui/translations.h"
 #include <QTranslator>
 #include <QUrlQuery>
@@ -22,6 +23,7 @@
 #include <QStackedWidget>
 #include <QClipboard>
 #include <QQuickWidget>
+#include <QQuickItem>
 #ifdef Q_OS_MACOS
 #include "gui/udrivepdfpreview.h"
 #include <QBuffer>
@@ -2402,6 +2404,58 @@ private Q_SLOTS:
         QVERIFY(permanentDialog.findChild<QPushButton *>("cancelDeleteButton")->isDefault());
     }
 
+    void inputDialogStylingAndValidation()
+    {
+        UDriveInputDialog dialog(QStringLiteral("New folder"), QStringLiteral("Folder name"), QString(), QStringLiteral("OK"), nullptr, false);
+        auto *title = dialog.findChild<QLabel *>(QStringLiteral("inputDialogTitle"));
+        auto *label = dialog.findChild<QLabel *>(QStringLiteral("inputDialogLabel"));
+        auto *field = dialog.findChild<QLineEdit *>(QStringLiteral("inputDialogField"));
+        auto *cancelBtn = dialog.findChild<QPushButton *>(QStringLiteral("inputCancelButton"));
+        auto *confirmBtn = dialog.findChild<QPushButton *>(QStringLiteral("inputConfirmButton"));
+
+        QVERIFY(title && label && field && cancelBtn && confirmBtn);
+        QCOMPARE(title->text(), QStringLiteral("New folder"));
+        QCOMPARE(label->text(), QStringLiteral("Folder name"));
+        QVERIFY(!confirmBtn->isEnabled());
+
+        field->setText(QStringLiteral("   "));
+        QVERIFY(!confirmBtn->isEnabled());
+
+        field->setText(QStringLiteral("My Folder"));
+        QVERIFY(confirmBtn->isEnabled());
+        QCOMPARE(dialog.text(), QStringLiteral("My Folder"));
+
+        UDriveInputDialog allowEmptyDialog(QStringLiteral("Move to folder"), QStringLiteral("Destination"), QString(), QStringLiteral("OK"), nullptr, true);
+        auto *allowEmptyConfirm = allowEmptyDialog.findChild<QPushButton *>(QStringLiteral("inputConfirmButton"));
+        QVERIFY(allowEmptyConfirm && allowEmptyConfirm->isEnabled());
+    }
+
+    void confirmRemoveAccountDialogStylingAndBehavior()
+    {
+        ConfirmRemoveAccountDialog dialog(QStringLiteral("test user@example.com"));
+        auto *message = dialog.findChild<QLabel *>(QStringLiteral("confirmRemoveAccountMessage"));
+        auto *cancelBtn = dialog.findChild<QPushButton *>(QStringLiteral("cancelRemoveAccountButton"));
+        auto *removeBtn = dialog.findChild<QPushButton *>(QStringLiteral("removeAccountButton"));
+
+        QVERIFY(message && cancelBtn && removeBtn);
+        QCOMPARE(dialog.windowTitle(), QStringLiteral("Confirm Account Removal"));
+        QVERIFY(message->text().contains(QStringLiteral("test user@example.com")));
+        QVERIFY(message->text().contains(QStringLiteral("This will <b>not</b> delete any files.")));
+
+        // Ensure no icon labels exist in the dialog (user requirement: don't use icon)
+        const auto labels = dialog.findChildren<QLabel *>();
+        for (auto *lbl : labels) {
+            QVERIFY(lbl->pixmap().isNull());
+        }
+
+        // Verify button properties, cursor, and safe default behavior
+        QVERIFY(cancelBtn->isDefault());
+        QCOMPARE(cancelBtn->cursor().shape(), Qt::PointingHandCursor);
+        QCOMPARE(removeBtn->cursor().shape(), Qt::PointingHandCursor);
+        QCOMPARE(cancelBtn->text(), QStringLiteral("Cancel"));
+        QCOMPARE(removeBtn->text(), QStringLiteral("Remove connection"));
+    }
+
     void deleteConfirmationGuards_data()
     {
         QTest::addColumn<bool>("permanent");
@@ -2581,6 +2635,72 @@ private Q_SLOTS:
                 }
             }
         }
+    }
+
+    void sidebarToggleAndVisibility()
+    {
+        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive") || Resources::isVanillaTheme())
+            QSKIP("UDrive branding is not enabled in this build.");
+
+        auto settings = ConfigFile::makeQSettings();
+        settings.remove(QStringLiteral("UDrive/sidebarVisible"));
+
+        SettingsDialog window(nullptr);
+        window.resize(1200, 800);
+
+        auto *quickWidget = window.findChild<QQuickWidget *>();
+        auto *brandWidget = window.findChild<QWidget *>(QStringLiteral("driveBrand"));
+        QVERIFY(quickWidget);
+        QVERIFY(brandWidget);
+
+        // Initially visible: sidebar open at 236px, brand widget at 224px
+        QVERIFY(window.isSidebarVisible());
+        QCOMPARE(quickWidget->width(), 236);
+        QVERIFY(!quickWidget->isHidden());
+        QCOMPARE(brandWidget->width(), 224);
+
+        // Collapse sidebar via method / QML slot into 56px icon rail
+        window.setSidebarVisible(false);
+        QVERIFY(!window.isSidebarVisible());
+        QCOMPARE(quickWidget->width(), 56);
+        QVERIFY(!quickWidget->isHidden());
+        QCOMPARE(brandWidget->width(), 140);
+        QCOMPARE(settings.value(QStringLiteral("UDrive/sidebarVisible")).toBool(), false);
+
+        // Expand back via toggleSidebar()
+        window.toggleSidebar();
+        QVERIFY(window.isSidebarVisible());
+        QCOMPARE(quickWidget->width(), 236);
+        QVERIFY(!quickWidget->isHidden());
+        QCOMPARE(brandWidget->width(), 224);
+        QCOMPARE(settings.value(QStringLiteral("UDrive/sidebarVisible")).toBool(), true);
+
+        // Collapse again
+        window.setSidebarVisible(false);
+        QVERIFY(!window.isSidebarVisible());
+        QCOMPARE(quickWidget->width(), 56);
+        QVERIFY(!quickWidget->isHidden());
+
+        // Test persistence when opening a new dialog
+        SettingsDialog reopened(nullptr);
+        reopened.resize(1200, 800);
+        auto *reopenedQuickWidget = reopened.findChild<QQuickWidget *>();
+        auto *reopenedBrandWidget = reopened.findChild<QWidget *>(QStringLiteral("driveBrand"));
+        QVERIFY(reopenedQuickWidget && reopenedBrandWidget);
+        QVERIFY(!reopened.isSidebarVisible());
+        QCOMPARE(reopenedQuickWidget->width(), 56);
+        QVERIFY(!reopenedQuickWidget->isHidden());
+        QCOMPARE(reopenedBrandWidget->width(), 140);
+
+        // Expanding reopened window
+        reopened.toggleSidebar();
+        QVERIFY(reopened.isSidebarVisible());
+        QCOMPARE(reopenedQuickWidget->width(), 236);
+        QVERIFY(!reopenedQuickWidget->isHidden());
+        QCOMPARE(reopenedBrandWidget->width(), 224);
+
+        // Cleanup
+        settings.remove(QStringLiteral("UDrive/sidebarVisible"));
     }
 };
 

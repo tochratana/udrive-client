@@ -519,6 +519,125 @@ DeleteConfirmDialog::DeleteConfirmDialog(const QString &fileName, bool isFolder,
     cancelButton->setDefault(true);
 }
 
+UDriveInputDialog::UDriveInputDialog(const QString &title, const QString &label, const QString &initialText,
+                                     const QString &confirmButtonText, QWidget *parent, bool allowEmpty)
+    : QDialog(parent)
+{
+    setObjectName(QStringLiteral("udriveInputDialog"));
+    setWindowTitle(title);
+    setModal(true);
+    setWindowFlags((windowFlags() | Qt::Dialog) & ~Qt::WindowContextHelpButtonHint);
+    setMinimumWidth(440);
+
+    const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+    const QString bg = dark ? QStringLiteral("#242528") : QStringLiteral("#FFFFFF");
+    const QString text = dark ? QStringLiteral("#EDEDED") : QStringLiteral("#1F2328");
+    const QString subtext = dark ? QStringLiteral("#9BA3AF") : QStringLiteral("#59636E");
+    const QString border = dark ? QStringLiteral("#3E4146") : QStringLiteral("#D0D7DE");
+    const QString inputBg = dark ? QStringLiteral("#1B1C1E") : QStringLiteral("#FAFCFB");
+    const QString cancelBg = dark ? QStringLiteral("#2E3135") : QStringLiteral("#F3F4F6");
+    const QString cancelHover = dark ? QStringLiteral("#383B40") : QStringLiteral("#E5E7EB");
+    const QString primaryDisabled = dark ? QStringLiteral("#2A4733") : QStringLiteral("#A3E4B8");
+    const QString primaryDisabledText = dark ? QStringLiteral("#587864") : QStringLiteral("#FFFFFF");
+
+    setStyleSheet(QStringLiteral(
+        "QDialog#udriveInputDialog { background-color: %1; }"
+        "QLabel#inputDialogTitle { color: %3; font-size: 15px; font-weight: 600; }"
+        "QLabel#inputDialogLabel { color: %4; font-size: 13px; }"
+        "QLineEdit#inputDialogField { min-height: 20px; padding: 8px 12px; border: 1px solid %2; border-radius: 8px; background: %5; color: %3; font-size: 13px; selection-background-color: #2E4436; }"
+        "QLineEdit#inputDialogField:focus { border: 1px solid #22C55E; }"
+        "QLineEdit#inputDialogField QToolButton { border: none; border-radius: 12px; padding: 0; background: transparent; }"
+        "QPushButton#inputCancelButton { background-color: %6; color: %3; border: 1px solid %2; border-radius: 8px; padding: 7px 16px; font-size: 13px; font-weight: 500; min-width: 80px; min-height: 20px; }"
+        "QPushButton#inputCancelButton:hover { background-color: %7; }"
+        "QPushButton#inputCancelButton:focus { border: 1px solid #22C55E; }"
+        "QPushButton#inputConfirmButton { background-color: #22C55E; color: #FFFFFF; border: none; border-radius: 8px; padding: 7px 18px; font-size: 13px; font-weight: 600; min-width: 80px; min-height: 20px; }"
+        "QPushButton#inputConfirmButton:hover { background-color: #2AD564; }"
+        "QPushButton#inputConfirmButton:pressed { background-color: #16A34A; }"
+        "QPushButton#inputConfirmButton:disabled { background-color: %8; color: %9; }"
+        "QPushButton#inputConfirmButton:focus { border: 2px solid #86EFAC; }"
+    ).arg(bg, border, text, subtext, inputBg, cancelBg, cancelHover, primaryDisabled, primaryDisabledText));
+
+    auto *mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(20, 20, 20, 16);
+    mainLayout->setSpacing(16);
+
+    auto *headerLayout = new QVBoxLayout;
+    headerLayout->setSpacing(6);
+
+    auto *titleLabel = new QLabel(title, this);
+    titleLabel->setObjectName(QStringLiteral("inputDialogTitle"));
+    titleLabel->setTextFormat(Qt::PlainText);
+    headerLayout->addWidget(titleLabel);
+
+    if (!label.isEmpty()) {
+        auto *fieldLabel = new QLabel(label, this);
+        fieldLabel->setObjectName(QStringLiteral("inputDialogLabel"));
+        fieldLabel->setTextFormat(Qt::PlainText);
+        fieldLabel->setWordWrap(true);
+        headerLayout->addWidget(fieldLabel);
+    }
+    mainLayout->addLayout(headerLayout);
+
+    _lineEdit = new QLineEdit(initialText, this);
+    _lineEdit->setObjectName(QStringLiteral("inputDialogField"));
+    _lineEdit->setClearButtonEnabled(true);
+    if (!initialText.isEmpty()) {
+        _lineEdit->selectAll();
+    }
+    mainLayout->addWidget(_lineEdit);
+
+    auto *buttonsLayout = new QHBoxLayout;
+    buttonsLayout->setSpacing(10);
+    buttonsLayout->addStretch(1);
+
+    auto *cancelButton = new QPushButton(tr("Cancel"), this);
+    cancelButton->setObjectName(QStringLiteral("inputCancelButton"));
+    cancelButton->setCursor(Qt::PointingHandCursor);
+    connect(cancelButton, &QPushButton::clicked, this, &QDialog::reject);
+    buttonsLayout->addWidget(cancelButton);
+
+    _confirmButton = new QPushButton(confirmButtonText.isEmpty() ? tr("OK") : confirmButtonText, this);
+    _confirmButton->setObjectName(QStringLiteral("inputConfirmButton"));
+    _confirmButton->setCursor(Qt::PointingHandCursor);
+    _confirmButton->setDefault(true);
+    connect(_confirmButton, &QPushButton::clicked, this, &QDialog::accept);
+    buttonsLayout->addWidget(_confirmButton);
+
+    mainLayout->addLayout(buttonsLayout);
+
+    if (!allowEmpty) {
+        auto updateConfirmState = [this] {
+            _confirmButton->setEnabled(!_lineEdit->text().trimmed().isEmpty());
+        };
+        connect(_lineEdit, &QLineEdit::textChanged, this, updateConfirmState);
+        updateConfirmState();
+    }
+
+    connect(_lineEdit, &QLineEdit::returnPressed, this, [this] {
+        if (_confirmButton->isEnabled()) {
+            accept();
+        }
+    });
+
+    _lineEdit->setFocus();
+}
+
+QString UDriveInputDialog::text() const
+{
+    return _lineEdit ? _lineEdit->text().trimmed() : QString();
+}
+
+QString UDriveInputDialog::getText(QWidget *parent, const QString &title, const QString &label,
+                                   const QString &initialText, const QString &confirmButtonText,
+                                   bool *ok, bool allowEmpty)
+{
+    UDriveInputDialog dialog(title, label, initialText, confirmButtonText, parent, allowEmpty);
+    const int result = dialog.exec();
+    if (ok)
+        *ok = (result == QDialog::Accepted);
+    return (result == QDialog::Accepted) ? dialog.text() : QString();
+}
+
 UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     : QWidget(parent)
     , _state(state)
@@ -884,7 +1003,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         const QString path = _path;
         const QPointer<UDriveFileBrowser> guard(this);
         bool ok = false;
-        const QString name = QInputDialog::getText(this, tr("New folder"), tr("Folder name"), QLineEdit::Normal, {}, &ok);
+        const QString name = UDriveInputDialog::getText(this, tr("New folder"), tr("Folder name"), {}, tr("OK"), &ok);
         if (guard && ok && _root == root && _path == path && !createFolder(name))
             setMessage(tr("Enter a valid new folder name."));
     });
@@ -903,7 +1022,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         const QPointer<UDriveFileBrowser> guard(this);
         bool ok = false;
         const QString name =
-            QInputDialog::getText(this, copy ? tr("Make a copy") : tr("Rename"), tr("New name"), QLineEdit::Normal, item.data().toString(), &ok);
+            UDriveInputDialog::getText(this, copy ? tr("Make a copy") : tr("Rename"), tr("New name"), item.data().toString(), tr("OK"), &ok);
         if (guard && ok && root == selectedRoot() && selectedItem().data(PathRole).toString() == oldPath && !(copy ? copySelected(name) : renameSelected(name)))
             setMessage(tr("Choose a different, valid name."));
     };
@@ -915,7 +1034,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         const QPointer<UDriveFileBrowser> guard(this);
         bool ok = false;
         const QString path =
-            QInputDialog::getText(this, tr("Move to folder"), tr("Destination folder in this space (leave empty for the root)"), QLineEdit::Normal, {}, &ok);
+            UDriveInputDialog::getText(this, tr("Move to folder"), tr("Destination folder in this space (leave empty for the root)"), {}, tr("OK"), &ok, true);
         if (guard && ok && root == selectedRoot() && selectedItem().data(PathRole).toString() == oldPath && !moveSelected(path))
             setMessage(tr("Choose a valid destination folder. Existing files will not be overwritten."));
     });

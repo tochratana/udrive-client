@@ -69,6 +69,7 @@ namespace GraphApi {
          * Exceptions: Personal spaces
          */
         QString displayName() const;
+        QString defaultFolderName() const;
         QString description() const;
         QUrl webUrl() const;
         QString id() const;

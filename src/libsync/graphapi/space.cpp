@@ -93,6 +93,21 @@ QString Space::displayName() const
     return _drive.getName();
 }
 
+QString Space::defaultFolderName() const
+{
+    if (_hasManyPersonalSpaces) {
+        return _drive.getName();
+    }
+
+    if (_drive.getDriveType() == personalC) {
+        return QStringLiteral("Personal");
+    }
+    if (_drive.getId() == sharesIdC) {
+        return QStringLiteral("Shares");
+    }
+    return _drive.getName();
+}
+
 QString Space::description() const
 {
     return _drive.getDescription();

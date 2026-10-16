@@ -12,7 +12,8 @@ Pane {
     readonly property OCQuickWidget widget: ocQuickWidget
     readonly property bool dark: palette.window.hslLightness < 0.5
     readonly property bool hasAccount: AccountManager.accounts.length > 0
-    padding: 10
+    readonly property bool collapsed: !settingsDialog.sidebarVisible
+    padding: sidebar.collapsed ? 8 : 10
     Accessible.name: qsTr("UDrive navigation")
     background: Rectangle {
         radius: 16
@@ -22,45 +23,99 @@ Pane {
     Connections {
         target: widget
         function onFocusFirst() { if (newButton.enabled) newButton.forceActiveFocus(Qt.TabFocusReason); else addAccountButton.forceActiveFocus(Qt.TabFocusReason); }
-        function onFocusLast() { quitButton.forceActiveFocus(Qt.BacktabFocusReason); }
+        function onFocusLast() {
+            if (!sidebar.collapsed)
+                quitButton.forceActiveFocus(Qt.BacktabFocusReason);
+            else
+                personalButton.forceActiveFocus(Qt.BacktabFocusReason);
+        }
     }
     ColumnLayout {
         anchors.fill: parent
         spacing: 6
         opacity: widget.enabled ? 1 : 0.5
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 24
+            Layout.topMargin: 2
+            Layout.bottomMargin: 4
+            Item { Layout.fillWidth: true }
+            T.Button {
+                id: collapseButton
+                objectName: "udriveCollapse"
+                Layout.preferredWidth: 26
+                Layout.preferredHeight: 26
+                hoverEnabled: true
+                focusPolicy: Qt.TabFocus
+                Accessible.name: sidebar.collapsed ? qsTr("Expand sidebar") : qsTr("Collapse sidebar")
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: (sidebar.collapsed ? qsTr("Expand sidebar (%1)") : qsTr("Collapse sidebar (%1)")).arg(Qt.platform.os === "osx" ? "⌘B" : "Ctrl+B")
+                background: Rectangle {
+                    radius: 6
+                    color: collapseButton.down ? (sidebar.dark ? "#3A3A3A" : "#E2E5E8")
+                        : collapseButton.hovered ? (sidebar.dark ? "#323232" : "#ECEFF1")
+                        : "transparent"
+                }
+                contentItem: IconImage {
+                    anchors.centerIn: parent
+                    source: "qrc:/udrive/icons/chevron-dark.svg"
+                    sourceSize: Qt.size(16, 16)
+                    rotation: sidebar.collapsed ? 270 : 90
+                    color: collapseButton.hovered
+                        ? (sidebar.dark ? "#FFFFFF" : "#1A201C")
+                        : (sidebar.dark ? "#9AA49E" : "#68776D")
+                }
+                Keys.onBacktabPressed: widget.parentFocusWidget.focusPrevious()
+                onClicked: settingsDialog.toggleSidebar()
+            }
+            Item {
+                visible: sidebar.collapsed
+                Layout.fillWidth: sidebar.collapsed
+            }
+        }
         T.Button {
             id: newButton
             objectName: "udriveNew"
-            Layout.fillWidth: true
-            Layout.preferredHeight: 38
-            Layout.topMargin: 32
-            Layout.bottomMargin: 14
+            Layout.preferredWidth: sidebar.collapsed ? 36 : -1
+            Layout.fillWidth: !sidebar.collapsed
+            Layout.preferredHeight: sidebar.collapsed ? 36 : 38
+            Layout.alignment: sidebar.collapsed ? Qt.AlignHCenter : Qt.AlignLeft
+            Layout.topMargin: 4
+            Layout.bottomMargin: sidebar.collapsed ? 8 : 14
             text: qsTr("+  New")
-            font.pixelSize: 14
-            font.weight: Font.Bold
             hoverEnabled: true
             enabled: settingsDialog.canCreateFiles
             Accessible.name: qsTr("Create a folder or upload a file")
+            ToolTip.visible: sidebar.collapsed && hovered
+            ToolTip.delay: 300
+            ToolTip.text: qsTr("New")
             background: Rectangle {
-                radius: 9
-                color: !newButton.enabled ? (sidebar.dark ? "#353B37" : "#E4EAE6") : newButton.down ? "#30C86A" : newButton.hovered ? "#63E493" : "#40D979"
+                radius: sidebar.collapsed ? 8 : 9
+                color: !newButton.enabled ? (sidebar.dark ? "#353B37" : "#E4EAE6")
+                    : newButton.down ? "#16A34A"
+                    : newButton.hovered ? "#2AD564" : "#22C55E"
                 border.width: newButton.visualFocus ? 2 : 0
                 border.color: "#007C58"
             }
             contentItem: Label {
-                text: newButton.text
-                font: newButton.font
+                text: sidebar.collapsed ? "+" : newButton.text
+                font.pixelSize: sidebar.collapsed ? 20 : 14
+                font.weight: Font.Bold
                 color: newButton.enabled ? "#FFFFFF" : (sidebar.dark ? "#9AA49E" : "#68776D")
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
             }
-            Keys.onBacktabPressed: widget.parentFocusWidget.focusPrevious()
+            Keys.onBacktabPressed: collapseButton.forceActiveFocus(Qt.BacktabFocusReason)
             onClicked: settingsDialog.openNewFileMenu()
         }
         UDriveNavigationButton {
             id: personalButton
             objectName: "udrivePersonal"
-            Layout.fillWidth: true
+            collapsed: sidebar.collapsed
+            Layout.preferredWidth: sidebar.collapsed ? 36 : -1
+            Layout.fillWidth: !sidebar.collapsed
+            Layout.alignment: sidebar.collapsed ? Qt.AlignHCenter : Qt.AlignLeft
             Accessible.role: Accessible.PageTab
             checked: settingsDialog.currentPage === SettingsDialog.Files
             enabled: sidebar.hasAccount
@@ -70,7 +125,10 @@ Pane {
         }
         UDriveNavigationButton {
             objectName: "udriveFavorites"
-            Layout.fillWidth: true
+            collapsed: sidebar.collapsed
+            Layout.preferredWidth: sidebar.collapsed ? 36 : -1
+            Layout.fillWidth: !sidebar.collapsed
+            Layout.alignment: sidebar.collapsed ? Qt.AlignHCenter : Qt.AlignLeft
             Accessible.role: Accessible.PageTab
             checked: settingsDialog.currentPage === SettingsDialog.Favorites
             enabled: sidebar.hasAccount
@@ -80,7 +138,10 @@ Pane {
         }
         UDriveNavigationButton {
             objectName: "udriveShares"
-            Layout.fillWidth: true
+            collapsed: sidebar.collapsed
+            Layout.preferredWidth: sidebar.collapsed ? 36 : -1
+            Layout.fillWidth: !sidebar.collapsed
+            Layout.alignment: sidebar.collapsed ? Qt.AlignHCenter : Qt.AlignLeft
             Accessible.role: Accessible.PageTab
             checked: settingsDialog.currentPage === SettingsDialog.Shares
             enabled: sidebar.hasAccount
@@ -90,7 +151,10 @@ Pane {
         }
         UDriveNavigationButton {
             objectName: "udriveWorkspaces"
-            Layout.fillWidth: true
+            collapsed: sidebar.collapsed
+            Layout.preferredWidth: sidebar.collapsed ? 36 : -1
+            Layout.fillWidth: !sidebar.collapsed
+            Layout.alignment: sidebar.collapsed ? Qt.AlignHCenter : Qt.AlignLeft
             Accessible.role: Accessible.PageTab
             checked: settingsDialog.currentPage === SettingsDialog.Workspaces
             enabled: sidebar.hasAccount
@@ -100,7 +164,10 @@ Pane {
         }
         UDriveNavigationButton {
             objectName: "udriveTrash"
-            Layout.fillWidth: true
+            collapsed: sidebar.collapsed
+            Layout.preferredWidth: sidebar.collapsed ? 36 : -1
+            Layout.fillWidth: !sidebar.collapsed
+            Layout.alignment: sidebar.collapsed ? Qt.AlignHCenter : Qt.AlignLeft
             Accessible.role: Accessible.PageTab
             checked: settingsDialog.currentPage === SettingsDialog.Trash
             enabled: sidebar.hasAccount
@@ -110,7 +177,10 @@ Pane {
         }
         UDriveNavigationButton {
             id: addAccountButton
-            Layout.fillWidth: true
+            collapsed: sidebar.collapsed
+            Layout.preferredWidth: sidebar.collapsed ? 36 : -1
+            Layout.fillWidth: !sidebar.collapsed
+            Layout.alignment: sidebar.collapsed ? Qt.AlignHCenter : Qt.AlignLeft
             visible: !sidebar.hasAccount
             icon.source: "qrc:/udrive/icons/nav-add.svg"
             text: qsTr("Add account")
@@ -121,6 +191,7 @@ Pane {
         RowLayout {
             Layout.fillWidth: true
             spacing: 4
+            visible: !sidebar.collapsed
             UDriveNavigationButton {
                 Layout.fillWidth: true
                 icon.source: "qrc:/udrive/icons/nav-sync.svg"
@@ -145,20 +216,38 @@ Pane {
             Layout.topMargin: 8
             Layout.bottomMargin: 10
             height: 1
+            visible: !sidebar.collapsed
             color: sidebar.dark ? "#414141" : "#E1E5E8"
         }
         RowLayout {
-            Layout.leftMargin: 10
-            Layout.rightMargin: 10
+            Layout.alignment: sidebar.collapsed ? Qt.AlignHCenter : Qt.AlignLeft
+            Layout.leftMargin: sidebar.collapsed ? 0 : 10
+            Layout.rightMargin: sidebar.collapsed ? 0 : 10
+            Layout.bottomMargin: sidebar.collapsed ? 4 : 0
             IconImage {
                 color: sidebar.dark ? "#CACCCD" : "#39443F"
                 Layout.preferredWidth: 18
                 Layout.preferredHeight: 18
                 source: "qrc:/udrive/icons/nav-cloud.svg"
+                ToolTip.visible: sidebar.collapsed && storageMouseArea.containsMouse
+                ToolTip.delay: 300
+                ToolTip.text: settingsDialog.storageLabel
+                MouseArea {
+                    id: storageMouseArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    enabled: sidebar.collapsed
+                }
             }
-            Label { text: qsTr("Storage"); color: sidebar.dark ? "#CACCCD" : "#39443F"; font.pixelSize: 13 }
+            Label {
+                visible: !sidebar.collapsed
+                text: qsTr("Storage")
+                color: sidebar.dark ? "#CACCCD" : "#39443F"
+                font.pixelSize: 13
+            }
         }
         T.ProgressBar {
+            visible: !sidebar.collapsed
             Layout.fillWidth: true
             Layout.preferredHeight: 5
             Layout.leftMargin: 10
@@ -171,6 +260,7 @@ Pane {
             contentItem: Item { implicitHeight: 5; Rectangle { width: parent.width * settingsDialog.storageFraction; height: parent.height; radius: 3; color: "#40D979" } }
         }
         Label {
+            visible: !sidebar.collapsed
             Layout.fillWidth: true
             Layout.leftMargin: 10
             Layout.rightMargin: 10

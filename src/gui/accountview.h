@@ -21,6 +21,7 @@
 #include "owncloudgui.h"
 #include "progressdispatcher.h"
 
+#include <QDialog>
 #include <QSortFilterProxyModel>
 #include <QWidget>
 
@@ -101,6 +102,13 @@ private:
     bool _goingDown = false;
     uint _syncedSpaces = 0;
     uint _unsyncedSpaces = 0;
+};
+
+class OWNCLOUDGUI_EXPORT ConfirmRemoveAccountDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    explicit ConfirmRemoveAccountDialog(const QString &accountDisplayName, QWidget *parent = nullptr);
 };
 
 } // namespace OCC

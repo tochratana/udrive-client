@@ -60,7 +60,7 @@ void FolderWizardSelectiveSync::initializePage()
     QString targetPath = static_cast<FolderWizard *>(wizard())->d_func()->remotePath();
     QString alias = QFileInfo(targetPath).fileName();
     if (alias.isEmpty())
-        alias = Theme::instance()->appName();
+        alias = Theme::instance()->appNameGUI();
     _selectiveSync->setDavUrl(dynamic_cast<FolderWizard *>(wizard())->d_func()->davUrl());
     _selectiveSync->setFolderInfo(targetPath, alias);
     QWizardPage::initializePage();
