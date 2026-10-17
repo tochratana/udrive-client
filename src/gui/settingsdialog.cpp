@@ -19,6 +19,7 @@
 #include "accountview.h"
 #include "udrivefilebrowser.h"
 #include "udriveicons.h"
+#include "udrivepopup.h"
 #include "resources/resources.h"
 #include "libsync/graphapi/spacesmanager.h"
 #include <QLineEdit>
@@ -63,10 +64,9 @@ namespace {
 class AccountPopupButton : public QAbstractButton
 {
 public:
-    AccountPopupButton(const QString &name, const QString &detail, const QString &initials, const QIcon &icon, QWidget *parent)
+    AccountPopupButton(const QString &name, const QString &detail, const QIcon &icon, QWidget *parent)
         : QAbstractButton(parent)
         , _detail(detail)
-        , _initials(initials.toUpper())
         , _icon(icon)
     {
         setText(name);
@@ -76,7 +76,7 @@ public:
         setCursor(Qt::PointingHandCursor);
         setAttribute(Qt::WA_Hover);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        setFixedHeight(detail.isEmpty() ? 44 : 76);
+        setFixedHeight(detail.isEmpty() ? 36 : 52);
     }
 
 protected:
@@ -87,43 +87,17 @@ protected:
         const bool dark = palette().color(QPalette::Window).lightness() < 128;
         const QColor textColor(dark ? "#EDEEF0" : "#24332C");
         const QRectF background = QRectF(rect()).adjusted(1, 1, -1, -1);
-        painter.setPen(hasFocus() && _keyboardFocus ? QPen(QColor("#40D979"), 1.5)
-                : isChecked() ? QPen(QColor(dark ? "#3D6D4E" : "#AEDBBF"), 1) : QPen(Qt::NoPen));
-        painter.setBrush(isDown() ? QColor(dark ? "#354B3D" : "#DFF1E5")
-                : isChecked() ? QColor(dark ? "#293D32" : "#E7F7ED")
-                : underMouse() ? QColor(dark ? "#343A36" : "#EFF5F1")
-                : !_detail.isEmpty() ? QColor(dark ? "#303335" : "#F6F9F7") : Qt::transparent);
-        painter.drawRoundedRect(background, 10, 10);
-        const QRect avatar(12, (height() - 40) / 2, 40, 40);
-        if (!_initials.isEmpty()) {
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor("#00866A"));
-            painter.drawEllipse(avatar);
-            if (!_icon.isNull()) {
-                painter.save();
-                QPainterPath clip;
-                clip.addEllipse(avatar);
-                painter.setClipPath(clip);
-                _icon.paint(&painter, avatar);
-                painter.restore();
-            } else {
-                painter.setPen(Qt::white);
-                auto initialsFont = font();
-                initialsFont.setPixelSize(14);
-                initialsFont.setBold(true);
-                painter.setFont(initialsFont);
-                painter.drawText(avatar, Qt::AlignCenter, _initials.left(3));
-            }
-        } else if (!_icon.isNull()) {
-            const QRect iconBox(12, (height() - 30) / 2, 30, 30);
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(dark ? "#353B38" : "#EDF3EF"));
-            painter.drawRoundedRect(iconBox, 8, 8);
-            _icon.paint(&painter, iconBox.adjusted(5, 5, -5, -5));
+        painter.setPen(hasFocus() && _keyboardFocus ? QPen(QColor("#40D979"), 1.5) : QPen(Qt::NoPen));
+        painter.setBrush(isDown() ? QColor(dark ? "#404244" : "#E4E6E5")
+                : underMouse() ? QColor(dark ? "#383A3C" : "#F0F1F0") : Qt::transparent);
+        painter.drawRoundedRect(background, 6, 6);
+        if (!_icon.isNull()) {
+            const QRect iconBox(8, (height() - 20) / 2, 20, 20);
+            _icon.paint(&painter, iconBox);
         }
-        const int rightInset = isCheckable() ? 38 : 12;
-        const int textLeft = _detail.isEmpty() ? 54 : 64;
-        const QRect textRect(textLeft, 8, qMax(0, width() - textLeft - rightInset), height() - 16);
+        const int rightInset = isCheckable() ? 30 : 8;
+        const int textLeft = _icon.isNull() ? 8 : 36;
+        const QRect textRect(textLeft, 4, qMax(0, width() - textLeft - rightInset), height() - 8);
         auto nameFont = font();
         nameFont.setPixelSize(_detail.isEmpty() ? 13 : 14);
         nameFont.setWeight(QFont::DemiBold);
@@ -139,20 +113,17 @@ protected:
             detailFont.setPixelSize(12);
             const int nameHeight = QFontMetrics(nameFont).height();
             const int detailHeight = QFontMetrics(detailFont).height();
-            const int top = (height() - nameHeight - detailHeight - 4) / 2;
+            const int top = (height() - nameHeight - detailHeight - 2) / 2;
             painter.drawText(QRect(textLeft, top, textRect.width(), nameHeight), Qt::AlignVCenter | Qt::AlignLeft,
                 painter.fontMetrics().elidedText(text(), Qt::ElideRight, textRect.width()));
             painter.setFont(detailFont);
             painter.setPen(QColor(dark ? "#AFB8B2" : "#64776B"));
             painter.drawText(
-                QRect(textLeft, top + nameHeight + 4, textRect.width(), detailHeight), Qt::AlignVCenter | Qt::AlignLeft,
+                QRect(textLeft, top + nameHeight + 2, textRect.width(), detailHeight), Qt::AlignVCenter | Qt::AlignLeft,
                 painter.fontMetrics().elidedText(_detail, Qt::ElideMiddle, textRect.width()));
         }
         if (isChecked()) {
-            const QPoint center(width() - 23, height() / 2);
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(dark ? "#245B3A" : "#C4EDD2"));
-            painter.drawEllipse(center, 10, 10);
+            const QPoint center(width() - 18, height() / 2);
             painter.setPen(QPen(QColor(dark ? "#63E493" : "#008051"), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             painter.drawLine(center + QPoint(-4, 0), center + QPoint(-1, 3));
             painter.drawLine(center + QPoint(-1, 3), center + QPoint(4, -3));
@@ -177,7 +148,6 @@ protected:
 
 private:
     QString _detail;
-    QString _initials;
     QIcon _icon;
     bool _keyboardFocus = false;
 };
@@ -535,8 +505,7 @@ void SettingsDialog::showAccountPopup()
     }
     auto *popup = new AccountPopup(this);
     _accountPopup = popup;
-    const auto *screen = _profileButton->screen();
-    const QRect available = screen->availableGeometry();
+    const QRect available = udrivePopupBounds(this);
     popup->setFixedWidth(qMin(344, available.width() - 20));
     const bool dark = palette().color(QPalette::Window).lightness() < 128;
     popup->setStyleSheet(QStringLiteral("QFrame#driveAccountPopup { background: %4; border: none; border-radius: 14px; }"
@@ -547,8 +516,8 @@ void SettingsDialog::showAccountPopup()
             .arg(dark ? QStringLiteral("#EDEEF0") : QStringLiteral("#24332C"), dark ? QStringLiteral("#AFB8B2") : QStringLiteral("#64776B"),
                 dark ? QStringLiteral("#404642") : QStringLiteral("#E3EAE6"), dark ? QStringLiteral("#2B2D2F") : QStringLiteral("#FFFFFF")));
     auto *layout = new QVBoxLayout(popup);
-    layout->setContentsMargins(12, 16, 12, 10);
-    layout->setSpacing(4);
+    layout->setContentsMargins(8, 10, 8, 6);
+    layout->setSpacing(2);
     auto *title = new QLabel(tr("Accounts"), popup);
     title->setObjectName(QStringLiteral("driveAccountTitle"));
     title->setTextFormat(Qt::PlainText);
@@ -561,7 +530,7 @@ void SettingsDialog::showAccountPopup()
         hint->setTextFormat(Qt::PlainText);
         layout->addWidget(hint);
     }
-    layout->addSpacing(6);
+    layout->addSpacing(4);
     // Keep the active account first, then use a stable, readable name order.
     std::stable_sort(accounts.begin(), accounts.end(), [this](const auto *left, const auto *right) {
         const bool leftActive = left->account() == _lastAccount;
@@ -576,19 +545,19 @@ void SettingsDialog::showAccountPopup()
         scroll->setObjectName(QStringLiteral("driveAccountList"));
         scroll->setWidgetResizable(true);
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        scroll->setFixedHeight(qMin(int(accounts.size()) * 82 - 6, qMax(76, qMin(322, available.height() - 240))));
+        scroll->setFixedHeight(qMin(int(accounts.size()) * 54 - 2, qMax(52, qMin(268, available.height() - 200))));
         auto *rows = new QWidget(scroll);
         rows->setObjectName(QStringLiteral("driveAccountRows"));
         auto *rowLayout = new QVBoxLayout(rows);
         rowLayout->setContentsMargins(0, 0, 0, 0);
-        rowLayout->setSpacing(6);
+        rowLayout->setSpacing(2);
         rowLayout->setAlignment(Qt::AlignTop);
         for (auto *state : accounts) {
             QPointer<Account> account = state->account();
             const QString name = account->davDisplayName().isEmpty() ? account->hostName() : account->davDisplayName();
             const QString server = account->url().adjusted(QUrl::RemoveUserInfo).authority();
             auto *card =
-                new AccountPopupButton(name, server, account->initials().isEmpty() ? QStringLiteral("?") : account->initials(), account->avatar(), rows);
+                new AccountPopupButton(name, server, {}, rows);
             card->setObjectName(QStringLiteral("driveAccountCard"));
             card->setProperty("accountId", account->uuid());
             card->setCheckable(true);
@@ -612,10 +581,10 @@ void SettingsDialog::showAccountPopup()
     auto *divider = new QFrame(popup);
     divider->setObjectName(QStringLiteral("driveAccountDivider"));
     divider->setFixedHeight(1);
-    layout->addSpacing(6);
+    layout->addSpacing(4);
     layout->addWidget(divider);
-    layout->addSpacing(6);
-    auto *add = new AccountPopupButton(tr("Add account"), {}, {}, UDriveIcons::icon(UDriveIcons::Symbol::Add), popup);
+    layout->addSpacing(4);
+    auto *add = new AccountPopupButton(tr("Add account"), {}, UDriveIcons::icon(UDriveIcons::Symbol::Add), popup);
     add->setObjectName(QStringLiteral("drivePopupAddAccount"));
     layout->addWidget(add);
     connect(add, &QAbstractButton::clicked, this, [this, popup] {
@@ -623,7 +592,7 @@ void SettingsDialog::showAccountPopup()
         createNewAccount();
     });
     if (_lastAccount) {
-        auto *manage = new AccountPopupButton(tr("Manage account and sync"), {}, {}, UDriveIcons::icon(UDriveIcons::Symbol::Settings), popup);
+        auto *manage = new AccountPopupButton(tr("Manage account and sync"), {}, UDriveIcons::icon(UDriveIcons::Symbol::Settings), popup);
         manage->setObjectName(QStringLiteral("drivePopupManageAccount"));
         layout->addWidget(manage);
         connect(manage, &QAbstractButton::clicked, this, [this, popup] {
@@ -786,17 +755,18 @@ void SettingsDialog::updateUDriveAppearance()
         "QStackedWidget#stack QPushButton[udrivePrimary=\"true\"]::menu-indicator { image: url(:/udrive/icons/chevron-primary.svg); }"
         "QStackedWidget#stack QPushButton[udrivePrimary=\"true\"]:disabled { background: %6; border-color: %3; color: %5; }"
         "QStackedWidget#stack QPushButton::menu-indicator:disabled { image: url(:/udrive/icons/chevron-disabled.svg); }"
-        "QStackedWidget#stack QMenu { padding: 4px; border: 1px solid %3; border-radius: 8px; background: %1; color: %2; }"
-        "QStackedWidget#stack QMenu::item { padding: 4px 18px 4px 8px; border-radius: 4px; }"
+        "QStackedWidget#stack QMenu { padding: 6px; border: 1px solid %3; border-radius: 10px; background: %1; color: %2; }"
+        "QStackedWidget#stack QMenu::item { padding: 6px 14px 6px 8px; border-radius: 6px; }"
         "QStackedWidget#stack QMenu::item:selected { background: %4; color: %2; }"
         "QStackedWidget#stack QMenu::item:disabled { color: %5; }"
-        "QCheckBox#driveSelectAll { color: %2; spacing: 8px; padding-right: 4px; }"
-        "QCheckBox#driveSelectAll:disabled { color: %5; }"
-        "QCheckBox#driveSelectAll::indicator { width: 18px; height: 18px; border: 1px solid #858585; border-radius: 4px; background: transparent; }"
-        "QCheckBox#driveSelectAll::indicator:hover { border-color: %11; }"
-        "QCheckBox#driveSelectAll::indicator:checked { border-color: #40D979; background: #40D979; image: url(:/client/resources/core/checkbox-check.svg); }"
-        "QCheckBox#driveSelectAll::indicator:indeterminate { border-color: #40D979; background: #40D979; image: url(:/client/resources/core/checkbox-partial.svg); }"
-        "QCheckBox#driveSelectAll::indicator:disabled { border-color: %3; background: %6; }"
+        "QStackedWidget#stack QMenu::separator { height: 1px; background: %3; margin: 5px 6px; }"
+        "QCheckBox#driveSelectAll, QCheckBox#driveWorkspaceSelectAll, QCheckBox#driveWorkspaceHeaderSelectAll { color: %2; spacing: 8px; padding-right: 4px; }"
+        "QCheckBox#driveSelectAll:disabled, QCheckBox#driveWorkspaceSelectAll:disabled, QCheckBox#driveWorkspaceHeaderSelectAll:disabled { color: %5; }"
+        "QCheckBox#driveSelectAll::indicator, QCheckBox#driveWorkspaceSelectAll::indicator, QCheckBox#driveWorkspaceHeaderSelectAll::indicator { width: 18px; height: 18px; border: 1px solid #858585; border-radius: 4px; background: transparent; }"
+        "QCheckBox#driveSelectAll::indicator:hover, QCheckBox#driveWorkspaceSelectAll::indicator:hover, QCheckBox#driveWorkspaceHeaderSelectAll::indicator:hover { border-color: %11; }"
+        "QCheckBox#driveSelectAll::indicator:checked, QCheckBox#driveWorkspaceSelectAll::indicator:checked, QCheckBox#driveWorkspaceHeaderSelectAll::indicator:checked { border-color: #40D979; background: #40D979; image: url(:/client/resources/core/checkbox-check.svg); }"
+        "QCheckBox#driveSelectAll::indicator:indeterminate, QCheckBox#driveWorkspaceSelectAll::indicator:indeterminate, QCheckBox#driveWorkspaceHeaderSelectAll::indicator:indeterminate { border-color: #40D979; background: #40D979; image: url(:/client/resources/core/checkbox-partial.svg); }"
+        "QCheckBox#driveSelectAll::indicator:disabled, QCheckBox#driveWorkspaceSelectAll::indicator:disabled, QCheckBox#driveWorkspaceHeaderSelectAll::indicator:disabled { border-color: %3; background: %6; }"
         "QStackedWidget#stack QGroupBox { border: 1px solid %3; border-radius: 12px; margin-top: 22px; padding: 12px; }"
         "QStackedWidget#stack QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 4px; color: %2; }"
         "QWidget[udriveNetwork=\"true\"] QGroupBox#proxyGroupBox { border: none; margin-top: 20px; padding: 0; }"
@@ -824,9 +794,49 @@ void SettingsDialog::updateUDriveAppearance()
         "QLineEdit#driveSearch QToolButton { border: none; border-radius: 14px; padding: 0; background: transparent; }"
         "QLineEdit#driveSearch QToolButton:hover { background: %4; }"
         "QLineEdit#driveSearch QToolButton:pressed { background: %6; }"
+        "QTreeView#driveWorkspacesTable { border: none; background: %1; color: %2; padding: 0; outline: none; }"
         "QTreeView#driveFiles { border: none; background: %1; color: %2; padding: 0; outline: none; }"
         "QListView#driveTiles { border: none; background: %1; color: %2; padding: 0; outline: none; }"
         "QListView#driveWorkspacesView { border: none; background: %1; color: %2; padding: 4px; outline: none; }"
+        "QStackedWidget#stack QPushButton#driveLearnWorkspaces { background: %12; border: none; border-radius: 16px; min-height: 18px; padding: 0 12px; color: %2; font-weight: 600; }"
+        "QStackedWidget#stack QPushButton#driveLearnWorkspaces:hover { background: %6; color: %2; }"
+        "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled { border: 1px solid %5; border-radius: 14px; padding: 4px 12px; min-height: 20px; background: transparent; color: %2; font-weight: 400; }"
+        "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled:hover { background: %4; }"
+        "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled:checked { background: %4; border-color: %11; color: %11; }"
+        "QWidget#driveWorkspaceControls QLineEdit#driveWorkspaceSearch { border: 1px solid %5; border-radius: 5px; padding: 4px 10px; background: %12; color: %2; }"
+        "QWidget#driveWorkspaceControls QLineEdit#driveWorkspaceSearch:focus { border-color: %11; }"
+        "QWidget#driveWorkspaceControls QComboBox#driveWorkspaceSort { border: 1px solid %5; border-radius: 5px; padding: 6px 30px 6px 10px; background: %12; color: %2; }"
+        "QWidget#driveWorkspaceControls QComboBox#driveWorkspaceSort::drop-down { border: none; width: 24px; }"
+        "QWidget#driveWorkspaceControls QComboBox#driveWorkspaceSort::down-arrow { image: url(:/udrive/icons/%7.svg); width: 12px; height: 12px; }"
+        "QFrame#driveWorkspaceRule, QFrame#driveWorkspaceTitleDivider { color: %3; background: %3; border: none; }"
+        "QFrame#driveWorkspaceRule { max-height: 1px; }"
+        "QFrame#driveWorkspaceTitleDivider { max-width: 1px; }"
+        "QLabel#driveWorkspaceCount { color: %5; font-size: 12px; padding: 4px 0; }"
+        "QWidget#driveWorkspaceBulkActions QToolButton { border: none; border-radius: 8px; background: transparent; color: %2; padding: 6px 8px; font-size: 13px; }"
+        "QWidget#driveWorkspaceBulkActions QToolButton:hover { background: %4; }"
+        "QWidget#driveWorkspaceBulkActions QToolButton:disabled { color: %5; }"
+        "QWidget#driveWorkspaceHeaderActions QToolButton { border: 1px solid transparent; border-radius: 8px; background: transparent; padding: 4px; }"
+        "QWidget#driveWorkspaceHeaderActions QToolButton:hover { background: %12; }"
+        "QWidget#driveWorkspaceHeaderActions QToolButton:focus { border-color: %11; }"
+        "QToolButton#driveWorkspaceViewMode::menu-indicator { image: none; width: 0; }"
+        "QWidget#driveSharesNav QPushButton[shareTab=\"true\"] { border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 14px; background: transparent; color: %5; font-size: 13px; font-weight: 500; }"
+        "QWidget#driveSharesNav QPushButton[shareTab=\"true\"]:hover { color: %2; }"
+        "QWidget#driveSharesNav QPushButton[shareTab=\"true\"]:checked { border-bottom: 2px solid #40D979; color: %2; font-weight: 600; }"
+        "QWidget#driveSharesNav QToolButton#driveShareSettings { border: none; border-radius: 8px; background: transparent; padding: 4px; }"
+        "QWidget#driveSharesNav QToolButton#driveShareSettings::menu-indicator { image: none; width: 0; height: 0; }"
+        "QWidget#driveSharesNav QToolButton#driveShareSettings:hover { background: %4; }"
+        "QWidget#driveSharesControls QPushButton#driveShareFilterShares, QWidget#driveSharesControls QPushButton#driveShareFilterHidden { border: 1px solid %5; border-radius: 14px; padding: 4px 14px; min-height: 20px; background: transparent; color: %2; font-weight: 400; font-size: 13px; }"
+        "QWidget#driveSharesControls QPushButton#driveShareFilterShares:hover, QWidget#driveSharesControls QPushButton#driveShareFilterHidden:hover { background: %4; }"
+        "QWidget#driveSharesControls QPushButton#driveShareFilterShares:checked { background: #40D979; border-color: #40D979; color: #12351D; font-weight: 600; }"
+        "QWidget#driveSharesControls QPushButton#driveShareFilterHidden:checked { background: %4; border-color: %11; color: %11; font-weight: 500; }"
+        "QWidget#driveSharesControls QLineEdit#driveShareSearch { border: 1px solid %5; border-radius: 5px; padding: 4px 10px; background: %12; color: %2; }"
+        "QWidget#driveSharesControls QLineEdit#driveShareSearch:focus { border-color: %11; }"
+        "QWidget#driveSharesControls QComboBox#driveShareTypeFilter, QWidget#driveSharesControls QComboBox#driveShareByFilter { border: 1px solid %5; border-radius: 14px; padding: 4px 26px 4px 12px; min-height: 20px; background: transparent; color: %2; font-size: 13px; }"
+        "QWidget#driveSharesControls QComboBox#driveShareTypeFilter::drop-down, QWidget#driveSharesControls QComboBox#driveShareByFilter::drop-down { border: none; width: 20px; }"
+        "QWidget#driveSharesControls QComboBox#driveShareTypeFilter::down-arrow, QWidget#driveSharesControls QComboBox#driveShareByFilter::down-arrow { image: url(:/udrive/icons/%7.svg); width: 10px; height: 10px; }"
+        "QFrame#driveSharesRule { color: %3; background: %3; border: none; max-height: 1px; }"
+        "QWidget#driveEmptyState { background: %1; }"
+        "QLabel#driveEmptyText { color: %2; font-size: 18px; font-weight: 600; }"
         "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"] { min-height: 32px; padding: 0 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 13px; font-weight: 500; }"
         "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"]:hover { background: %4; border-color: transparent; }"
         "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"]:pressed { background: %4; border-color: transparent; }"
@@ -837,10 +847,10 @@ void SettingsDialog::updateUDriveAppearance()
         "QStackedWidget#stack QPushButton#driveViewMode::menu-indicator { image: url(:/udrive/icons/%7.svg); width: 10px; height: 10px; subcontrol-origin: padding; subcontrol-position: center right; right: 6px; }"
         "QStackedWidget#stack QPushButton#driveSort { padding: 0 24px 0 8px; }"
         "QStackedWidget#stack QPushButton#driveSort::menu-indicator { image: url(:/udrive/icons/%7.svg); width: 10px; height: 10px; subcontrol-origin: padding; subcontrol-position: center right; right: 8px; }"
-        "QTreeView#driveFiles::item { padding: 6px 8px; border-bottom: 1px solid %3; }"
-        "QTreeView#driveFiles::item:hover { background: %6; }"
-        "QTreeView#driveFiles::item:selected { background: %4; color: %2; }"
-        "QTreeView#driveFiles QHeaderView::section { background: %1; color: %2; border: none; border-bottom: 1px solid %3; padding: 12px 8px; }"
+        "QTreeView#driveWorkspacesTable::item, QTreeView#driveFiles::item { padding: 6px 8px; border-bottom: 1px solid %3; }"
+        "QTreeView#driveWorkspacesTable::item:hover, QTreeView#driveFiles::item:hover { background: %6; }"
+        "QTreeView#driveWorkspacesTable::item:selected, QTreeView#driveFiles::item:selected { background: %4; color: %2; }"
+        "QTreeView#driveWorkspacesTable QHeaderView::section, QTreeView#driveFiles QHeaderView::section { background: %1; color: %2; border: none; border-bottom: 1px solid %3; padding: 12px 8px; }"
         "QStackedWidget#stack QComboBox#driveSpaces, QStackedWidget#stack QComboBox#languageDropdown, QStackedWidget#stack QComboBox#pdfZoom { min-height: 22px; border: 1px solid %3; border-radius: 9px; padding: 8px 38px 8px 12px; background: %1; color: %2; }"
         "QWidget[udriveNetwork=\"true\"] QComboBox#typeComboBox { min-height: 20px; padding: 7px 30px 7px 10px; border: 1px solid %3; border-radius: 8px; background: %8; color: %2; font-size: 13px; }"
         "QWidget[udriveNetwork=\"true\"] QComboBox#typeComboBox:hover, QWidget[udriveNetwork=\"true\"] QComboBox#typeComboBox:focus { border-color: #00856B; }"
@@ -870,7 +880,7 @@ void SettingsDialog::updateUDriveAppearance()
         "QTreeView#accountFoldersTreeView { border: 1px solid %3; border-radius: 12px; background: %1; padding: 8px; }"
         "QLabel#syncedFolderCount { color: %2; padding-top: 8px; }")
         .arg(surface, text, border, hover, disabledText, disabledSurface, arrow, dark ? QStringLiteral("#202020") : QStringLiteral("#F6F7F8"))
-        .arg(toolbarSurface, toolbarBorder, toolbarAccent));
+        .arg(toolbarSurface, toolbarBorder, toolbarAccent, dark ? QStringLiteral("#383838") : QStringLiteral("#F4F5F4")));
 }
 
 void SettingsDialog::onAccountAdded(AccountState *state)

@@ -1038,6 +1038,78 @@
             <translation>បានចែករំលែកជាមួយខ្ញុំ</translation>
         </message>
         <message>
+            <source>Shared with others</source>
+            <translation>បានចែករំលែកជាមួយអ្នកដទៃ</translation>
+        </message>
+        <message>
+            <source>Shared via link</source>
+            <translation>បានចែករំលែកតាមរយៈតំណ</translation>
+        </message>
+        <message>
+            <source>Share settings</source>
+            <translation>ការកំណត់ការចែករំលែក</translation>
+        </message>
+        <message>
+            <source>Hidden Shares</source>
+            <translation>ការចែករំលែកដែលបានលាក់</translation>
+        </message>
+        <message>
+            <source>Share Type</source>
+            <translation>ប្រភេទការចែករំលែក</translation>
+        </message>
+        <message>
+            <source>Shared By</source>
+            <translation>បានចែករំលែកដោយ</translation>
+        </message>
+        <message>
+            <source>No Favorites</source>
+            <translation>មិនមានចំណូលចិត្ត</translation>
+        </message>
+        <message>
+            <source>No deleted files</source>
+            <translation>មិនមានឯកសារដែលបានលុប</translation>
+        </message>
+        <message>
+            <source>No results found.</source>
+            <translation>រកមិនឃើញលទ្ធផល។</translation>
+        </message>
+        <message>
+            <source>Reset filters</source>
+            <translation>កំណត់តម្រងឡើងវិញ</translation>
+        </message>
+        <message>
+            <source>Share metadata is not available from this server.</source>
+            <translation>ម៉ាស៊ីនមេនេះមិនផ្តល់ព័ត៌មានលម្អិតអំពីការចែករំលែកទេ។</translation>
+        </message>
+        <message>
+            <source>Loading files shared with you…</source>
+            <translation>កំពុងផ្ទុកឯកសារដែលបានចែករំលែកជាមួយអ្នក…</translation>
+        </message>
+        <message>
+            <source>Could not load files shared with you. %1</source>
+            <translation>មិនអាចផ្ទុកឯកសារដែលបានចែករំលែកជាមួយអ្នកបានទេ។ %1</translation>
+        </message>
+        <message>
+            <source>Open this share on the web to enable syncing with this device.</source>
+            <translation>បើកការចែករំលែកនេះនៅលើគេហទំព័រ ដើម្បីបើកការធ្វើសមកាលកម្មជាមួយឧបករណ៍នេះ។</translation>
+        </message>
+        <message>
+            <source>No shares</source>
+            <translation>គ្មានការចែករំលែក</translation>
+        </message>
+        <message>
+            <source>Search shares</source>
+            <translation>ស្វែងរកការចែករំលែក</translation>
+        </message>
+        <message>
+            <source>Search files shared with you</source>
+            <translation>ស្វែងរកឯកសារដែលបានចែករំលែកជាមួយអ្នក</translation>
+        </message>
+        <message>
+            <source>Anyone</source>
+            <translation>អ្នកណាក៏បាន</translation>
+        </message>
+        <message>
             <source>Share direction</source>
             <translation>ប្រភេទការចែករំលែក</translation>
         </message>
@@ -1060,6 +1132,230 @@
         <message>
             <source>No files shared by you yet.</source>
             <translation>អ្នកមិនទាន់បានចែករំលែកឯកសារណាមួយនៅឡើយទេ។</translation>
+        </message>
+        <message>
+            <source>Learn about workspaces</source>
+            <translation>ស្វែងយល់អំពីកន្លែងធ្វើការ</translation>
+        </message>
+        <message>
+            <source>Workspaces catalog</source>
+            <translation>បញ្ជីកន្លែងធ្វើការ</translation>
+        </message>
+        <message>
+            <source>New Workspace</source>
+            <translation>កន្លែងធ្វើការថ្មី</translation>
+        </message>
+        <message>
+            <source>Workspace name:</source>
+            <translation>ឈ្មោះកន្លែងធ្វើការ៖</translation>
+        </message>
+        <message>
+            <source>Create Workspace</source>
+            <translation>បង្កើតកន្លែងធ្វើការ</translation>
+        </message>
+        <message>
+            <source>Workspace "%1" created.</source>
+            <translation>បានបង្កើតកន្លែងធ្វើការ "%1"។</translation>
+        </message>
+        <message>
+            <source>Could not create workspace "%1".</source>
+            <translation>មិនអាចបង្កើតកន្លែងធ្វើការ "%1" បានទេ។</translation>
+        </message>
+        <message>
+            <source>Copy web link</source>
+            <translation>ចម្លងតំណវេប</translation>
+        </message>
+        <message>
+            <source>Link copied to clipboard.</source>
+            <translation>បានចម្លងតំណទៅក្ដារតម្បៀតខ្ទាស់។</translation>
+        </message>
+        <message>
+            <source>All workspaces</source>
+            <translation>កន្លែងធ្វើការទាំងអស់</translation>
+        </message>
+        <message>
+            <source>Search workspaces</source>
+            <translation>ស្វែងរកកន្លែងធ្វើការ</translation>
+        </message>
+        <message>
+            <source>No workspaces found.</source>
+            <translation>រកមិនឃើញកន្លែងធ្វើការទេ។</translation>
+        </message>
+        <message>
+            <source>Open workspace</source>
+            <translation>បើកកន្លែងធ្វើការ</translation>
+        </message>
+        <message>
+            <source>Workspaces: %1</source>
+            <translation>កន្លែងធ្វើការ៖ %1</translation>
+        </message>
+        <message>
+            <source>Selected workspaces: %1</source>
+            <translation>កន្លែងធ្វើការដែលបានជ្រើសរើស៖ %1</translation>
+        </message>
+        <message>
+            <source>Filter:</source>
+            <translation>តម្រង៖</translation>
+        </message>
+        <message>
+            <source>Include disabled</source>
+            <translation>បង្ហាញកន្លែងធ្វើការដែលបានបិទ</translation>
+        </message>
+        <message>
+            <source>Workspace display options</source>
+            <translation>ជម្រើសបង្ហាញកន្លែងធ្វើការ</translation>
+        </message>
+        <message>
+            <source>Disabled</source>
+            <translation>បានបិទ</translation>
+        </message>
+        <message>
+            <source>Workspace view</source>
+            <translation>ទិដ្ឋភាពកន្លែងធ្វើការ</translation>
+        </message>
+        <message>
+            <source>Manager</source>
+            <translation>អ្នកគ្រប់គ្រង</translation>
+        </message>
+        <message>
+            <source>Members</source>
+            <translation>សមាជិក</translation>
+        </message>
+        <message>
+            <source>Remaining quota</source>
+            <translation>ទំហំផ្ទុកនៅសល់</translation>
+        </message>
+        <message>
+            <source>Workspace members</source>
+            <translation>សមាជិកកន្លែងធ្វើការ</translation>
+        </message>
+            <message>
+            <source>%1 (copy)</source>
+            <translation>%1 (ច្បាប់ចម្លង)</translation>
+        </message>
+        <message>
+            <source>Active</source>
+            <translation>កំពុងប្រើ</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>បោះបង់</translation>
+        </message>
+        <message>
+            <source>Choose a PNG, JPEG, or WebP image up to 8 MiB and 16 megapixels.</source>
+            <translation>សូមជ្រើសរូបភាព PNG, JPEG ឬ WebP ដែលមានទំហំមិនលើស 8 MiB និង 16 megapixels។</translation>
+        </message>
+        <message>
+            <source>Could not read this image.</source>
+            <translation>មិនអាចអានរូបភាពនេះបានទេ។</translation>
+        </message>
+        <message>
+            <source>Describe this workspace using Markdown.</source>
+            <translation>ពិពណ៌នាកន្លែងធ្វើការនេះដោយប្រើ Markdown។</translation>
+        </message>
+        <message>
+            <source>Details</source>
+            <translation>ព័ត៌មានលម្អិត</translation>
+        </message>
+        <message>
+            <source>Disable</source>
+            <translation>បិទការប្រើប្រាស់</translation>
+        </message>
+        <message>
+            <source>Disable %1 workspace(s)? Their files will become unavailable until restored.</source>
+            <translation>បិទការប្រើប្រាស់កន្លែងធ្វើការ %1? ឯកសារនឹងមិនអាចប្រើបានរហូតដល់បើកប្រើឡើងវិញ។</translation>
+        </message>
+        <message>
+            <source>Disable workspaces</source>
+            <translation>បិទការប្រើប្រាស់កន្លែងធ្វើការ</translation>
+        </message>
+        <message>
+            <source>Download workspaces</source>
+            <translation>ទាញយកកន្លែងធ្វើការ</translation>
+        </message>
+        <message>
+            <source>Duplicate</source>
+            <translation>ចម្លង</translation>
+        </message>
+        <message>
+            <source>Edit description</source>
+            <translation>កែការពិពណ៌នា</translation>
+        </message>
+        <message>
+            <source>Edit image</source>
+            <translation>កែរូបភាព</translation>
+        </message>
+        <message>
+            <source>Edit quota</source>
+            <translation>កែទំហំផ្ទុក</translation>
+        </message>
+        <message>
+            <source>Edit subtitle</source>
+            <translation>កែចំណងជើងរង</translation>
+        </message>
+        <message>
+            <source>Enter a quota between 0.001 and 9000000 GB.</source>
+            <translation>សូមបញ្ចូលទំហំផ្ទុកចន្លោះ 0.001 និង 9000000 GB។</translation>
+        </message>
+        <message>
+            <source>Enter a valid workspace name.</source>
+            <translation>សូមបញ្ចូលឈ្មោះកន្លែងធ្វើការដែលត្រឹមត្រូវ។</translation>
+        </message>
+        <message>
+            <source>Enter one emoji.</source>
+            <translation>សូមបញ្ចូល emoji មួយ។</translation>
+        </message>
+        <message>
+            <source>Enter one emoji:</source>
+            <translation>បញ្ចូល emoji មួយ៖</translation>
+        </message>
+        <message>
+            <source>Images (*.png *.jpg *.jpeg *.webp)</source>
+            <translation>រូបភាព (*.png *.jpg *.jpeg *.webp)</translation>
+        </message>
+        <message>
+            <source>Quota in GB (minimum 0.001):</source>
+            <translation>ទំហំផ្ទុកគិតជា GB (អប្បបរមា 0.001)៖</translation>
+        </message>
+        <message>
+            <source>Restore workspace</source>
+            <translation>បើកប្រើកន្លែងធ្វើការឡើងវិញ</translation>
+        </message>
+        <message>
+            <source>Save</source>
+            <translation>រក្សាទុក</translation>
+        </message>
+        <message>
+            <source>Set icon</source>
+            <translation>កំណត់រូបតំណាង</translation>
+        </message>
+        <message>
+            <source>Show deleted files</source>
+            <translation>បង្ហាញឯកសារដែលបានលុប</translation>
+        </message>
+        <message>
+            <source>Status</source>
+            <translation>ស្ថានភាព</translation>
+        </message>
+        <message>
+            <source>Subtitle</source>
+            <translation>ចំណងជើងរង</translation>
+        </message>
+        <message>
+            <source>Subtitle:</source>
+            <translation>ចំណងជើងរង៖</translation>
+        </message>
+        <message>
+            <source>Total quota</source>
+            <translation>ទំហំផ្ទុកសរុប</translation>
+        </message>
+        <message>
+            <source>Workspace ID</source>
+            <translation>លេខសម្គាល់កន្លែងធ្វើការ</translation>
+        </message>
+        <message>
+            <source>ZIP archives (*.zip)</source>
+            <translation>ឯកសារ ZIP (*.zip)</translation>
         </message>
     </context>
     <context>
@@ -1220,6 +1516,18 @@
         <message>
             <source>Storage usage</source>
             <translation>ទំហំផ្ទុកដែលបានប្រើ</translation>
+        </message>
+        <message>
+            <source>+  New Workspace</source>
+            <translation>+  កន្លែងធ្វើការថ្មី</translation>
+        </message>
+        <message>
+            <source>Create a new workspace</source>
+            <translation>បង្កើតកន្លែងធ្វើការថ្មី</translation>
+        </message>
+        <message>
+            <source>New Workspace</source>
+            <translation>កន្លែងធ្វើការថ្មី</translation>
         </message>
     </context>
     <context>
@@ -1761,6 +2069,141 @@
         <message>
             <source>Sign-in link copied to clipboard.</source>
             <translation>បានចម្លងតំណចូលប្រើទៅក្ដារតម្បៀតខ្ទាស់។</translation>
+        </message>
+        <message>
+            <source>Workspace members — %1</source>
+            <translation>សមាជិកកន្លែងធ្វើការ — %1</translation>
+        </message>
+        <message>
+            <source>Manage workspace membership</source>
+            <translation>គ្រប់គ្រងសមាជិកកន្លែងធ្វើការ</translation>
+        </message>
+        <message>
+            <source>Add member</source>
+            <translation>បន្ថែមសមាជិក</translation>
+        </message>
+        <message>
+            <source>Workspace members</source>
+            <translation>សមាជិកកន្លែងធ្វើការ</translation>
+        </message>
+        <message>
+            <source>Loading workspace members…</source>
+            <translation>កំពុងផ្ទុកសមាជិកកន្លែងធ្វើការ…</translation>
+        </message>
+        <message>
+            <source>Could not load workspace members. Close and try again.</source>
+            <translation>មិនអាចផ្ទុកសមាជិកកន្លែងធ្វើការបានទេ។ សូមបិទ ហើយព្យាយាមម្ដងទៀត។</translation>
+        </message>
+        <message>
+            <source>Manager</source>
+            <translation>អ្នកគ្រប់គ្រង</translation>
+        </message>
+        <message>
+            <source>Member</source>
+            <translation>សមាជិក</translation>
+        </message>
+        <message>
+            <source>You can view members but cannot add them.</source>
+            <translation>អ្នកអាចមើលសមាជិកបាន ប៉ុន្តែមិនអាចបន្ថែមសមាជិកបានទេ។</translation>
+        </message>
+        <message>
+            <source>No workspace members found.</source>
+            <translation>រកមិនឃើញសមាជិកកន្លែងធ្វើការទេ។</translation>
+        </message>
+        <message>
+            <source>Adding workspace member…</source>
+            <translation>កំពុងបន្ថែមសមាជិកកន្លែងធ្វើការ…</translation>
+        </message>
+        <message>
+            <source>Could not add workspace member. Try again.</source>
+            <translation>មិនអាចបន្ថែមសមាជិកកន្លែងធ្វើការបានទេ។ សូមព្យាយាមម្ដងទៀត។</translation>
+        </message>
+        <message>
+            <source>Removing workspace member…</source>
+            <translation>កំពុងដកសមាជិកចេញពីកន្លែងធ្វើការ…</translation>
+        </message>
+        <message>
+            <source>Could not remove workspace member. Try again.</source>
+            <translation>មិនអាចដកសមាជិកចេញពីកន្លែងធ្វើការបានទេ។ សូមព្យាយាមម្ដងទៀត។</translation>
+        </message>
+    </context>
+    <context>
+        <name>OCC::UDriveWorkspaceActions</name>
+        <message>
+            <source> %1 workspace(s) completed before the error.</source>
+            <translation> កន្លែងធ្វើការ %1 បានបញ្ចប់មុនពេលមានបញ្ហា។</translation>
+        </message>
+        <message>
+            <source> A new workspace or metadata file may be incomplete. Refresh before trying again.</source>
+            <translation> កន្លែងធ្វើការថ្មី ឬឯកសារព័ត៌មានអាចមិនទាន់ពេញលេញ។ សូមផ្ទុកឡើងវិញមុនព្យាយាមម្ដងទៀត។</translation>
+        </message>
+        <message>
+            <source>Could not open the archive destination.</source>
+            <translation>មិនអាចបើកទីតាំងរក្សាទុកឯកសារ ZIP បានទេ។</translation>
+        </message>
+        <message>
+            <source>Could not read all workspace contents.</source>
+            <translation>មិនអាចអានមាតិកាទាំងអស់ក្នុងកន្លែងធ្វើការបានទេ។</translation>
+        </message>
+        <message>
+            <source>Operation canceled. Refresh to check the server.</source>
+            <translation>បានបោះបង់ប្រតិបត្តិការ។ សូមផ្ទុកឡើងវិញដើម្បីពិនិត្យស្ថានភាពលើម៉ាស៊ីនមេ។</translation>
+        </message>
+        <message>
+            <source>Permission denied by the server.</source>
+            <translation>ម៉ាស៊ីនមេមិនអនុញ្ញាតប្រតិបត្តិការនេះទេ។</translation>
+        </message>
+        <message>
+            <source>The server did not return a metadata file ID.</source>
+            <translation>ម៉ាស៊ីនមេមិនបានផ្ដល់លេខសម្គាល់ឯកសារព័ត៌មានទេ។</translation>
+        </message>
+        <message>
+            <source>The server returned an invalid new workspace.</source>
+            <translation>ម៉ាស៊ីនមេបានផ្ដល់កន្លែងធ្វើការថ្មីដែលមិនត្រឹមត្រូវ។</translation>
+        </message>
+        <message>
+            <source>The server supplied an invalid workspace URL.</source>
+            <translation>ម៉ាស៊ីនមេបានផ្ដល់ URL កន្លែងធ្វើការដែលមិនត្រឹមត្រូវ។</translation>
+        </message>
+        <message>
+            <source>The workspace archive could not be saved.</source>
+            <translation>មិនអាចរក្សាទុកឯកសារ ZIP របស់កន្លែងធ្វើការបានទេ។</translation>
+        </message>
+        <message>
+            <source>The workspace changed. Refresh and try again.</source>
+            <translation>កន្លែងធ្វើការបានផ្លាស់ប្ដូរ។ សូមផ្ទុកឡើងវិញ ហើយព្យាយាមម្ដងទៀត។</translation>
+        </message>
+        <message>
+            <source>The workspace description is too large.</source>
+            <translation>ការពិពណ៌នាកន្លែងធ្វើការធំពេក។</translation>
+        </message>
+        <message>
+            <source>The workspace description path is invalid.</source>
+            <translation>ផ្លូវឯកសារពិពណ៌នាកន្លែងធ្វើការមិនត្រឹមត្រូវទេ។</translation>
+        </message>
+        <message>
+            <source>The workspace metadata path is invalid.</source>
+            <translation>ផ្លូវឯកសារព័ត៌មានកន្លែងធ្វើការមិនត្រឹមត្រូវទេ។</translation>
+        </message>
+        <message>
+            <source>The workspace response is too large.</source>
+            <translation>ទិន្នន័យឆ្លើយតបរបស់កន្លែងធ្វើការធំពេក។</translation>
+        </message>
+        <message>
+            <source>Workspace archive saved.</source>
+            <translation>បានរក្សាទុកឯកសារ ZIP របស់កន្លែងធ្វើការ។</translation>
+        </message>
+        <message>
+            <source>Workspace changes saved.</source>
+            <translation>បានរក្សាទុកការផ្លាស់ប្ដូរកន្លែងធ្វើការ។</translation>
+        </message>
+        <message>
+            <source>Workspace operation failed (HTTP %1).</source>
+            <translation>ប្រតិបត្តិការកន្លែងធ្វើការបរាជ័យ (HTTP %1)។</translation>
+        </message>
+        <message>
+            <source>Workspaces duplicated.</source>
+            <translation>បានចម្លងកន្លែងធ្វើការ។</translation>
         </message>
     </context>
 </TS>

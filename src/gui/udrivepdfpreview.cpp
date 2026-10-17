@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "udrivepdfpreview.h"
+#include "udrivecombobox.h"
 #include "udriveicons.h"
 #include <QComboBox>
 #include <QAbstractItemView>
@@ -54,7 +55,7 @@ UDrivePdfPreview::UDrivePdfPreview(QWidget *parent) : QWidget(parent)
     toolbar->addWidget(_count);
     toolbar->addWidget(_next);
     toolbar->addStretch();
-    _zoom = new QComboBox(this);
+    _zoom = new UDriveComboBox(this);
     _zoom->setObjectName(QStringLiteral("pdfZoom"));
     _zoom->setProperty("udriveCombo", true);
     _zoom->view()->setFrameShape(QFrame::NoFrame);

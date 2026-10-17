@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 
+#include "udrivepopup.h"
+
 #include <QAbstractItemView>
 #include <QComboBox>
 #include <QFrame>
@@ -37,7 +39,7 @@ private:
         auto *popup = view()->window();
         if (!popup->isVisible())
             return;
-        const QRect available = screen()->availableGeometry().adjusted(4, 4, -4, -4);
+        const QRect available = udrivePopupBounds(this);
         popup->resize(qMin(width(), available.width()), qMin(popup->height(), available.height()));
         const QPoint below = mapToGlobal(QPoint(0, height() + 4));
         const int left = layoutDirection() == Qt::RightToLeft

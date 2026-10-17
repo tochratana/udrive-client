@@ -46,7 +46,12 @@ enum class Symbol {
     MoreVertical,
     Sidebar,
     Share,
-    Members
+    ShareOut,
+    Members,
+    Filter,
+    Cloud,
+    Disable,
+    Help
 };
 
 // Draw the same rounded, 24-unit stroke icons at any device pixel ratio.
@@ -85,6 +90,24 @@ public:
             painter->drawPath(path);
         };
         switch (_symbol) {
+        case Symbol::Cloud: {
+            QPainterPath path;
+            path.moveTo(7, 19); path.cubicTo(0, 19, 0, 10, 6, 10);
+            path.cubicTo(6, 2, 17, 2, 19, 10); path.cubicTo(25, 10, 25, 19, 18, 19);
+            path.closeSubpath(); painter->drawPath(path); break;
+        }
+        case Symbol::Disable:
+            painter->drawEllipse(QRectF(3, 3, 18, 18));
+            painter->drawRoundedRect(QRectF(9, 9, 6, 6), 1, 1);
+            break;
+        case Symbol::Filter:
+            line({{3, 4}, {21, 4}, {14, 12}, {14, 21}, {10, 19}, {10, 12}, {3, 4}});
+            break;
+        case Symbol::Help:
+            painter->drawEllipse(QRectF(3, 3, 18, 18));
+            painter->drawPoint(QPointF(12, 17));
+            line({{9, 9}, {9, 8}, {11, 7}, {14, 7}, {15, 9}, {14, 11}, {12, 12}, {12, 13}});
+            break;
         case Symbol::Add:
             line({{12, 5}, {12, 19}});
             line({{5, 12}, {19, 12}});
@@ -268,6 +291,10 @@ public:
             painter->drawEllipse(QRectF(15.5, 15.5, 4, 4));
             line({{8.3, 11.1}, {15.7, 7.4}});
             line({{8.3, 12.9}, {15.7, 16.6}});
+            break;
+        case Symbol::ShareOut:
+            line({{16, 17}, {16, 11}, {8, 11}});
+            line({{12, 7}, {8, 11}, {12, 15}});
             break;
         case Symbol::Members: {
             painter->drawEllipse(QPointF(9, 7.5), 3, 3);

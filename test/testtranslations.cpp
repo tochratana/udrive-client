@@ -89,8 +89,46 @@ private Q_SLOTS:
         }
         for (const auto *source : {"Share", "Rename", "Make a copy", "Move to folder", "Move to Deleted files", "Share this item with other users", "Shared by me", "Shared with me", "Share direction", "Search files shared by me",
                  "Loading files shared by you…", "No files shared by you yet.", "Could not load files shared by you. %1",
-                 "%1 shared items shown; some items are no longer available."}) {
+                 "%1 shared items shown; some items are no longer available.", "Shared with others", "Shared via link", "Share settings",
+                 "Hidden Shares", "Share Type", "Shared By", "No shares", "Search shares", "Search files shared with you", "Anyone",
+                 "Reset filters", "Share metadata is not available from this server.", "Loading files shared with you…",
+                 "Could not load files shared with you. %1", "Open this share on the web to enable syncing with this device."}) {
             const auto translated = translator.translate("OCC::UDriveFileBrowser", source);
+            QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
+            if (QString::fromUtf8(source).contains(QStringLiteral("%1"))) QVERIFY(translated.contains(QStringLiteral("%1")));
+        }
+        for (const auto *source : {"Learn about workspaces", "Workspaces catalog", "New Workspace",
+                 "Workspace name:", "Create Workspace", "Workspace \"%1\" created.",
+                 "Could not create workspace \"%1\".", "Copy web link", "Link copied to clipboard.",
+                 "All workspaces", "Search workspaces", "No workspaces found.",
+                 "Filter:", "Include disabled", "Workspace display options", "Disabled",
+                 "Workspace view", "Manager", "Members", "Remaining quota", "Workspace members",
+                 "Open workspace", "Workspaces: %1", "Selected workspaces: %1"}) {
+            const auto translated = translator.translate("OCC::UDriveFileBrowser", source, nullptr, QString::fromUtf8(source).contains(QStringLiteral("%n")) ? 2 : -1);
+            QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
+            if (QString::fromUtf8(source).contains(QStringLiteral("%1"))) QVERIFY(translated.contains(QStringLiteral("%1")));
+        }
+        for (const auto *source : {"Duplicate", "Edit description", "Edit subtitle", "Edit image", "Set icon", "Edit quota", "Disable", "Restore workspace", "Show deleted files", "Details", "Total quota", "Workspace ID", "Describe this workspace using Markdown.", "Disable %1 workspace(s)? Their files will become unavailable until restored."}) {
+            const auto translated = translator.translate("OCC::UDriveFileBrowser", source);
+            QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
+            if (QString::fromUtf8(source).contains(QStringLiteral("%1"))) QVERIFY(translated.contains(QStringLiteral("%1")));
+        }
+        for (const auto *source : {"Workspace changes saved.", "Workspaces duplicated.", "Workspace archive saved.", "Permission denied by the server.", "Workspace operation failed (HTTP %1).", "Operation canceled. Refresh to check the server.", " A new workspace or metadata file may be incomplete. Refresh before trying again."}) {
+            const auto translated = translator.translate("OCC::UDriveWorkspaceActions", source);
+            QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
+            if (QString::fromUtf8(source).contains(QStringLiteral("%1"))) QVERIFY(translated.contains(QStringLiteral("%1")));
+        }
+        for (const auto *source : {"Workspace members — %1", "Manage workspace membership", "Add member",
+                 "Workspace members", "Loading workspace members…", "Could not load workspace members. Close and try again.",
+                 "Manager", "Member", "You can view members but cannot add them.",
+                 "No workspace members found.", "Adding workspace member…", "Could not add workspace member. Try again.",
+                 "Removing workspace member…", "Could not remove workspace member. Try again."}) {
+            const auto translated = translator.translate("OCC::UDriveShareDialog", source, nullptr, QString::fromUtf8(source).contains(QStringLiteral("%n")) ? 2 : -1);
+            QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
+            if (QString::fromUtf8(source).contains(QStringLiteral("%1"))) QVERIFY(translated.contains(QStringLiteral("%1")));
+        }
+        for (const auto *source : {"+  New Workspace", "Create a new workspace", "New Workspace"}) {
+            const auto translated = translator.translate("UDriveSidebar", source, nullptr, QString::fromUtf8(source).contains(QStringLiteral("%n")) ? 2 : -1);
             QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
             if (QString::fromUtf8(source).contains(QStringLiteral("%1"))) QVERIFY(translated.contains(QStringLiteral("%1")));
         }

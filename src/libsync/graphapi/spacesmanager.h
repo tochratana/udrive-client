@@ -38,6 +38,8 @@ namespace GraphApi {
         Space *space(const QString &id) const;
 
         QVector<Space *> spaces() const;
+        // Catalog metadata only: disabled drives must never become sync spaces.
+        const QList<OpenAPI::OAIDrive> &disabledDrives() const { return _disabledDrives; }
 
         // todo DC-150: remove this accessor and take responsibility for running job to retrieve/update space image as needed
         // once that is complete we can get rid of the account memeber entirely (and even revert the parent arg to a simple QObject)
@@ -66,6 +68,7 @@ namespace GraphApi {
         QPointer<Account> _account;
         QTimer *_refreshTimer;
         QHash<QString, Space *> _spaces;
+        QList<OpenAPI::OAIDrive> _disabledDrives;
         bool _ready = false;
     };
 

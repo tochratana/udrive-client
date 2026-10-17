@@ -66,13 +66,16 @@ void SpacesManager::refresh()
         QList<QString> deletedSpaces;
 
         if (drivesJob->httpStatusCode() == 200) {
+            _disabledDrives.clear();
             QList<QString> oldKeys = _spaces.keys();
             for (const auto &dr : drivesJob->drives()) {
                 bool driveDisabled = dr.getRoot().getDeleted().getState() == QLatin1String("trashed");
                 // we need to treat any newly disabled spaces as if they were deleted so leave it alone.
                 // if an existing space is now disabled it will remain in the old key list for removal, below
-                if (driveDisabled)
+                if (driveDisabled) {
+                    _disabledDrives.append(dr);
                     continue;
+                }
 
                 auto *space = _spaces.value(dr.getId(), nullptr);
                 if (space) {

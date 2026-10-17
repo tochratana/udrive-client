@@ -13,7 +13,7 @@ Pane {
     readonly property bool dark: palette.window.hslLightness < 0.5
     readonly property bool hasAccount: AccountManager.accounts.length > 0
     readonly property bool collapsed: !settingsDialog.sidebarVisible
-    padding: sidebar.collapsed ? 8 : 10
+    padding: 10
     Accessible.name: qsTr("UDrive navigation")
     background: Rectangle {
         radius: 16
@@ -79,10 +79,10 @@ Pane {
             objectName: "udriveNew"
             Layout.preferredWidth: sidebar.collapsed ? 36 : -1
             Layout.fillWidth: !sidebar.collapsed
-            Layout.preferredHeight: sidebar.collapsed ? 36 : 38
+            Layout.preferredHeight: 38
             Layout.alignment: sidebar.collapsed ? Qt.AlignHCenter : Qt.AlignLeft
             Layout.topMargin: 4
-            Layout.bottomMargin: sidebar.collapsed ? 8 : 14
+            Layout.bottomMargin: 14
             text: settingsDialog.isWorkspacesOverview ? qsTr("+  New Workspace") : qsTr("+  New")
             hoverEnabled: true
             enabled: settingsDialog.canCreateFiles

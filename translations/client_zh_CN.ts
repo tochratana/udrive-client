@@ -1038,6 +1038,78 @@
             <translation>与我共享的</translation>
         </message>
         <message>
+            <source>Shared with others</source>
+            <translation>与他人共享</translation>
+        </message>
+        <message>
+            <source>Shared via link</source>
+            <translation>通过链接共享</translation>
+        </message>
+        <message>
+            <source>Share settings</source>
+            <translation>共享设置</translation>
+        </message>
+        <message>
+            <source>Hidden Shares</source>
+            <translation>隐藏的共享</translation>
+        </message>
+        <message>
+            <source>Share Type</source>
+            <translation>共享类型</translation>
+        </message>
+        <message>
+            <source>Shared By</source>
+            <translation>共享者</translation>
+        </message>
+        <message>
+            <source>No Favorites</source>
+            <translation>暂无收藏</translation>
+        </message>
+        <message>
+            <source>No deleted files</source>
+            <translation>没有已删除的文件</translation>
+        </message>
+        <message>
+            <source>No results found.</source>
+            <translation>未找到结果。</translation>
+        </message>
+        <message>
+            <source>Reset filters</source>
+            <translation>重置筛选条件</translation>
+        </message>
+        <message>
+            <source>Share metadata is not available from this server.</source>
+            <translation>此服务器不提供共享元数据。</translation>
+        </message>
+        <message>
+            <source>Loading files shared with you…</source>
+            <translation>正在加载与您共享的文件…</translation>
+        </message>
+        <message>
+            <source>Could not load files shared with you. %1</source>
+            <translation>无法加载与您共享的文件。%1</translation>
+        </message>
+        <message>
+            <source>Open this share on the web to enable syncing with this device.</source>
+            <translation>在网页上打开此共享，以启用与此设备的同步。</translation>
+        </message>
+        <message>
+            <source>No shares</source>
+            <translation>没有共享</translation>
+        </message>
+        <message>
+            <source>Search shares</source>
+            <translation>搜索共享</translation>
+        </message>
+        <message>
+            <source>Search files shared with you</source>
+            <translation>搜索与您共享的文件</translation>
+        </message>
+        <message>
+            <source>Anyone</source>
+            <translation>任何人</translation>
+        </message>
+        <message>
             <source>Share direction</source>
             <translation>共享方向</translation>
         </message>
@@ -1060,6 +1132,230 @@
         <message>
             <source>No files shared by you yet.</source>
             <translation>您尚未共享任何文件。</translation>
+        </message>
+        <message>
+            <source>Learn about workspaces</source>
+            <translation>了解工作区</translation>
+        </message>
+        <message>
+            <source>Workspaces catalog</source>
+            <translation>工作区列表</translation>
+        </message>
+        <message>
+            <source>New Workspace</source>
+            <translation>新建工作区</translation>
+        </message>
+        <message>
+            <source>Workspace name:</source>
+            <translation>工作区名称：</translation>
+        </message>
+        <message>
+            <source>Create Workspace</source>
+            <translation>创建工作区</translation>
+        </message>
+        <message>
+            <source>Workspace "%1" created.</source>
+            <translation>已创建工作区“%1”。</translation>
+        </message>
+        <message>
+            <source>Could not create workspace "%1".</source>
+            <translation>无法创建工作区“%1”。</translation>
+        </message>
+        <message>
+            <source>Copy web link</source>
+            <translation>复制网页链接</translation>
+        </message>
+        <message>
+            <source>Link copied to clipboard.</source>
+            <translation>链接已复制到剪贴板。</translation>
+        </message>
+        <message>
+            <source>All workspaces</source>
+            <translation>所有工作区</translation>
+        </message>
+        <message>
+            <source>Search workspaces</source>
+            <translation>搜索工作区</translation>
+        </message>
+        <message>
+            <source>No workspaces found.</source>
+            <translation>未找到工作区。</translation>
+        </message>
+        <message>
+            <source>Open workspace</source>
+            <translation>打开工作区</translation>
+        </message>
+        <message>
+            <source>Workspaces: %1</source>
+            <translation>工作区：%1</translation>
+        </message>
+        <message>
+            <source>Selected workspaces: %1</source>
+            <translation>已选择的工作区：%1</translation>
+        </message>
+        <message>
+            <source>Filter:</source>
+            <translation>筛选：</translation>
+        </message>
+        <message>
+            <source>Include disabled</source>
+            <translation>包含已停用的工作区</translation>
+        </message>
+        <message>
+            <source>Workspace display options</source>
+            <translation>工作区显示选项</translation>
+        </message>
+        <message>
+            <source>Disabled</source>
+            <translation>已停用</translation>
+        </message>
+        <message>
+            <source>Workspace view</source>
+            <translation>工作区视图</translation>
+        </message>
+        <message>
+            <source>Manager</source>
+            <translation>管理员</translation>
+        </message>
+        <message>
+            <source>Members</source>
+            <translation>成员</translation>
+        </message>
+        <message>
+            <source>Remaining quota</source>
+            <translation>剩余配额</translation>
+        </message>
+        <message>
+            <source>Workspace members</source>
+            <translation>工作区成员</translation>
+        </message>
+            <message>
+            <source>%1 (copy)</source>
+            <translation>%1（副本）</translation>
+        </message>
+        <message>
+            <source>Active</source>
+            <translation>启用</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Choose a PNG, JPEG, or WebP image up to 8 MiB and 16 megapixels.</source>
+            <translation>请选择不超过 8 MiB、1600 万像素的 PNG、JPEG 或 WebP 图片。</translation>
+        </message>
+        <message>
+            <source>Could not read this image.</source>
+            <translation>无法读取此图片。</translation>
+        </message>
+        <message>
+            <source>Describe this workspace using Markdown.</source>
+            <translation>使用 Markdown 描述此工作区。</translation>
+        </message>
+        <message>
+            <source>Details</source>
+            <translation>详情</translation>
+        </message>
+        <message>
+            <source>Disable</source>
+            <translation>禁用</translation>
+        </message>
+        <message>
+            <source>Disable %1 workspace(s)? Their files will become unavailable until restored.</source>
+            <translation>禁用 %1 个工作区？恢复前将无法访问其中的文件。</translation>
+        </message>
+        <message>
+            <source>Disable workspaces</source>
+            <translation>禁用工作区</translation>
+        </message>
+        <message>
+            <source>Download workspaces</source>
+            <translation>下载工作区</translation>
+        </message>
+        <message>
+            <source>Duplicate</source>
+            <translation>复制</translation>
+        </message>
+        <message>
+            <source>Edit description</source>
+            <translation>编辑描述</translation>
+        </message>
+        <message>
+            <source>Edit image</source>
+            <translation>编辑图片</translation>
+        </message>
+        <message>
+            <source>Edit quota</source>
+            <translation>编辑配额</translation>
+        </message>
+        <message>
+            <source>Edit subtitle</source>
+            <translation>编辑副标题</translation>
+        </message>
+        <message>
+            <source>Enter a quota between 0.001 and 9000000 GB.</source>
+            <translation>请输入 0.001 至 9000000 GB 的配额。</translation>
+        </message>
+        <message>
+            <source>Enter a valid workspace name.</source>
+            <translation>请输入有效的工作区名称。</translation>
+        </message>
+        <message>
+            <source>Enter one emoji.</source>
+            <translation>请输入一个表情符号。</translation>
+        </message>
+        <message>
+            <source>Enter one emoji:</source>
+            <translation>输入一个表情符号：</translation>
+        </message>
+        <message>
+            <source>Images (*.png *.jpg *.jpeg *.webp)</source>
+            <translation>图片 (*.png *.jpg *.jpeg *.webp)</translation>
+        </message>
+        <message>
+            <source>Quota in GB (minimum 0.001):</source>
+            <translation>配额（GB，最小值 0.001）：</translation>
+        </message>
+        <message>
+            <source>Restore workspace</source>
+            <translation>恢复工作区</translation>
+        </message>
+        <message>
+            <source>Save</source>
+            <translation>保存</translation>
+        </message>
+        <message>
+            <source>Set icon</source>
+            <translation>设置图标</translation>
+        </message>
+        <message>
+            <source>Show deleted files</source>
+            <translation>显示已删除文件</translation>
+        </message>
+        <message>
+            <source>Status</source>
+            <translation>状态</translation>
+        </message>
+        <message>
+            <source>Subtitle</source>
+            <translation>副标题</translation>
+        </message>
+        <message>
+            <source>Subtitle:</source>
+            <translation>副标题：</translation>
+        </message>
+        <message>
+            <source>Total quota</source>
+            <translation>总配额</translation>
+        </message>
+        <message>
+            <source>Workspace ID</source>
+            <translation>工作区 ID</translation>
+        </message>
+        <message>
+            <source>ZIP archives (*.zip)</source>
+            <translation>ZIP 压缩包 (*.zip)</translation>
         </message>
     </context>
     <context>
@@ -1220,6 +1516,18 @@
         <message>
             <source>Storage usage</source>
             <translation>存储用量</translation>
+        </message>
+        <message>
+            <source>+  New Workspace</source>
+            <translation>+  新建工作区</translation>
+        </message>
+        <message>
+            <source>Create a new workspace</source>
+            <translation>创建新工作区</translation>
+        </message>
+        <message>
+            <source>New Workspace</source>
+            <translation>新建工作区</translation>
         </message>
     </context>
     <context>
@@ -1761,6 +2069,141 @@
         <message>
             <source>Sign-in link copied to clipboard.</source>
             <translation>已将登录链接复制到剪贴板。</translation>
+        </message>
+        <message>
+            <source>Workspace members — %1</source>
+            <translation>工作区成员 — %1</translation>
+        </message>
+        <message>
+            <source>Manage workspace membership</source>
+            <translation>管理工作区成员</translation>
+        </message>
+        <message>
+            <source>Add member</source>
+            <translation>添加成员</translation>
+        </message>
+        <message>
+            <source>Workspace members</source>
+            <translation>工作区成员</translation>
+        </message>
+        <message>
+            <source>Loading workspace members…</source>
+            <translation>正在加载工作区成员…</translation>
+        </message>
+        <message>
+            <source>Could not load workspace members. Close and try again.</source>
+            <translation>无法加载工作区成员。请关闭后重试。</translation>
+        </message>
+        <message>
+            <source>Manager</source>
+            <translation>管理者</translation>
+        </message>
+        <message>
+            <source>Member</source>
+            <translation>成员</translation>
+        </message>
+        <message>
+            <source>You can view members but cannot add them.</source>
+            <translation>您可以查看成员，但不能添加成员。</translation>
+        </message>
+        <message>
+            <source>No workspace members found.</source>
+            <translation>未找到工作区成员。</translation>
+        </message>
+        <message>
+            <source>Adding workspace member…</source>
+            <translation>正在添加工作区成员…</translation>
+        </message>
+        <message>
+            <source>Could not add workspace member. Try again.</source>
+            <translation>无法添加工作区成员。请重试。</translation>
+        </message>
+        <message>
+            <source>Removing workspace member…</source>
+            <translation>正在移除工作区成员…</translation>
+        </message>
+        <message>
+            <source>Could not remove workspace member. Try again.</source>
+            <translation>无法移除工作区成员。请重试。</translation>
+        </message>
+    </context>
+    <context>
+        <name>OCC::UDriveWorkspaceActions</name>
+        <message>
+            <source> %1 workspace(s) completed before the error.</source>
+            <translation> 出错前已完成 %1 个工作区。</translation>
+        </message>
+        <message>
+            <source> A new workspace or metadata file may be incomplete. Refresh before trying again.</source>
+            <translation> 新工作区或元数据文件可能不完整。请刷新后重试。</translation>
+        </message>
+        <message>
+            <source>Could not open the archive destination.</source>
+            <translation>无法打开压缩包保存位置。</translation>
+        </message>
+        <message>
+            <source>Could not read all workspace contents.</source>
+            <translation>无法读取工作区的全部内容。</translation>
+        </message>
+        <message>
+            <source>Operation canceled. Refresh to check the server.</source>
+            <translation>操作已取消。请刷新以检查服务器状态。</translation>
+        </message>
+        <message>
+            <source>Permission denied by the server.</source>
+            <translation>服务器拒绝了此操作的权限。</translation>
+        </message>
+        <message>
+            <source>The server did not return a metadata file ID.</source>
+            <translation>服务器未返回元数据文件 ID。</translation>
+        </message>
+        <message>
+            <source>The server returned an invalid new workspace.</source>
+            <translation>服务器返回的新工作区无效。</translation>
+        </message>
+        <message>
+            <source>The server supplied an invalid workspace URL.</source>
+            <translation>服务器提供的工作区 URL 无效。</translation>
+        </message>
+        <message>
+            <source>The workspace archive could not be saved.</source>
+            <translation>无法保存工作区压缩包。</translation>
+        </message>
+        <message>
+            <source>The workspace changed. Refresh and try again.</source>
+            <translation>工作区已更改。请刷新后重试。</translation>
+        </message>
+        <message>
+            <source>The workspace description is too large.</source>
+            <translation>工作区描述过大。</translation>
+        </message>
+        <message>
+            <source>The workspace description path is invalid.</source>
+            <translation>工作区描述路径无效。</translation>
+        </message>
+        <message>
+            <source>The workspace metadata path is invalid.</source>
+            <translation>工作区元数据路径无效。</translation>
+        </message>
+        <message>
+            <source>The workspace response is too large.</source>
+            <translation>工作区响应过大。</translation>
+        </message>
+        <message>
+            <source>Workspace archive saved.</source>
+            <translation>工作区压缩包已保存。</translation>
+        </message>
+        <message>
+            <source>Workspace changes saved.</source>
+            <translation>工作区更改已保存。</translation>
+        </message>
+        <message>
+            <source>Workspace operation failed (HTTP %1).</source>
+            <translation>工作区操作失败（HTTP %1）。</translation>
+        </message>
+        <message>
+            <source>Workspaces duplicated.</source>
+            <translation>工作区已复制。</translation>
         </message>
     </context>
 </TS>

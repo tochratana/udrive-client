@@ -46,6 +46,7 @@ set(client_SRCS
     selectivesyncwidget.cpp
     settingsdialog.cpp
     udrivefilebrowser.cpp
+    udriveworkspaceactions.cpp
     udrivethumbnails.cpp
     udriveicons.qrc
     tlserrordialog.cpp

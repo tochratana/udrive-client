@@ -8,8 +8,10 @@
 #include <QWidget>
 #include <QDialog>
 #include <QVariant>
+#include <QMap>
 #include <memory>
 
+class QToolButton;
 class QComboBox;
 class QCompleter;
 class QCheckBox;
@@ -17,6 +19,7 @@ class QHBoxLayout;
 class QVBoxLayout;
 class QAction;
 class QIODevice;
+class QJsonObject;
 class QNetworkRequest;
 class QMenu;
 class QLabel;
@@ -33,12 +36,16 @@ class QTimer;
 class QListView;
 class QAbstractItemView;
 
+namespace OpenAPI { class OAIDrive; }
+
 namespace OCC {
 class PropfindJob;
 class SimpleNetworkJob;
 class JsonApiJob;
+class JsonJob;
 class UDrivePdfPreview;
 class UDriveThumbnails;
+class UDriveWorkspaceActions;
 class DeleteConfirmDialog;
 
 class UDriveFileBrowser : public QWidget
@@ -53,7 +60,8 @@ public:
         SpaceWebUrlRole = Qt::UserRole + 22,
         SpaceDriveIdRole = Qt::UserRole + 23,
         SpaceDisabledRole = Qt::UserRole + 24,
-        SpaceDescriptionRole = Qt::UserRole + 25
+        SpaceDescriptionRole = Qt::UserRole + 25,
+        SpaceDriveRole = Qt::UserRole + 26
     };
     explicit UDriveFileBrowser(AccountState *state, QWidget *parent = nullptr);
     ~UDriveFileBrowser() override;
@@ -66,6 +74,9 @@ public:
     void openWorkspace(const QString &spaceId);
     bool createNewWorkspace();
     void showShares();
+    enum class ShareTab { WithMe, WithOthers, ViaLink };
+    void setShareTab(ShareTab tab);
+    ShareTab shareTab() const { return _shareTab; }
     void showFavorites();
     void showTrash();
     bool createFolder(const QString &name);
@@ -109,6 +120,10 @@ private:
     void setSection(Section section);
     void refreshFavorites();
     void refreshSharedByMe();
+    void refreshIncomingShares();
+    void updateShareFilters();
+    void rebuildSharerFilter();
+    void resetShareFilters();
     bool sharedByMeOverview() const { return _section == Section::Shares && _sharedByMe; }
     QUrl trashRoot() const;
     QUrl selectedRoot() const;
@@ -117,6 +132,7 @@ private:
     void selectAllFiles(bool select);
     void selectOnly(const QModelIndex &index);
     void updateSelectionState();
+    void updateEmptyState();
     bool runOperation(
         const QByteArray &verb, const QUrl &root, const QString &path, const QNetworkRequest &request, const QString &message, QIODevice *body = nullptr);
     void cancelOperation();
@@ -140,18 +156,70 @@ private:
     bool canBrowse() const;
     void setMessage(const QString &message);
     void showWorkspaceCardMenu(const QModelIndex &index);
+    void updateWorkspaceCardHeight();
+    void setWorkspaceTableView(bool table, bool save = true);
+    void appendWorkspace(const OpenAPI::OAIDrive &drive, const QString &name);
+    void showWorkspaceMembers(const QModelIndex &index);
+    void workspaceAction(const QString &action, const QList<OpenAPI::OAIDrive> &drives);
+    void editWorkspaceDescription(const OpenAPI::OAIDrive &drive, const QString &text);
+    void updateWorkspaceImages();
+    QModelIndexList selectedWorkspaces() const;
 
     bool _workspaceLayout = false;
     bool _workspaceOverview = false;
     bool _includeDisabledWorkspaces = false;
+    bool _workspaceNotice = false;
+    QWidget *_fileToolbar = nullptr;
+    QWidget *_workspaceHeaderActions = nullptr;
+    QWidget *_workspaceBulkActions = nullptr;
+    UDriveWorkspaceActions *_workspaceActions = nullptr;
+    QAction *_workspaceDownloadAction = nullptr;
+    QAction *_workspaceDuplicateAction = nullptr;
+    QAction *_workspaceQuotaAction = nullptr;
+    QAction *_workspaceDisableAction = nullptr;
+    QToolButton *_workspaceCancelButton = nullptr;
+    QWidget *_workspaceTitleDivider = nullptr;
+    QWidget *_workspaceControls = nullptr;
+    QWidget *_workspacePage = nullptr;
+    QWidget *_workspaceSelectionControls = nullptr;
+    QStackedWidget *_workspaceViews = nullptr;
+    QTreeView *_workspacesTable = nullptr;
+    QToolButton *_workspaceViewButton = nullptr;
+    QCheckBox *_workspaceHeaderSelectAll = nullptr;
+    bool _workspaceTableMode = false;
+    QLabel *_workspaceCount = nullptr;
+    QLineEdit *_workspaceSearch = nullptr;
+    QPushButton *_includeDisabledButton = nullptr;
+    QCheckBox *_workspaceSelectAll = nullptr;
+    QComboBox *_workspaceSort = nullptr;
     QPushButton *_learnWorkspacesButton = nullptr;
     QListView *_workspacesView = nullptr;
     QStandardItemModel *_workspacesModel = nullptr;
     QSortFilterProxyModel *_workspacesProxy = nullptr;
     QPointer<AccountState> _state;
     Section _section = Section::Personal;
-    bool _sharedByMe = true;
-    QPushButton *_shareScope;
+    ShareTab _shareTab = ShareTab::WithMe;
+    bool _sharedByMe = false;
+    bool _includeHiddenShares = false;
+    bool _incomingSharesApiAvailable = true;
+    bool _shareMetadataAvailable = false;
+    QMap<QString, QString> _shareSharers;
+    QPushButton *_shareScope = nullptr;
+    QWidget *_sharesNav = nullptr;
+    QPushButton *_sharedWithMeButton = nullptr;
+    QPushButton *_sharedWithOthersButton = nullptr;
+    QPushButton *_sharedViaLinkButton = nullptr;
+    QToolButton *_sharesSettingsButton = nullptr;
+    QWidget *_sharesControls = nullptr;
+    QPushButton *_sharesFilterShares = nullptr;
+    QPushButton *_sharesFilterHidden = nullptr;
+    QComboBox *_shareTypeFilter = nullptr;
+    QComboBox *_sharedByFilter = nullptr;
+    QLineEdit *_sharesSearch = nullptr;
+    bool _emptyStateReady = false;
+    QWidget *_emptyState = nullptr;
+    QLabel *_emptyIcon = nullptr;
+    QLabel *_emptyText = nullptr;
     QUrl _root;
     QUrl _webUrl;
     QString _spaceId;
@@ -249,9 +317,10 @@ class UDriveShareDialog : public QDialog
 {
     Q_OBJECT
 public:
+    enum class Target { File, Workspace };
     explicit UDriveShareDialog(AccountState *accountState, const QString &fileName, bool isFolder,
                                const QString &remotePath, const QUrl &linkUrl, const QString &spaceId = {},
-                               QWidget *parent = nullptr);
+                               QWidget *parent = nullptr, Target target = Target::File);
     ~UDriveShareDialog() override;
 
 private:
@@ -263,12 +332,22 @@ private:
     void fetchShares();
     void revokeShare(const QString &shareId);
     void copyLink();
+    void fetchWorkspaceMembers();
+    void inviteWorkspaceMember();
+    void removeWorkspaceMember(const QString &permissionId);
+    SimpleNetworkJob *workspaceRequest(const QByteArray &verb, const QString &suffix, const QJsonObject &body);
+    void cancelWorkspaceRequest();
 
     QPointer<AccountState> _accountState;
     QTimer *_recipientTimer = nullptr;
     QCompleter *_recipientCompleter = nullptr;
     QStandardItemModel *_recipientModel = nullptr;
     QPointer<JsonApiJob> _recipientJob;
+    QPointer<SimpleNetworkJob> _workspaceJob;
+    Target _target = Target::File;
+    QMap<QString, QString> _workspaceRoles;
+    bool _canInviteMembers = false;
+    bool _canRemoveMembers = false;
     QString _recipientId;
     QString _recipientLabel;
     int _recipientType = -1;

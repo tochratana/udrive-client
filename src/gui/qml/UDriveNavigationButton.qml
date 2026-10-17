@@ -13,7 +13,7 @@ T.Button {
     readonly property bool dark: palette.window.hslLightness < 0.5
     readonly property color textColor: dark ? "#CACCCD" : "#39443F"
 
-    implicitHeight: control.collapsed ? 36 : detail.length ? 60 : 38
+    implicitHeight: detail.length && !control.collapsed ? 60 : 38
     implicitWidth: control.collapsed ? 36 : -1
     leftPadding: control.collapsed ? 0 : text.length ? 12 : 8
     rightPadding: control.collapsed ? 0 : text.length ? 12 : 8
