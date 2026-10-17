@@ -679,9 +679,19 @@ void SettingsDialog::openNewFileMenu()
     auto *root = _ui->quickWidget->rootObject();
     auto *button = root ? root->findChild<QQuickItem *>(QStringLiteral("udriveNew")) : nullptr;
     if (!files || !button || !button->isVisible()) return;
+    if (files->isWorkspacesOverview()) {
+        files->createNewWorkspace();
+        return;
+    }
     const QRectF bounds = button->mapRectToScene(button->boundingRect());
     const QPoint position(qRound(bounds.left()), qRound(bounds.bottom()) + 4);
     files->showNewMenu(_ui->quickWidget->mapToGlobal(position), qRound(bounds.width()));
+}
+
+bool SettingsDialog::isWorkspacesOverview() const
+{
+    auto *files = qobject_cast<UDriveFileBrowser *>(_ui->stack->currentWidget());
+    return files && files->isWorkspacesOverview();
 }
 
 QString SettingsDialog::storageLabel() const
@@ -816,6 +826,7 @@ void SettingsDialog::updateUDriveAppearance()
         "QLineEdit#driveSearch QToolButton:pressed { background: %6; }"
         "QTreeView#driveFiles { border: none; background: %1; color: %2; padding: 0; outline: none; }"
         "QListView#driveTiles { border: none; background: %1; color: %2; padding: 0; outline: none; }"
+        "QListView#driveWorkspacesView { border: none; background: %1; color: %2; padding: 4px; outline: none; }"
         "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"] { min-height: 32px; padding: 0 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 13px; font-weight: 500; }"
         "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"]:hover { background: %4; border-color: transparent; }"
         "QStackedWidget#stack QPushButton[driveToolbarButton=\"true\"]:pressed { background: %4; border-color: transparent; }"
@@ -903,6 +914,7 @@ void SettingsDialog::onAccountAdded(AccountState *state)
                 break;
             }
             Q_EMIT currentPageChanged();
+            Q_EMIT workspaceChanged();
         });
     }
 
@@ -1014,6 +1026,14 @@ void SettingsDialog::setVisible(bool visible)
 
 void SettingsDialog::setCurrentPage(SettingsPage currentPage)
 {
+    if (currentPage == _currentPage && _currentPage == SettingsPage::Workspaces) {
+        if (_lastAccount) {
+            if (auto *files = _filesForAccount.value(_lastAccount->uuid())) {
+                files->showWorkspaces();
+            }
+        }
+        return;
+    }
     _currentPage = currentPage;
     _currentAccount = nullptr;
     switch (_currentPage) {
@@ -1054,6 +1074,7 @@ void SettingsDialog::setCurrentPage(SettingsPage currentPage)
     }
     Q_EMIT currentAccountChanged();
     Q_EMIT currentPageChanged();
+    Q_EMIT workspaceChanged();
 }
 
 SettingsDialog::SettingsPage SettingsDialog::currentPage() const

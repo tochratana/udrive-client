@@ -48,6 +48,7 @@ class OWNCLOUDGUI_EXPORT SettingsDialog : public QMainWindow
     Q_PROPERTY(SettingsPage currentPage READ currentPage WRITE setCurrentPage NOTIFY currentPageChanged)
     Q_PROPERTY(Account *currentAccount READ currentAccount WRITE setCurrentAccount NOTIFY currentAccountChanged)
     Q_PROPERTY(bool canCreateFiles READ canCreateFiles NOTIFY workspaceChanged)
+    Q_PROPERTY(bool isWorkspacesOverview READ isWorkspacesOverview NOTIFY workspaceChanged)
     Q_PROPERTY(QString storageLabel READ storageLabel NOTIFY workspaceChanged)
     Q_PROPERTY(double storageFraction READ storageFraction NOTIFY workspaceChanged)
     Q_PROPERTY(bool sidebarVisible READ isSidebarVisible WRITE setSidebarVisible NOTIFY sidebarVisibilityChanged)
@@ -81,6 +82,7 @@ public Q_SLOTS:
     void createNewAccount();
     void openNewFileMenu();
     bool canCreateFiles() const;
+    bool isWorkspacesOverview() const;
     QString storageLabel() const;
     double storageFraction() const;
     void runFolderWizard(Account *account);

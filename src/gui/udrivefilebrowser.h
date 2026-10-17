@@ -47,12 +47,24 @@ class UDriveFileBrowser : public QWidget
 public:
     enum class Section { Personal, Workspaces, Shares, Favorites, Trash };
     Q_ENUM(Section)
+    enum WorkspaceRole {
+        SpaceIdRole = Qt::UserRole + 20,
+        SpaceWebDavUrlRole = Qt::UserRole + 21,
+        SpaceWebUrlRole = Qt::UserRole + 22,
+        SpaceDriveIdRole = Qt::UserRole + 23,
+        SpaceDisabledRole = Qt::UserRole + 24,
+        SpaceDescriptionRole = Qt::UserRole + 25
+    };
     explicit UDriveFileBrowser(AccountState *state, QWidget *parent = nullptr);
     ~UDriveFileBrowser() override;
     AccountState *accountState() const { return _state; }
     void showPersonal();
     void showHome();
     void showWorkspaces();
+    void showWorkspacesOverview();
+    bool isWorkspacesOverview() const { return _section == Section::Workspaces && _workspaceOverview; }
+    void openWorkspace(const QString &spaceId);
+    bool createNewWorkspace();
     void showShares();
     void showFavorites();
     void showTrash();
@@ -127,8 +139,15 @@ private:
     QString localPath(const QString &remotePath, const QUrl &root = {}) const;
     bool canBrowse() const;
     void setMessage(const QString &message);
+    void showWorkspaceCardMenu(const QModelIndex &index);
 
     bool _workspaceLayout = false;
+    bool _workspaceOverview = false;
+    bool _includeDisabledWorkspaces = false;
+    QPushButton *_learnWorkspacesButton = nullptr;
+    QListView *_workspacesView = nullptr;
+    QStandardItemModel *_workspacesModel = nullptr;
+    QSortFilterProxyModel *_workspacesProxy = nullptr;
     QPointer<AccountState> _state;
     Section _section = Section::Personal;
     bool _sharedByMe = true;

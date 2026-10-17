@@ -3300,6 +3300,74 @@ private Q_SLOTS:
         QVERIFY(!completer->popup()->isVisible());
     }
 
+    void workspacesOverviewCatalogAndNavigation()
+    {
+        DriveServer server;
+        auto *account = new Account(QUuid::createUuid(), QStringLiteral("test"), server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        browser.resize(1050, 760);
+        browser.show();
+
+        auto *search = browser.takeSearchField();
+        QVERIFY(search != nullptr);
+
+        auto *tree = browser.findChild<QTreeView *>(QStringLiteral("driveFiles"));
+        auto *workspacesView = browser.findChild<QListView *>(QStringLiteral("driveWorkspacesView"));
+        auto *status = browser.findChild<QLabel *>(QStringLiteral("driveStatus"));
+        QVERIFY(tree);
+        QVERIFY(workspacesView);
+        QVERIFY(status);
+
+        // Initially in Personal section
+        QTRY_VERIFY(tree->model()->rowCount() > 0);
+        QVERIFY(!browser.isWorkspacesOverview());
+        QVERIFY(tree->isVisible());
+        QVERIFY(!workspacesView->isVisible());
+
+        // Switch to Workspaces with workspaceLayout enabled -> switches to Overview
+        browser.showWorkspaces();
+        QVERIFY(browser.isWorkspacesOverview());
+        QTRY_VERIFY(workspacesView->isVisible());
+        QVERIFY(!tree->isVisible());
+
+        // Workspaces model contains non-personal, non-share spaces ("Team files")
+        QTRY_COMPARE(workspacesView->model()->rowCount(), 1);
+        const auto firstIndex = workspacesView->model()->index(0, 0);
+        QCOMPARE(firstIndex.data(Qt::DisplayRole).toString(), QStringLiteral("Team files"));
+        QCOMPARE(firstIndex.data(UDriveFileBrowser::SpaceIdRole).toString(), QStringLiteral("team"));
+        QVERIFY(status->text().contains(QStringLiteral("1")));
+
+        // Search filtering
+        search->setText(QStringLiteral("Nonexistent"));
+        QCOMPARE(workspacesView->model()->rowCount(), 0);
+        search->setText(QStringLiteral("Team"));
+        QCOMPARE(workspacesView->model()->rowCount(), 1);
+        search->clear();
+        QCOMPARE(workspacesView->model()->rowCount(), 1);
+
+        // Navigate inside the workspace
+        browser.openWorkspace(QStringLiteral("team"));
+        QVERIFY(!browser.isWorkspacesOverview());
+        QTRY_VERIFY(tree->isVisible());
+        QVERIFY(!workspacesView->isVisible());
+        QTRY_COMPARE(tree->model()->rowCount(), 1);
+
+        // Breadcrumb shows "Workspaces" button
+        QTRY_VERIFY(browser.findChild<QAbstractButton *>(QStringLiteral("driveBreadcrumbWorkspaces")) != nullptr);
+        auto *workspacesCrumb = browser.findChild<QAbstractButton *>(QStringLiteral("driveBreadcrumbWorkspaces"));
+        QVERIFY(workspacesCrumb->isVisible());
+
+        // Clicking "Workspaces" breadcrumb returns to overview catalog
+        workspacesCrumb->click();
+        QTRY_VERIFY(browser.isWorkspacesOverview());
+        QTRY_VERIFY(workspacesView->isVisible());
+        QVERIFY(!tree->isVisible());
+        QCOMPARE(workspacesView->model()->rowCount(), 1);
+    }
+
 };
 
 QTEST_MAIN(TestUDriveFileBrowser)

@@ -45,7 +45,8 @@ enum class Symbol {
     Activity,
     MoreVertical,
     Sidebar,
-    Share
+    Share,
+    Members
 };
 
 // Draw the same rounded, 24-unit stroke icons at any device pixel ratio.
@@ -268,6 +269,20 @@ public:
             line({{8.3, 11.1}, {15.7, 7.4}});
             line({{8.3, 12.9}, {15.7, 16.6}});
             break;
+        case Symbol::Members: {
+            painter->drawEllipse(QPointF(9, 7.5), 3, 3);
+            QPainterPath body;
+            body.moveTo(3.5, 18.5);
+            body.cubicTo(3.5, 14.5, 6, 13.5, 9, 13.5);
+            body.cubicTo(12, 13.5, 14.5, 14.5, 14.5, 18.5);
+            painter->drawPath(body);
+            painter->drawEllipse(QPointF(16, 8.5), 2.2, 2.2);
+            QPainterPath body2;
+            body2.moveTo(15.5, 14);
+            body2.cubicTo(17.5, 14.2, 20.5, 15.2, 20.5, 18.5);
+            painter->drawPath(body2);
+            break;
+        }
         }
         painter->restore();
     }

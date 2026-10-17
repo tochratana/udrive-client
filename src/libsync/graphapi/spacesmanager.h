@@ -59,9 +59,10 @@ namespace GraphApi {
         void spacesAdded(QUuid accountId, QList<OCC::GraphApi::Space *> spaces, int totalSpaceCount);
         void spacesRemoved(QUuid accountId, QList<QString> deletedSpaces, int totalSpaceCount);
 
-    private:
+    public Q_SLOTS:
         void refresh();
 
+    private:
         QPointer<Account> _account;
         QTimer *_refreshTimer;
         QHash<QString, Space *> _spaces;

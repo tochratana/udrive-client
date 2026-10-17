@@ -287,10 +287,64 @@ public:
         , _action(std::move(action))
         , _enabled(std::move(enabled))
     {
+        if (_tree && _tree->viewport()) {
+            _tree->viewport()->installEventFilter(this);
+        }
     }
+
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (_tree && watched == _tree->viewport()) {
+            if (event->type() == QEvent::MouseMove) {
+                const auto *mouse = static_cast<QMouseEvent *>(event);
+                const QPoint pos = mouse->position().toPoint();
+                const QModelIndex index = _tree->indexAt(pos);
+                const QPersistentModelIndex rowName = index.isValid() ? QPersistentModelIndex(index.siblingAtColumn(0)) : QPersistentModelIndex();
+                if (rowName != _hoveredRow) {
+                    if (_hoveredRow.isValid()) {
+                        _tree->viewport()->update(rowRect(_hoveredRow));
+                    }
+                    _hoveredRow = rowName;
+                    if (_hoveredRow.isValid()) {
+                        _tree->viewport()->update(rowRect(_hoveredRow));
+                    }
+                } else if (index.isValid() && index.column() == 4) {
+                    _tree->viewport()->update(_tree->visualRect(index));
+                }
+
+                bool overAction = false;
+                if (index.isValid() && index.column() == 4) {
+                    const auto name = index.siblingAtColumn(0);
+                    const QRect rect = _tree->visualRect(index);
+                    for (int action = RowFavorite; action <= RowMore; ++action) {
+                        if (visible(name, action) && hitRect(actionRect(rect, action)).contains(pos)) {
+                            overAction = true;
+                            break;
+                        }
+                    }
+                }
+                _tree->viewport()->setCursor(overAction ? Qt::PointingHandCursor : Qt::ArrowCursor);
+            } else if (event->type() == QEvent::Leave) {
+                if (_hoveredRow.isValid()) {
+                    const auto old = _hoveredRow;
+                    _hoveredRow = QPersistentModelIndex();
+                    _tree->viewport()->update(rowRect(old));
+                }
+                _tree->viewport()->setCursor(Qt::ArrowCursor);
+            }
+        }
+        return QStyledItemDelegate::eventFilter(watched, event);
+    }
+
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
     {
         auto adjusted = option;
+        const auto name = index.siblingAtColumn(0);
+        if (isRowHovered(name)) {
+            adjusted.state |= QStyle::State_MouseOver;
+        } else {
+            adjusted.state &= ~QStyle::State_MouseOver;
+        }
         if (index.column() == 0) {
             adjusted.rect.adjust(34, 0, 0, 0);
             QStyledItemDelegate::paint(painter, adjusted, index);
@@ -310,16 +364,21 @@ public:
             return;
         }
         if (index.column() == 4) {
-            QStyledItemDelegate::paint(painter, option, index);
-            const auto name = index.siblingAtColumn(0);
-            const UDriveIcons::Symbol symbols[]{UDriveIcons::Symbol::StarFilled, UDriveIcons::Symbol::Share,
-                UDriveIcons::Symbol::Link, UDriveIcons::Symbol::MoreVertical};
+            QStyledItemDelegate::paint(painter, adjusted, index);
+            const bool isFavorite = name.data(FavoriteRole).toBool();
+            const UDriveIcons::Symbol symbols[]{
+                isFavorite ? UDriveIcons::Symbol::StarFilled : UDriveIcons::Symbol::Star,
+                UDriveIcons::Symbol::Share,
+                UDriveIcons::Symbol::Link,
+                UDriveIcons::Symbol::MoreVertical
+            };
             for (int action = RowFavorite; action <= RowMore; ++action) {
                 if (!visible(name, action)) continue;
                 const bool enabled = _enabled(name, action);
                 const QRect icon = actionRect(option.rect, action);
-                if (enabled && option.state.testFlag(QStyle::State_MouseOver)
-                    && hitRect(icon).contains(_tree->viewport()->mapFromGlobal(QCursor::pos()))) {
+                const bool iconHovered = enabled && _tree && _tree->viewport() && _tree->viewport()->underMouse()
+                    && hitRect(icon).contains(_tree->viewport()->mapFromGlobal(QCursor::pos()));
+                if (iconHovered) {
                     painter->save();
                     painter->setPen(Qt::NoPen);
                     auto color = option.palette.color(QPalette::Text); color.setAlpha(22);
@@ -331,7 +390,7 @@ public:
             }
             return;
         }
-        QStyledItemDelegate::paint(painter, option, index);
+        QStyledItemDelegate::paint(painter, adjusted, index);
     }
     QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
     {
@@ -359,12 +418,20 @@ public:
     {
         if (event->type() == QEvent::ToolTip && index.column() == 4) {
             const auto name = index.siblingAtColumn(0);
-            const char *labels[]{QT_TRANSLATE_NOOP("OCC::UDriveFileBrowser", "Remove from Favorites"),
+            const char *labels[]{QT_TRANSLATE_NOOP("OCC::UDriveFileBrowser", "Favorite"),
                 QT_TRANSLATE_NOOP("OCC::UDriveFileBrowser", "Share this item with other users"),
                 QT_TRANSLATE_NOOP("OCC::UDriveFileBrowser", "Copy sign-in link"), QT_TRANSLATE_NOOP("OCC::UDriveFileBrowser", "Actions")};
             for (int action = RowFavorite; action <= RowMore; ++action) {
                 if (visible(name, action) && hitRect(actionRect(option.rect, action)).contains(event->pos())) {
-                    QToolTip::showText(event->globalPos(), QCoreApplication::translate("OCC::UDriveFileBrowser", labels[action]), view->viewport());
+                    QString label;
+                    if (action == RowFavorite) {
+                        label = name.data(FavoriteRole).toBool()
+                            ? QCoreApplication::translate("OCC::UDriveFileBrowser", "Remove from Favorites")
+                            : QCoreApplication::translate("OCC::UDriveFileBrowser", "Add to Favorites");
+                    } else {
+                        label = QCoreApplication::translate("OCC::UDriveFileBrowser", labels[action]);
+                    }
+                    QToolTip::showText(event->globalPos(), label, view->viewport());
                     return true;
                 }
             }
@@ -377,13 +444,38 @@ public:
 private:
     static QRect actionRect(const QRect &row, int action) { return QRect(row.right() - 138 + action * 34, row.center().y() - 9, 18, 18); }
     static QRect hitRect(const QRect &icon) { return icon.adjusted(-5, -5, 5, 5); }
-    static bool visible(const QModelIndex &name, int action)
+
+    QRect rowRect(const QPersistentModelIndex &index) const
     {
-        return action == RowMore || (!name.data(TrashedRole).toBool() && (action != RowFavorite || name.data(FavoriteRole).toBool()));
+        if (!index.isValid() || !_tree || !_tree->viewport()) return {};
+        const QRect rect = _tree->visualRect(index);
+        return QRect(0, rect.top(), _tree->viewport()->width(), rect.height());
     }
-    QTreeView *_tree;
+
+    bool isRowHovered(const QModelIndex &name) const
+    {
+        if (_hoveredRow.isValid() && _hoveredRow == name)
+            return true;
+        if (!_tree || !_tree->viewport() || !_tree->viewport()->underMouse())
+            return false;
+        const QPoint pos = _tree->viewport()->mapFromGlobal(QCursor::pos());
+        const QModelIndex atPos = _tree->indexAt(pos);
+        return atPos.isValid() && atPos.siblingAtColumn(0) == name;
+    }
+
+    bool visible(const QModelIndex &name, int action) const
+    {
+        if (action == RowMore) return true;
+        if (name.data(TrashedRole).toBool()) return false;
+        if (action == RowFavorite)
+            return name.data(FavoriteRole).toBool() || isRowHovered(name);
+        return true;
+    }
+
+    QTreeView *_tree = nullptr;
     std::function<void(const QModelIndex &, int)> _action;
     std::function<bool(const QModelIndex &, int)> _enabled;
+    QPersistentModelIndex _hoveredRow;
 };
 
 class FileTileDelegate : public QStyledItemDelegate
@@ -456,6 +548,121 @@ public:
 private:
     static QRect moreRect(const QRect &rect) { return QRect(rect.right() - 35, rect.top() + 172, 18, 18); }
     std::function<void(const QModelIndex &)> _more;
+};
+
+class WorkspaceCardDelegate : public QStyledItemDelegate
+{
+public:
+    WorkspaceCardDelegate(QListView *view,
+                          std::function<void(const QModelIndex &)> memberAction,
+                          std::function<void(const QModelIndex &)> moreAction,
+                          std::function<void(const QModelIndex &)> toggleSelect)
+        : QStyledItemDelegate(view)
+        , _memberAction(std::move(memberAction))
+        , _moreAction(std::move(moreAction))
+        , _toggleSelect(std::move(toggleSelect))
+    {
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const override
+    {
+        return QSize(224, 184);
+    }
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        const bool dark = option.palette.color(QPalette::Window).lightness() < 128;
+        const bool selected = option.state & QStyle::State_Selected;
+        const bool hover = option.state & QStyle::State_MouseOver;
+        const QRect card = option.rect.adjusted(6, 6, -6, -6);
+
+        painter->save();
+        painter->setClipRect(card);
+        painter->setRenderHint(QPainter::Antialiasing);
+
+        const QColor bg = selected ? (dark ? QColor("#223B2A") : QColor("#E3F6E9"))
+            : hover                ? (dark ? QColor("#333842") : QColor("#F0F4F2"))
+                                   : (dark ? QColor("#282C34") : QColor("#FFFFFF"));
+        const QColor border = selected ? QColor("#40D979")
+            : hover                    ? (dark ? QColor("#4E5562") : QColor("#CCD3D9"))
+                                       : (dark ? QColor("#3B404A") : QColor("#E1E5E8"));
+
+        painter->setPen(QPen(border, selected ? 2 : 1));
+        painter->setBrush(bg);
+        painter->drawRoundedRect(card.adjusted(1, 1, -1, -1), 12, 12);
+
+        const QRect check(card.left() + 12, card.top() + 12, 18, 18);
+        painter->setPen(QPen(selected ? QColor("#40D979") : QColor(dark ? "#5A6270" : "#A2ABB5"), 1.5));
+        painter->setBrush(selected ? QColor("#40D979") : Qt::transparent);
+        painter->drawRoundedRect(check, 4, 4);
+        if (selected) {
+            painter->setPen(QPen(QColor("#143B20"), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter->drawLine(check.topLeft() + QPoint(4, 9), check.topLeft() + QPoint(8, 13));
+            painter->drawLine(check.topLeft() + QPoint(8, 13), check.topLeft() + QPoint(14, 5));
+        }
+
+        const QRect iconRect(card.center().x() - 26, card.top() + 34, 52, 52);
+        const QColor gridColor = dark ? QColor("#C8D0D8") : QColor("#4A525A");
+        UDriveIcons::icon(UDriveIcons::Symbol::Grid, false, gridColor).paint(painter, iconRect);
+
+        const QRect titleRect(card.left() + 14, card.bottom() - 32, card.width() - 76, 22);
+        painter->setPen(QColor(dark ? "#FFFFFF" : "#1A201C"));
+        auto font = option.font;
+        font.setWeight(QFont::DemiBold);
+        font.setPointSizeF(qMax(10.0, font.pointSizeF()));
+        painter->setFont(font);
+        painter->drawText(titleRect, Qt::AlignVCenter | Qt::AlignLeft, painter->fontMetrics().elidedText(index.data().toString(), Qt::ElideRight, titleRect.width()));
+
+        const QColor actionColor = dark ? QColor("#8E98A4") : QColor("#6B7580");
+        UDriveIcons::icon(UDriveIcons::Symbol::Members, false, actionColor).paint(painter, memberRect(option.rect));
+        UDriveIcons::icon(UDriveIcons::Symbol::MoreVertical, false, actionColor).paint(painter, moreRect(option.rect));
+
+        painter->restore();
+    }
+
+    bool editorEvent(QEvent *event, QAbstractItemModel *model, const QStyleOptionViewItem &option, const QModelIndex &index) override
+    {
+        if (event->type() == QEvent::MouseButtonRelease) {
+            const auto *mouse = static_cast<QMouseEvent *>(event);
+            if (mouse->button() == Qt::LeftButton) {
+                const QPoint pt = mouse->position().toPoint();
+                if (checkRect(option.rect).adjusted(-4, -4, 4, 4).contains(pt)) {
+                    if (_toggleSelect) _toggleSelect(index);
+                    return true;
+                }
+                if (memberRect(option.rect).adjusted(-4, -4, 4, 4).contains(pt)) {
+                    if (_memberAction) _memberAction(index);
+                    return true;
+                }
+                if (moreRect(option.rect).adjusted(-4, -4, 4, 4).contains(pt)) {
+                    if (_moreAction) _moreAction(index);
+                    return true;
+                }
+            }
+        }
+        return QStyledItemDelegate::editorEvent(event, model, option, index);
+    }
+
+private:
+    static QRect checkRect(const QRect &rect)
+    {
+        const QRect card = rect.adjusted(6, 6, -6, -6);
+        return QRect(card.left() + 12, card.top() + 12, 18, 18);
+    }
+    static QRect memberRect(const QRect &rect)
+    {
+        const QRect card = rect.adjusted(6, 6, -6, -6);
+        return QRect(card.right() - 54, card.bottom() - 31, 20, 20);
+    }
+    static QRect moreRect(const QRect &rect)
+    {
+        const QRect card = rect.adjusted(6, 6, -6, -6);
+        return QRect(card.right() - 28, card.bottom() - 31, 20, 20);
+    }
+
+    std::function<void(const QModelIndex &)> _memberAction;
+    std::function<void(const QModelIndex &)> _moreAction;
+    std::function<void(const QModelIndex &)> _toggleSelect;
 };
 
 class FilesProxy : public QSortFilterProxyModel
@@ -1293,6 +1500,15 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     headingRow->setSpacing(8);
     headingRow->setAlignment(Qt::AlignVCenter);
     headingRow->addWidget(_heading);
+    _learnWorkspacesButton = new QPushButton(tr("Learn about workspaces"), this);
+    _learnWorkspacesButton->setObjectName(QStringLiteral("driveLearnWorkspaces"));
+    _learnWorkspacesButton->setProperty("driveToolbarButton", true);
+    _learnWorkspacesButton->setCursor(Qt::PointingHandCursor);
+    _learnWorkspacesButton->hide();
+    connect(_learnWorkspacesButton, &QPushButton::clicked, this, [] {
+        QDesktopServices::openUrl(QUrl(QStringLiteral("https://unity-workspace.com/docs")));
+    });
+    headingRow->addWidget(_learnWorkspacesButton);
     _shareScope = new QPushButton(tr("Shared by me"), this);
     _shareScope->setObjectName(QStringLiteral("driveShareScope"));
     _shareScope->setProperty("driveToolbarButton", true);
@@ -1443,7 +1659,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _tree->setItemDelegate(new FileRowDelegate(_tree, [this](const QModelIndex &index, int action) {
         selectOnly(index);
         updateActions();
-        if (action == RowFavorite && index.data(FavoriteRole).toBool() && _favoriteAction->isEnabled())
+        if (action == RowFavorite && _favoriteAction->isEnabled())
             _favoriteAction->trigger();
         else if (action == RowShare && _shareAction->isEnabled())
             _shareAction->trigger();
@@ -1476,9 +1692,60 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         selectOnly(index); updateActions();
         if (_fileMenu->isEnabled()) _fileMenu->popup(QCursor::pos());
     }));
+    _workspacesModel = new QStandardItemModel(this);
+    _workspacesProxy = new QSortFilterProxyModel(this);
+    _workspacesProxy->setSourceModel(_workspacesModel);
+    _workspacesProxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
+    _workspacesProxy->setSortCaseSensitivity(Qt::CaseInsensitive);
+    _workspacesProxy->setSortRole(Qt::DisplayRole);
+    _workspacesView = new QListView(this);
+    _workspacesView->setObjectName(QStringLiteral("driveWorkspacesView"));
+    _workspacesView->setAccessibleName(tr("Workspaces catalog"));
+    _workspacesView->setModel(_workspacesProxy);
+    _workspacesView->setViewMode(QListView::IconMode);
+    _workspacesView->setResizeMode(QListView::Adjust);
+    _workspacesView->setMovement(QListView::Static);
+    _workspacesView->setFlow(QListView::LeftToRight);
+    _workspacesView->setWrapping(true);
+    _workspacesView->setGridSize(QSize(224, 184));
+    _workspacesView->setUniformItemSizes(true);
+    _workspacesView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    _workspacesView->setSelectionBehavior(QAbstractItemView::SelectItems);
+    _workspacesView->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    _workspacesView->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    _workspacesView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    _workspacesView->setMouseTracking(true);
+    auto *cardDelegate = new WorkspaceCardDelegate(_workspacesView,
+        [this](const QModelIndex &index) {
+            const QString spaceId = index.data(SpaceIdRole).toString();
+            const QString name = index.data(Qt::DisplayRole).toString();
+            const QUrl webUrl = index.data(SpaceWebUrlRole).toUrl();
+            if (_state) {
+                auto *dialog = new UDriveShareDialog(_state, name, true, QString(), webUrl, spaceId, this);
+                dialog->setAttribute(Qt::WA_DeleteOnClose);
+                dialog->open();
+            }
+        },
+        [this](const QModelIndex &index) {
+            showWorkspaceCardMenu(index);
+        },
+        [this](const QModelIndex &index) {
+            _workspacesView->selectionModel()->select(index, QItemSelectionModel::Toggle);
+            updateSelectionState();
+            updateActions();
+        });
+    _workspacesView->setItemDelegate(cardDelegate);
+    connect(_workspacesView, &QListView::activated, this, [this](const QModelIndex &index) {
+        const QString spaceId = index.data(SpaceIdRole).toString();
+        if (!spaceId.isEmpty()) openWorkspace(spaceId);
+    });
+    connect(_workspacesView->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this] {
+        updateSelectionState();
+        updateActions();
+    });
     _fileViews = new QStackedWidget(this);
     _fileViews->setObjectName(QStringLiteral("driveFileViews"));
-    _fileViews->addWidget(_tree); _fileViews->addWidget(_tiles);
+    _fileViews->addWidget(_tree); _fileViews->addWidget(_tiles); _fileViews->addWidget(_workspacesView);
     layout->addWidget(_fileViews, 1);
 
     auto *actions = new QHBoxLayout;
@@ -1582,9 +1849,23 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     connect(_proxy, &QAbstractItemModel::layoutChanged, this, &UDriveFileBrowser::scheduleThumbnails);
     connect(_proxy, &QAbstractItemModel::modelReset, this, &UDriveFileBrowser::scheduleThumbnails);
     connect(_search.data(), &QLineEdit::textChanged, _proxy, &QSortFilterProxyModel::setFilterFixedString);
+    connect(_search.data(), &QLineEdit::textChanged, _workspacesProxy, &QSortFilterProxyModel::setFilterFixedString);
     connect(_search.data(), &QLineEdit::textChanged, this, &UDriveFileBrowser::scheduleThumbnails);
     connect(_spaces, &QComboBox::currentIndexChanged, this, &UDriveFileBrowser::selectSpace);
-    connect(_refreshButton, &QPushButton::clicked, this, &UDriveFileBrowser::refresh);
+    connect(_refreshButton, &QPushButton::clicked, this, [this] {
+        if (isWorkspacesOverview()) {
+            if (_state && _state->account() && _state->account()->spacesManager()) {
+                _state->account()->spacesManager()->refresh();
+            }
+            updateSpaces();
+            return;
+        }
+        refresh();
+    });
+    connect(_workspacesProxy, &QAbstractItemModel::rowsInserted, this, &UDriveFileBrowser::updateSelectionState);
+    connect(_workspacesProxy, &QAbstractItemModel::rowsRemoved, this, &UDriveFileBrowser::updateSelectionState);
+    connect(_workspacesProxy, &QAbstractItemModel::modelReset, this, &UDriveFileBrowser::updateSelectionState);
+    connect(_workspacesProxy, &QAbstractItemModel::layoutChanged, this, &UDriveFileBrowser::updateActions);
     addAction(tr("Refresh"), QKeySequence::Refresh, this, &UDriveFileBrowser::refresh)->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     addAction(tr("Search"), QKeySequence::Find, this, [this] { _search->setFocus(); })->setShortcutContext(Qt::WidgetWithChildrenShortcut);
     connect(_tree, &QTreeView::activated, this, &UDriveFileBrowser::activateSelection);
@@ -1763,6 +2044,7 @@ UDriveFileBrowser::~UDriveFileBrowser()
 
 QAbstractItemView *UDriveFileBrowser::activeView() const
 {
+    if (isWorkspacesOverview() && _workspacesView) return _workspacesView;
     return _viewMode == ViewMode::Tiles ? static_cast<QAbstractItemView *>(_tiles) : _tree;
 }
 
@@ -1809,6 +2091,8 @@ void UDriveFileBrowser::setSortMode(SortMode mode, bool save)
     const QSignalBlocker blocker(_tree->header());
     _tree->sortByColumn(column, order);
     _proxy->sort(column, order);
+    if (_workspacesProxy)
+        _workspacesProxy->sort(0, mode == SortMode::NameDescending ? Qt::DescendingOrder : Qt::AscendingOrder);
     const auto actions = _sortButton->menu()->actions();
     for (int i = 0; i < actions.size(); ++i) actions.at(i)->setChecked(i == int(mode));
     const auto *action = actions.at(int(mode));
@@ -1865,7 +2149,123 @@ void UDriveFileBrowser::showHome()
 
 void UDriveFileBrowser::showWorkspaces()
 {
-    setSection(Section::Workspaces);
+    if (_workspaceLayout) {
+        showWorkspacesOverview();
+    } else {
+        setSection(Section::Workspaces);
+    }
+}
+
+void UDriveFileBrowser::showWorkspacesOverview()
+{
+    closePdf();
+    _section = Section::Workspaces;
+    _workspaceOverview = true;
+    cancelListing();
+    cancelDownload();
+    if (_uploading) cancelOperation();
+    _spaceId.clear();
+    _path.clear();
+    updateSpaces();
+    Q_EMIT sectionChanged(Section::Workspaces);
+    Q_EMIT creationAvailabilityChanged();
+}
+
+void UDriveFileBrowser::openWorkspace(const QString &spaceId)
+{
+    if (!_state || !_state->account()) return;
+    auto *manager = _state->account()->spacesManager();
+    GraphApi::Space *space = manager ? manager->space(spaceId) : nullptr;
+    if (!space && manager) {
+        for (auto *s : manager->spaces()) {
+            if (s->id() == spaceId || s->driveId() == spaceId) {
+                space = s;
+                break;
+            }
+        }
+    }
+    if (!space) return;
+
+    closePdf();
+    cancelListing();
+    cancelDownload();
+    if (_uploading) cancelOperation();
+
+    _section = Section::Workspaces;
+    _workspaceOverview = false;
+    _spaceId = space->id();
+    _root = space->webDavUrl();
+    _root.setPath(withoutTrailingSlash(_root.path()));
+    _webUrl = space->webUrl();
+    _driveId = space->driveId();
+    _spaceName = space->displayName();
+    _path.clear();
+    _search->clear();
+
+    _fileViews->setCurrentWidget(_viewMode == ViewMode::Tiles ? static_cast<QWidget *>(_tiles) : _tree);
+    _message->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
+    updateBreadcrumbs();
+    updateSpaces();
+    refresh();
+    Q_EMIT sectionChanged(Section::Workspaces);
+    Q_EMIT creationAvailabilityChanged();
+}
+
+bool UDriveFileBrowser::createNewWorkspace()
+{
+    if (!canBrowse() || !_state || !_state->account()) return false;
+    bool ok = false;
+    const QString name = UDriveInputDialog::getText(this, tr("New Workspace"), tr("Workspace name:"), QString(), tr("Create Workspace"), &ok);
+    if (!ok || name.trimmed().isEmpty()) return false;
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("name"), name.trimmed());
+
+    auto *job = new SimpleNetworkJob(_state->account(), _state->account()->url(), QStringLiteral("graph/v1.0/drives"), "POST", payload, QNetworkRequest(), this);
+    connect(job, &SimpleNetworkJob::finishedSignal, this, [this, job, name] {
+        job->deleteLater();
+        if (job->httpStatusCode() == 200 || job->httpStatusCode() == 201) {
+            setMessage(tr("Workspace \"%1\" created.").arg(name));
+            if (_state && _state->account() && _state->account()->spacesManager()) {
+                _state->account()->spacesManager()->refresh();
+            }
+        } else {
+            setMessage(tr("Could not create workspace \"%1\".").arg(name));
+        }
+    });
+    job->start();
+    return true;
+}
+
+void UDriveFileBrowser::showWorkspaceCardMenu(const QModelIndex &index)
+{
+    const QString spaceId = index.data(SpaceIdRole).toString();
+    const QUrl webUrl = index.data(SpaceWebUrlRole).toUrl();
+    if (spaceId.isEmpty()) return;
+
+    auto *menu = createFileMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+
+    auto *openAction = menu->addAction(UDriveIcons::icon(UDriveIcons::Symbol::Open), tr("Open"));
+    connect(openAction, &QAction::triggered, this, [this, spaceId] {
+        openWorkspace(spaceId);
+    });
+
+    if (webUrl.isValid() && (webUrl.scheme() == QStringLiteral("http") || webUrl.scheme() == QStringLiteral("https"))) {
+        auto *webAction = menu->addAction(UDriveIcons::icon(UDriveIcons::Symbol::Online), tr("Open on Web"));
+        connect(webAction, &QAction::triggered, this, [webUrl] {
+            QDesktopServices::openUrl(webUrl);
+        });
+
+        auto *linkAction = menu->addAction(UDriveIcons::icon(UDriveIcons::Symbol::Link), tr("Copy web link"));
+        connect(linkAction, &QAction::triggered, this, [this, webUrl] {
+            QApplication::clipboard()->setText(webUrl.toString());
+            setMessage(tr("Link copied to clipboard."));
+        });
+    }
+
+    menu->popup(QCursor::pos());
 }
 
 void UDriveFileBrowser::showShares() { setSection(Section::Shares); }
@@ -1877,6 +2277,9 @@ void UDriveFileBrowser::setSection(Section section)
     closePdf();
     const bool changed = _section != section;
     _section = section;
+    if (_section != Section::Workspaces) {
+        _workspaceOverview = false;
+    }
     if (changed) {
         cancelListing(); cancelDownload();
         if (_uploading) cancelOperation();
@@ -1884,6 +2287,7 @@ void UDriveFileBrowser::setSection(Section section)
         _path.clear();
         updateSpaces();
         Q_EMIT sectionChanged(section);
+        Q_EMIT creationAvailabilityChanged();
     }
 }
 
@@ -1905,22 +2309,41 @@ void UDriveFileBrowser::updateBreadcrumbs()
         }
         delete item;
     }
-    _breadcrumbs->setVisible(_section != Section::Favorites && _section != Section::Trash && !sharedByMeOverview() && (!_workspaceLayout || !_path.isEmpty()));
-    const QString rootName = _spaceName.isEmpty() ? _heading->text() : _spaceName;
-    _rootButton->setText(_rootButton->fontMetrics().elidedText(rootName, Qt::ElideMiddle, 140).replace(QLatin1Char('&'), QStringLiteral("&&")));
-    _rootButton->setToolTip(rootName);
-    _rootButton->setProperty("breadcrumbCurrent", _path.isEmpty());
-    _rootButton->style()->unpolish(_rootButton); _rootButton->style()->polish(_rootButton);
-    _breadcrumbLayout->addWidget(_rootButton);
-    const auto parts = _path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    const bool insideWorkspace = (_section == Section::Workspaces && !_workspaceOverview);
+    _breadcrumbs->setVisible(_section != Section::Favorites && _section != Section::Trash && !sharedByMeOverview() && !isWorkspacesOverview() && (!_workspaceLayout || !_path.isEmpty() || insideWorkspace));
+
     auto separator = [this] {
         auto *label = new QLabel(QStringLiteral("›"), _breadcrumbs);
         label->setObjectName(QStringLiteral("driveBreadcrumbSeparator"));
         label->setTextFormat(Qt::PlainText);
         label->setAlignment(Qt::AlignCenter);
         label->setFixedWidth(16);
+        label->show();
         _breadcrumbLayout->addWidget(label);
     };
+
+    if (insideWorkspace) {
+        auto *workspacesBtn = new QPushButton(_breadcrumbs);
+        workspacesBtn->setObjectName(QStringLiteral("driveBreadcrumbWorkspaces"));
+        workspacesBtn->setProperty("udriveBreadcrumb", true);
+        workspacesBtn->setText(tr("Workspaces"));
+        workspacesBtn->setToolTip(tr("All workspaces"));
+        workspacesBtn->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Grid));
+        workspacesBtn->setIconSize(QSize(16, 16));
+        connect(workspacesBtn, &QPushButton::clicked, this, [this] { showWorkspacesOverview(); });
+        workspacesBtn->show();
+        _breadcrumbLayout->addWidget(workspacesBtn);
+        separator();
+    }
+
+    const QString rootName = _spaceName.isEmpty() ? _heading->text() : _spaceName;
+    _rootButton->setText(_rootButton->fontMetrics().elidedText(rootName, Qt::ElideMiddle, 140).replace(QLatin1Char('&'), QStringLiteral("&&")));
+    _rootButton->setToolTip(rootName);
+    _rootButton->setProperty("breadcrumbCurrent", _path.isEmpty());
+    _rootButton->style()->unpolish(_rootButton); _rootButton->style()->polish(_rootButton);
+    _rootButton->show();
+    _breadcrumbLayout->addWidget(_rootButton);
+    const auto parts = _path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
     const QUrl root = _root;
     if (parts.size() > 2) {
         separator();
@@ -1938,6 +2361,7 @@ void UDriveFileBrowser::updateBreadcrumbs()
             connect(action, &QAction::triggered, this, [this, path, root] { navigateToBreadcrumb(path, root); });
         }
         more->setMenu(menu);
+        more->show();
         _breadcrumbLayout->addWidget(more);
     }
     for (int i = qMax(0, int(parts.size()) - 2); i < parts.size(); ++i) {
@@ -1947,6 +2371,7 @@ void UDriveFileBrowser::updateBreadcrumbs()
             auto *current = new BreadcrumbLabel(parts.at(i), _breadcrumbs);
             current->setObjectName(QStringLiteral("driveCurrentFolder"));
             current->setAccessibleDescription(path);
+            current->show();
             _breadcrumbLayout->addWidget(current, 1);
         } else {
             auto *button = new QPushButton(_breadcrumbs);
@@ -1956,6 +2381,7 @@ void UDriveFileBrowser::updateBreadcrumbs()
             button->setAccessibleName(parts.at(i)); button->setToolTip(path);
             button->setProperty("breadcrumbPath", path);
             connect(button, &QPushButton::clicked, this, [this, path, root] { navigateToBreadcrumb(path, root); });
+            button->show();
             _breadcrumbLayout->addWidget(button);
         }
     }
@@ -1972,16 +2398,58 @@ void UDriveFileBrowser::updateSpaces()
     case Section::Trash: _heading->setText(tr("Deleted files")); break;
     }
     _shareScope->setVisible(_section == Section::Shares);
-    const bool folderView = _section != Section::Favorites && _section != Section::Trash && !sharedByMeOverview();
+    if (_learnWorkspacesButton)
+        _learnWorkspacesButton->setVisible(isWorkspacesOverview());
+    const bool insideWorkspace = (_section == Section::Workspaces && !_workspaceOverview);
+    const bool folderView = _section != Section::Favorites && _section != Section::Trash && !sharedByMeOverview() && !isWorkspacesOverview();
     _newButton->setVisible(folderView && !_workspaceLayout);
-    _breadcrumbs->setVisible(folderView && (!_workspaceLayout || !_path.isEmpty()));
+    _breadcrumbs->setVisible(folderView && (!_workspaceLayout || !_path.isEmpty() || insideWorkspace));
     const QString searchHint = _section == Section::Favorites ? tr("Search Favorites")
         : _section == Section::Trash ? tr("Search Deleted files")
+        : isWorkspacesOverview() ? tr("Search workspaces")
         : sharedByMeOverview() ? tr("Search files shared by me") : tr("Search this folder");
     _search->setPlaceholderText(searchHint);
     _search->setAccessibleName(searchHint);
     _tree->setColumnHidden(3, _section != Section::Favorites && _section != Section::Trash && !sharedByMeOverview());
     _model->setHeaderData(2, Qt::Horizontal, _section == Section::Trash ? tr("Deleted") : tr("Modified"));
+
+    if (isWorkspacesOverview()) {
+        _spaces->setVisible(false);
+        _spaces->clear();
+        _workspacesModel->clear();
+        int count = 0;
+        if (_state && _state->account()) {
+            auto spaces = _state->account()->spacesManager()->spaces();
+            std::sort(spaces.begin(), spaces.end(), [](const auto *a, const auto *b) {
+                return a->displayName().localeAwareCompare(b->displayName()) < 0;
+            });
+            for (auto *space : spaces) {
+                const bool personal = space->sortPriority() == 100;
+                const bool shares = space->sortPriority() == 50;
+                if (personal || shares) continue;
+                if (space->disabled() && !_includeDisabledWorkspaces) continue;
+
+                auto *item = new QStandardItem(space->displayName());
+                item->setData(space->id(), SpaceIdRole);
+                item->setData(space->webDavUrl(), SpaceWebDavUrlRole);
+                item->setData(space->webUrl(), SpaceWebUrlRole);
+                item->setData(space->driveId(), SpaceDriveIdRole);
+                item->setData(space->disabled(), SpaceDisabledRole);
+                item->setData(space->description(), SpaceDescriptionRole);
+                _workspacesModel->appendRow(item);
+                count++;
+            }
+        }
+        _statusMessage = count > 0 ? tr("%n space(s) in total", nullptr, count) : tr("No workspaces found.");
+        _message->setAlignment(Qt::AlignCenter);
+        _message->setText(_statusMessage);
+        _fileViews->setCurrentWidget(_workspacesView);
+        updateBreadcrumbs();
+        updateActions();
+        return;
+    }
+
+    _message->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     const QSignalBlocker blocker(_spaces);
     const QString previous = _spaceId;
     _spaces->clear();
@@ -2011,6 +2479,8 @@ void UDriveFileBrowser::updateSpaces()
 
 void UDriveFileBrowser::selectSpace()
 {
+    _fileViews->setCurrentWidget(_viewMode == ViewMode::Tiles ? static_cast<QWidget *>(_tiles) : _tree);
+    _message->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     const QString id = _spaces->currentData().toString();
     QUrl root = _spaces->currentData(Qt::UserRole + 1).toUrl();
     // DAV collection responses may omit the trailing slash in their self href.
@@ -2301,6 +2771,22 @@ bool UDriveFileBrowser::rowActionEnabled(const QModelIndex &index, int action) c
 
 void UDriveFileBrowser::updateActions()
 {
+    if (isWorkspacesOverview()) {
+        const bool hasSel = _workspacesView && _workspacesView->selectionModel() && _workspacesView->selectionModel()->hasSelection();
+        _openButton->setText(tr("Open workspace"));
+        _openButton->setEnabled(hasSel);
+        _openButton->setVisible(hasSel);
+        _downloadButton->setVisible(false);
+        _shareButton->setVisible(false);
+        _restoreButton->setVisible(false);
+        _refreshButton->setEnabled(canBrowse());
+        if (_search) _search->setEnabled(canBrowse());
+        _viewButton->setEnabled(false);
+        updateSelectionState();
+        Q_EMIT creationAvailabilityChanged();
+        return;
+    }
+    _viewButton->setEnabled(true);
     const auto index = selectedItem();
     const bool valid = index.isValid() && canBrowse() && !_listing && !_report && !_operation;
     const bool trash = _section == Section::Trash;
@@ -2371,6 +2857,13 @@ void UDriveFileBrowser::updateActions()
 
 void UDriveFileBrowser::activateSelection()
 {
+    if (isWorkspacesOverview()) {
+        const auto indexes = _workspacesView && _workspacesView->selectionModel() ? _workspacesView->selectionModel()->selectedIndexes() : QModelIndexList();
+        if (!indexes.isEmpty()) {
+            openWorkspace(indexes.first().data(SpaceIdRole).toString());
+        }
+        return;
+    }
     const auto index = selectedItem();
     if (!index.isValid() || _listing || _report || _operation || !canBrowse() || _section == Section::Trash) return;
     const QString path = index.data(PathRole).toString();
@@ -2413,6 +2906,7 @@ QLineEdit *UDriveFileBrowser::takeSearchField()
 
 bool UDriveFileBrowser::canCreate() const
 {
+    if (isWorkspacesOverview()) return canBrowse();
     return _newButton->isEnabled();
 }
 
@@ -2458,6 +2952,17 @@ void UDriveFileBrowser::selectOnly(const QModelIndex &index)
 void UDriveFileBrowser::selectAllFiles(bool select)
 {
     if (!_selectAll->isEnabled()) return;
+    if (isWorkspacesOverview()) {
+        if (!_workspacesView) return;
+        if (select) {
+            _workspacesView->selectAll();
+        } else {
+            _workspacesView->clearSelection();
+        }
+        updateSelectionState();
+        updateActions();
+        return;
+    }
     auto *selection = _tree->selectionModel();
     if (select) {
         const QItemSelection results(_proxy->index(0, 0), _proxy->index(_proxy->rowCount() - 1, _proxy->columnCount() - 1));
@@ -2470,6 +2975,17 @@ void UDriveFileBrowser::selectAllFiles(bool select)
 
 void UDriveFileBrowser::updateSelectionState()
 {
+    if (isWorkspacesOverview()) {
+        const int count = _workspacesView && _workspacesView->selectionModel()
+            ? _workspacesView->selectionModel()->selectedIndexes().count() : 0;
+        const int total = _workspacesProxy ? _workspacesProxy->rowCount() : 0;
+        const QSignalBlocker blocker(_selectAll);
+        _selectAll->setCheckState(count == 0 ? Qt::Unchecked : count == total ? Qt::Checked : Qt::PartiallyChecked);
+        _selectAll->setEnabled(canBrowse() && total > 0);
+        _message->setAlignment(Qt::AlignCenter);
+        _message->setText(count > 0 ? tr("%n workspace(s) selected", nullptr, count) : _statusMessage);
+        return;
+    }
     const int count = selectedCount();
     const int total = _proxy->rowCount();
     const QSignalBlocker blocker(_selectAll);
@@ -2852,6 +3368,19 @@ bool UDriveFileBrowser::restoreSelected()
 bool UDriveFileBrowser::setSelectedFavorite(bool favorite)
 {
     if (!_favoriteAction->isEnabled()) return false;
+    const auto item = selectedItem();
+    if (item.isValid()) {
+        auto *proxy = qobject_cast<QSortFilterProxyModel *>(_tree->model());
+        if (proxy) {
+            auto *model = qobject_cast<QStandardItemModel *>(proxy->sourceModel());
+            if (model) {
+                auto *sourceItem = model->itemFromIndex(proxy->mapToSource(item));
+                if (sourceItem) {
+                    sourceItem->setData(favorite, FavoriteRole);
+                }
+            }
+        }
+    }
     auto *body = new QBuffer;
     body->setData(QByteArray("<?xml version=\"1.0\"?><d:propertyupdate xmlns:d=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\"><d:set><d:prop><oc:favorite>")
         + (favorite ? "true" : "false") + "</oc:favorite></d:prop></d:set></d:propertyupdate>");
