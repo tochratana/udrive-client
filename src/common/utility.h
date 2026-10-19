@@ -55,6 +55,11 @@ OCSYNC_EXPORT Q_DECLARE_LOGGING_CATEGORY(lcUtility)
      * @param folder is the folder path you want to add the fav link to
      */
     OCSYNC_EXPORT void setupFavLink(const QString &folder);
+#ifdef Q_OS_MACOS
+    // Consolidate this account's auto-added shortcuts without moving files.
+    OCSYNC_EXPORT bool setupAccountFavLink(const QString &folder, const QString &displayName,
+        const QStringList &legacyFolders, bool addIfMissing = true);
+#endif
     OCSYNC_EXPORT QString octetsToString(qint64 octets);
     OCSYNC_EXPORT QByteArray userAgentString();
 

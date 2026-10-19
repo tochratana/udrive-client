@@ -90,6 +90,13 @@ other platforms retain the existing external-open/download behavior.
 3. Complete sign-in in the browser and return to UDrive.
 4. Use the file browser, or open **Sync** to manage local synchronized folders.
 
+On macOS, Finder shows one shortcut for each account, named
+`UDrive (Account name)`. Accounts with the same name receive a short identifier
+to distinguish them. Synchronized spaces are inside that account's
+folder. Existing download locations stay unchanged; new accounts receive a
+default folder name containing the account name. You can choose a
+different download location in the sign-in wizard's advanced settings.
+
 The server and identity provider must be reachable from the user's computer.
 For Keycloak, register the desktop client's configured client ID and allow its
 loopback callback. The OAuth `redirect_uri` returns to the desktop client; it is
@@ -115,6 +122,19 @@ creation/deletion capabilities are respected. The desktop blocks deleting or
 disabling the signed-in user and changing that user's own role. Directory data
 is cleared on sign-out; administration request and response bodies are omitted
 from HTTP diagnostic logs. Lists support pagination up to 10,000 entries.
+
+The regular **Workspaces** page also checks permissions before enabling its
+sidebar creation button, row menus, and bulk actions. Creating a workspace
+requires `Drives.Create.all`; changing quotas requires the separate project
+quota permission. Workspace management uses the server's effective root
+permissions or the corresponding server-wide management grant, without
+inferring access from another member's role or a role's display name. Manager
+access to a workspace does not grant access to desktop administration.
+Permission checks apply to operation methods as well as controls, and a bulk
+operation requires access to every selected workspace. Permission discovery
+fails closed, bypasses HTTP caches, and refreshes periodically and when the
+workspace catalog is refreshed; signing out or a denied operation clears the
+cached grants. The server remains responsible for authorizing every request.
 
 **Web administration** opens additional server features, including custom
 Office Templates management. Office Templates has no native desktop editor in

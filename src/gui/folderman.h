@@ -127,7 +127,9 @@ public:
         QSet<QString> selectiveSyncBlackList;
     };
 
-    static QString suggestSyncFolder(NewFolderType folderType, const QUuid &accountUuid);
+    static QString accountFolderLabel(const QString &displayName, const QUrl &serverUrl);
+    static QString suggestSyncFolder(NewFolderType folderType, const QUuid &accountUuid,
+        const QString &displayName = {}, const QUrl &serverUrl = {});
 
     /**
      * @brief Check a path for a new spaces sync root or spaces folder for validity.
@@ -416,6 +418,7 @@ private:
      *  returns false when a downgrade of the database is detected, true otherwise.
      */
     bool addFoldersFromConfigByAccount(QSettings &settings, AccountState *account);
+    void updateAccountFavorite(AccountState *accountState, bool addIfMissing);
 
     // tests folder def for minimum reqs
     bool validateFolderDefinition(const FolderDefinition &folderDefinition);

@@ -12,6 +12,7 @@
 #include "common/utility.h"
 #include "folderman.h"
 #include "accountstate.h"
+#include "libsync/theme.h"
 
 #include "guiutility.h"
 #include "testutils/testutils.h"
@@ -31,6 +32,24 @@ class TestFolderMan: public QObject
 {
     Q_OBJECT
 private Q_SLOTS:
+    void testAccountFolderLabels()
+    {
+        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive")) QSKIP("UDrive account naming");
+        QCOMPARE(FolderMan::accountFolderLabel("Ratana Toch", QUrl("https://drive.example.org/")), QStringLiteral("UDrive (Ratana Toch)"));
+        QCOMPARE(FolderMan::accountFolderLabel("Admin", QUrl("https://drive.example.org:9443/team/")), QStringLiteral("UDrive (Admin)"));
+        QCOMPARE(FolderMan::accountFolderLabel("", QUrl("https://drive.example.org")), QStringLiteral("UDrive (drive.example.org)"));
+        const auto privateUrl = QUrl("https://user:secret@drive.example.org/?token=private#hidden");
+        QCOMPARE(FolderMan::accountFolderLabel("  Ratana\nToch ", privateUrl), QStringLiteral("UDrive (Ratana Toch)"));
+        QCOMPARE(FolderMan::accountFolderLabel("Ratana", QUrl("https://work.example.org")), FolderMan::accountFolderLabel("Ratana", QUrl("https://home.example.org")));
+        QCOMPARE(FolderMan::accountFolderLabel("", {}), QStringLiteral("UDrive"));
+        auto dir = TestUtils::createTempDir(); QVERIFY(dir.isValid());
+        auto *manager = TestUtils::folderMan(); const auto id = QUuid::createUuid();
+        const auto label = FolderMan::accountFolderLabel("../Unsafe/Name", QUrl("https://drive.example.org/a/b/"));
+        const auto proposed = manager->findGoodPathForNewSyncFolder(dir.path(), label, FolderMan::NewFolderType::SpacesSyncRoot, id);
+        QCOMPARE(QFileInfo(proposed).absolutePath(), QDir(dir.path()).canonicalPath());
+        QVERIFY(!QFileInfo::exists(proposed));
+    }
+
     /*
      * Note: this is only meant for folders/spaces, not `SpacesSyncRoot` testing! That is done in `testSpacesSyncRootAndFolderCreation`.
      */

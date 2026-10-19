@@ -1842,6 +1842,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _refreshButton->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Refresh));
     _refreshButton->setIconSize(QSize(20, 20));
     _workspaceActions = new UDriveWorkspaceActions(_state, this);
+    connect(_workspaceActions, &UDriveWorkspaceActions::permissionsChanged, this, &UDriveFileBrowser::updateActions);
     connect(_workspaceActions, &UDriveWorkspaceActions::busyChanged, this, &UDriveFileBrowser::updateActions);
     connect(_workspaceActions, &UDriveWorkspaceActions::finished, this, [this](bool, const QString &message) {
         if (canBrowse() && !message.isEmpty()) _state->account()->spacesManager()->refresh();
@@ -2933,28 +2934,12 @@ void UDriveFileBrowser::openWorkspace(const QString &spaceId)
 
 bool UDriveFileBrowser::createNewWorkspace()
 {
-    if (!canBrowse() || !_state || !_state->account() || _workspaceActions->busy()) return false;
+    if (!canBrowse() || !_workspaceActions->canCreate() || _workspaceActions->busy()) return false;
+    const QPointer<UDriveFileBrowser> guard(this);
     bool ok = false;
     const QString name = UDriveInputDialog::getText(this, tr("New Workspace"), tr("Workspace name:"), QString(), tr("Create Workspace"), &ok);
-    if (!ok || name.trimmed().isEmpty()) return false;
-
-    QJsonObject payload;
-    payload.insert(QStringLiteral("name"), name.trimmed());
-
-    auto *job = new SimpleNetworkJob(_state->account(), _state->account()->url(), QStringLiteral("graph/v1.0/drives"), "POST", payload, QNetworkRequest(), this);
-    connect(job, &SimpleNetworkJob::finishedSignal, this, [this, job, name] {
-        job->deleteLater();
-        if (job->httpStatusCode() == 200 || job->httpStatusCode() == 201) {
-            setMessage(tr("Workspace \"%1\" created.").arg(name));
-            if (_state && _state->account() && _state->account()->spacesManager()) {
-                _state->account()->spacesManager()->refresh();
-            }
-        } else {
-            setMessage(tr("Could not create workspace \"%1\".").arg(name));
-        }
-    });
-    job->start();
-    return true;
+    if (!guard || !ok || !canBrowse()) return false;
+    return _workspaceActions->create(name.trimmed());
 }
 
 QModelIndexList UDriveFileBrowser::selectedWorkspaces() const
@@ -3036,7 +3021,7 @@ void UDriveFileBrowser::showWorkspaceMembers(const QModelIndex &index)
 {
     const auto name = index.siblingAtColumn(0);
     const QString driveId = name.data(SpaceDriveIdRole).toString();
-    if (!canBrowse() || name.data(SpaceDisabledRole).toBool() || !validName(driveId)) return;
+    if (!canBrowse() || !_workspaceActions->can(QStringLiteral("members"), name.data(SpaceDriveRole).value<OpenAPI::OAIDrive>()) || !validName(driveId)) return;
     auto *dialog = new UDriveShareDialog(_state, name.data().toString(), true, QString(), name.data(SpaceWebUrlRole).toUrl(), driveId, this, UDriveShareDialog::Target::Workspace);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->open();
@@ -3054,7 +3039,7 @@ void UDriveFileBrowser::updateWorkspaceImages()
 
 void UDriveFileBrowser::editWorkspaceDescription(const OpenAPI::OAIDrive &drive, const QString &text)
 {
-    if (!canBrowse()) return;
+    if (!canBrowse() || !_workspaceActions->can(QStringLiteral("description"), drive)) return;
     auto *dialog = new QDialog(this);
     dialog->setObjectName(QStringLiteral("driveWorkspaceDescriptionDialog"));
     dialog->setProperty("udriveWorkspaceDialog", true); dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -3066,7 +3051,13 @@ void UDriveFileBrowser::editWorkspaceDescription(const OpenAPI::OAIDrive &drive,
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, dialog);
     buttons->button(QDialogButtonBox::Save)->setDefault(true); layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
-    connect(editor, &QPlainTextEdit::textChanged, dialog, [editor, buttons] { buttons->button(QDialogButtonBox::Save)->setEnabled(editor->toPlainText().toUtf8().size() <= 1024 * 1024); });
+    auto updateSave = [this, editor, buttons, drive] {
+        buttons->button(QDialogButtonBox::Save)->setEnabled(_workspaceActions->can(QStringLiteral("description"), drive)
+            && editor->toPlainText().toUtf8().size() <= 1024 * 1024);
+    };
+    connect(editor, &QPlainTextEdit::textChanged, dialog, updateSave);
+    connect(_workspaceActions, &UDriveWorkspaceActions::permissionsChanged, dialog, updateSave);
+    updateSave();
     connect(buttons, &QDialogButtonBox::accepted, this, [this, dialog, editor, drive] {
         if (canBrowse() && _workspaceActions->writeSpecial(drive, QStringLiteral("readme"), editor->toPlainText().toUtf8())) {
             dialog->accept(); setMessage(tr("Working…"));
@@ -3078,7 +3069,7 @@ void UDriveFileBrowser::editWorkspaceDescription(const OpenAPI::OAIDrive &drive,
 void UDriveFileBrowser::workspaceAction(const QString &action, const QList<OpenAPI::OAIDrive> &drives)
 {
     if (!canBrowse() || _workspaceActions->busy() || drives.isEmpty()) return;
-    for (const auto &drive : drives) if (!validName(drive.getId()) || drive.getDriveType() != QStringLiteral("project")) return;
+    for (const auto &drive : drives) if (!_workspaceActions->can(action, drive)) return;
     const auto drive = drives.first();
     const bool active = std::all_of(drives.cbegin(), drives.cend(), [](const auto &d) { return d.getRoot().getDeleted().getState() != QStringLiteral("trashed"); });
     if (!active && action != QStringLiteral("restore") && action != QStringLiteral("details") && action != QStringLiteral("web") && action != QStringLiteral("link")) return;
@@ -3202,7 +3193,10 @@ void UDriveFileBrowser::showWorkspaceCardMenu(const QModelIndex &index)
     auto add = [this, menu, drive, idle](const QString &label, const QString &key, UDriveIcons::Symbol icon, bool enabled = true) {
         auto *action = menu->addAction(UDriveIcons::icon(icon), label);
         action->setObjectName(key == QStringLiteral("members") ? QStringLiteral("driveWorkspaceMembers") : QStringLiteral("driveWorkspace_") + key);
-        action->setIconVisibleInMenu(true); action->setEnabled(idle && enabled);
+        action->setIconVisibleInMenu(true); action->setEnabled(idle && enabled && _workspaceActions->can(key, drive));
+        connect(_workspaceActions, &UDriveWorkspaceActions::permissionsChanged, action, [this, action, key, drive, enabled] {
+            action->setEnabled(!_workspaceActions->busy() && enabled && _workspaceActions->can(key, drive));
+        });
         connect(action, &QAction::triggered, this, [this, key, drive] { workspaceAction(key, {drive}); });
     };
     add(tr("Members"), QStringLiteral("members"), UDriveIcons::Symbol::Members, active);
@@ -3595,6 +3589,9 @@ void UDriveFileBrowser::updateSpaces()
         }
         _workspacesProxy->sort(_workspaceTableMode ? _workspacesTable->header()->sortIndicatorSection() : 0,
             _workspaceTableMode ? _workspacesTable->header()->sortIndicatorOrder() : _workspaceSort->currentIndex() == 1 ? Qt::DescendingOrder : Qt::AscendingOrder);
+        QList<OpenAPI::OAIDrive> permissionDrives;
+        for (int row = 0; row < _workspacesModel->rowCount(); ++row) permissionDrives.append(_workspacesModel->item(row, 0)->data(SpaceDriveRole).value<OpenAPI::OAIDrive>());
+        _workspaceActions->setPermissionDrives(permissionDrives);
         if (!_workspaceNotice) _statusMessage = count > 0 ? tr("Workspaces: %1").arg(count) : tr("No workspaces found.");
         _message->setAlignment(Qt::AlignCenter);
         _message->setText(_statusMessage);
@@ -3770,6 +3767,7 @@ void UDriveFileBrowser::refresh()
 {
     if (isWorkspacesOverview()) {
         if (_workspaceActions->busy()) return;
+        _workspaceActions->refreshPermissions();
         _workspaceNotice = false;
         cancelListing();
         updateSpaces();
@@ -3956,8 +3954,15 @@ void UDriveFileBrowser::updateActions()
         _heading->setVisible(rows.isEmpty() && idle);
         _learnWorkspacesButton->setVisible(rows.isEmpty() && idle);
         _workspaceTitleDivider->setVisible(rows.isEmpty() && idle);
-        _workspaceDownloadAction->setEnabled(canBrowse() && idle && allActive && _workspaceActions->archiveAvailable());
-        for (auto *action : {_workspaceDuplicateAction, _workspaceQuotaAction, _workspaceDisableAction}) action->setEnabled(canBrowse() && idle && allActive);
+        auto allowed = [this, &rows, idle, allActive](const QString &action) {
+            return canBrowse() && idle && allActive && std::all_of(rows.cbegin(), rows.cend(), [this, &action](const auto &row) {
+                return _workspaceActions->can(action, row.data(SpaceDriveRole).template value<OpenAPI::OAIDrive>());
+            });
+        };
+        _workspaceDownloadAction->setEnabled(allowed(QStringLiteral("download")) && _workspaceActions->archiveAvailable());
+        _workspaceDuplicateAction->setEnabled(allowed(QStringLiteral("duplicate")));
+        _workspaceQuotaAction->setEnabled(allowed(QStringLiteral("quota")));
+        _workspaceDisableAction->setEnabled(allowed(QStringLiteral("disable")));
         _workspaceCancelButton->setVisible(!idle);
         const bool hasSel = _workspacesView && _workspacesView->selectionModel() && _workspacesView->selectionModel()->hasSelection();
         _openButton->setText(tr("Open workspace"));
@@ -4112,7 +4117,7 @@ QLineEdit *UDriveFileBrowser::takeSearchField()
 
 bool UDriveFileBrowser::canCreate() const
 {
-    if (isWorkspacesOverview()) return canBrowse() && !_workspaceActions->busy();
+    if (isWorkspacesOverview()) return canBrowse() && _workspaceActions->canCreate() && !_workspaceActions->busy();
     return _newButton->isEnabled();
 }
 

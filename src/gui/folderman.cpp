@@ -102,6 +102,9 @@ FolderMan::FolderMan()
     }
 
     connect(AccountManager::instance(), &AccountManager::accountRemoved, this, &FolderMan::slotRemoveFoldersForAccount);
+    connect(AccountManager::instance(), &AccountManager::accountAdded, this, [this] {
+        for (auto *state : AccountManager::instance()->accounts()) updateAccountFavorite(state, false);
+    });
 
     connect(_lockWatcher.data(), &LockWatcher::fileUnlocked, this, [this](const QString &path, FileSystem::LockMode) {
         if (Folder *f = folderForPath(path)) {
@@ -267,6 +270,11 @@ bool FolderMan::addFoldersFromConfigByAccount(QSettings &settings, AccountState 
     int unsyncedCount = _unsyncedSpaces.contains(accountId) ? _unsyncedSpaces[accountId].count() : 0;
     emit unsyncedSpaceCountChanged(accountId, unsyncedCount, spaceCount);
 
+    updateAccountFavorite(account, false);
+    connect(account->account(), &Account::displayNameChanged, this, [this, state = QPointer<AccountState>(account)] {
+        if (state) updateAccountFavorite(state, false);
+    });
+
     return true;
 }
 
@@ -310,7 +318,8 @@ void FolderMan::loadSpacesAndCreateFolders(AccountState *accountState, bool useV
             return;
         }
 
-        Utility::setupFavLink(localDir);
+        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive") && Utility::isMac()) updateAccountFavorite(accountState, true);
+        else Utility::setupFavLink(localDir);
 
         for (auto *space : std::as_const(spaces)) {
             FolderDefinition folderDef(space->webDavUrl(), space->id(), space->displayName());
@@ -1168,7 +1177,17 @@ Folder *FolderMan::addFolderFromScratch(AccountState *accountState, FolderDefini
 
     if (newFolder) {
         if (newFolder->vfs().mode() != Vfs::WindowsCfApi) {
-            Utility::setupFavLink(folderDefinition.localPath());
+            if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive") && Utility::isMac()) {
+                const QString root = QFileInfo(accountState->account()->defaultSyncRoot()).canonicalFilePath();
+                const QString local = QFileInfo(folderDefinition.localPath()).canonicalFilePath();
+                if (!root.isEmpty() && local.startsWith(root + QLatin1Char('/'))) updateAccountFavorite(accountState, true);
+                else {
+#ifdef Q_OS_MACOS
+                    Utility::setupAccountFavLink(local, folderDefinition.displayName() + QStringLiteral(" — ")
+                        + accountState->account()->displayNameWithHost(), {}, true);
+#endif
+                }
+            } else Utility::setupFavLink(folderDefinition.localPath());
         }
         qCDebug(lcFolderMan) << "Local sync folder" << folderDefinition.localPath() << "successfully created!";
     } else {
@@ -1213,9 +1232,44 @@ void FolderMan::addFolderFromGui(AccountState *accountState, const SyncConnectio
     setSyncEnabled(true);
 }
 
-QString FolderMan::suggestSyncFolder(NewFolderType folderType, const QUuid &accountUuid)
+QString FolderMan::accountFolderLabel(const QString &displayName, const QUrl &serverUrl)
 {
-    return FolderMan::instance()->findGoodPathForNewSyncFolder(QDir::homePath(), Theme::instance()->appNameGUI(), folderType, accountUuid);
+    QString name = Theme::instance()->appNameGUI();
+    if (name != QStringLiteral("UDrive")) return name;
+    const auto user = displayName.simplified();
+    const auto identity = user.isEmpty() ? serverUrl.host() : user;
+    if (!identity.isEmpty()) name += QStringLiteral(" (%1)").arg(identity);
+    return name;
+}
+
+QString FolderMan::suggestSyncFolder(NewFolderType folderType, const QUuid &accountUuid, const QString &displayName, const QUrl &serverUrl)
+{
+    QString label = accountFolderLabel(displayName, serverUrl);
+    if (auto *state = AccountManager::instance()->accountState(accountUuid))
+        label = accountFolderLabel(state->account()->davDisplayName(), state->account()->url());
+    return FolderMan::instance()->findGoodPathForNewSyncFolder(QDir::homePath(), label, folderType, accountUuid);
+}
+
+void FolderMan::updateAccountFavorite(AccountState *state, bool addIfMissing)
+{
+#ifdef Q_OS_MACOS
+    if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive") || !state || !state->account()) return;
+    const auto *account = state->account();
+    QString name = account->davDisplayName();
+    const auto baseLabel = accountFolderLabel(name, account->url());
+    for (const auto *other : AccountManager::instance()->accounts()) {
+        if (other->account() != account && accountFolderLabel(other->account()->davDisplayName(), other->account()->url()) == baseLabel) {
+            name += QStringLiteral(" [%1]").arg(account->uuid().toString(QUuid::WithoutBraces).left(8));
+            break;
+        }
+    }
+    QStringList legacy;
+    for (const auto *folder : foldersForAccount(account->uuid())) legacy.append(folder->path());
+    Utility::setupAccountFavLink(account->defaultSyncRoot(), accountFolderLabel(name, account->url()), legacy, addIfMissing);
+#else
+    Q_UNUSED(state)
+    Q_UNUSED(addIfMissing)
+#endif
 }
 
 bool FolderMan::prepareFolder(const QString &folder)

@@ -89,7 +89,8 @@ void NewAccountWizardController::buildPages()
     authSuccessPage->setFinalPage(true);
 
     QWizardPage *advancedSettingsPage = new QWizardPage(_wizard);
-    AdvancedSettingsPageController *advancedSettingsController = new AdvancedSettingsPageController(advancedSettingsPage, this);
+    auto *advancedSettingsController = new AdvancedSettingsPageController(advancedSettingsPage, this);
+    _advancedSettingsController = advancedSettingsController;
     connect(advancedSettingsController, &AdvancedSettingsPageController::success, this, &NewAccountWizardController::onAdvancedSettingsCompleted);
     _advancedSettingsPageIndex = _wizard->addPage(advancedSettingsPage, advancedSettingsController);
     advancedSettingsPage->setFinalPage(true);
@@ -175,6 +176,12 @@ void NewAccountWizardController::onOAuthValidationCompleted(const OCC::OAuthPage
     _model->setDavUser(results.userId);
     _model->setCapabilities(results.capabilities);
     _model->setWebfingerUserInfoUrl(results.webfingerUserUrl);
+
+    const auto previousDefault = _advancedSettingsController->defaultResult().syncRoot;
+    _advancedSettingsController->setAccountIdentity(results.displayName.isEmpty() ? results.userId : results.displayName,
+        _model->effectiveUserInfoUrl());
+    if (_model->defaultSyncRoot() == previousDefault)
+        _model->setDefaultSyncRoot(_advancedSettingsController->defaultResult().syncRoot);
 
     _wizard->setCurrentId(_authSuccessPageIndex);
     ownCloudGui::raise();

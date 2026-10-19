@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gui/udrivefilebrowser.h"
+#include "gui/udriveworkspaceactions.h"
 #include "gui/udrivecombobox.h"
 #include "gui/settingsdialog.h"
 #include "gui/accountmanager.h"
@@ -117,10 +118,12 @@ public:
     int incomingStatus = 404;
     int incomingDelay = 0;
     QJsonArray extraDrives;
+    QJsonArray globalPermissions{"Drives.Create.all", "Drives.ReadWriteEnabled.all", "Drives.ReadWriteProjectQuota.all"};
     int outgoingDelay = 0;
     int outgoingStatus = 200;
     QJsonObject workspacePermissions{{"value", QJsonArray{}},
-        {"@libre.graph.permissions.actions.allowedValues", QJsonArray{"libre.graph/driveItem/permissions/create", "libre.graph/driveItem/permissions/delete"}},
+        {"@libre.graph.permissions.actions.allowedValues", QJsonArray{"libre.graph/driveItem/permissions/create", "libre.graph/driveItem/permissions/delete",
+            "libre.graph/driveItem/permissions/read", "libre.graph/driveItem/content/read", "libre.graph/driveItem/deleted/read"}},
         {"@libre.graph.permissions.roles.allowedValues", QJsonArray{QJsonObject{{"id", "viewer-role"}, {"displayName", "Viewer"}},
             QJsonObject{{"id", "editor-role"}, {"displayName", "Editor"}}}}};
     QString teamRootId = QStringLiteral("team");
@@ -205,7 +208,11 @@ public:
                     if (parts.at(0) == rejectVerb && rejectionsLeft > 0) {
                         --rejectionsLeft;
                         respond(socket, rejectStatus, "text/plain", "Rejected before mutation");
-                    } else if (parts.at(0) == "GET" && path == QStringLiteral("/graph/v1beta1/drives/team/root/permissions")) {
+                    } else if (path == QStringLiteral("/graph/v1.0/me")) {
+                        respond(socket, 200, "application/json", "{\"id\":\"self\"}");
+                    } else if (path == QStringLiteral("/api/v0/settings/permissions-list")) {
+                        respond(socket, 200, "application/json", QJsonDocument(QJsonObject{{"permissions", globalPermissions}}).toJson());
+                    } else if (parts.at(0) == "GET" && path.startsWith(QStringLiteral("/graph/v1beta1/drives/")) && path.endsWith(QStringLiteral("/root/permissions"))) {
                         const auto body = QJsonDocument(workspacePermissions).toJson();
                         const int status = workspaceStatus;
                         const QPointer<QTcpSocket> guard(socket);
@@ -3870,7 +3877,7 @@ private Q_SLOTS:
         auto *menu = browser.findChild<QMenu *>("driveWorkspaceActionsMenu");
         QTRY_VERIFY(menu && menu->isVisible());
         auto *members = menu->findChild<QAction *>("driveWorkspaceMembers");
-        QVERIFY(members && members->isEnabled()); menu->close();
+        QTRY_VERIFY(members && members->isEnabled()); menu->close();
         members->trigger();
         auto *dialog = browser.findChild<UDriveShareDialog *>();
         QTRY_VERIFY(dialog && dialog->isVisible()); dialog->close();
@@ -3892,6 +3899,55 @@ private Q_SLOTS:
         QVERIFY(!all->isEnabled()); QVERIFY(!table->isEnabled());
     }
 
+    void workspaceRoleControls_data()
+    {
+        QTest::addColumn<QJsonArray>("global"); QTest::addColumn<QJsonArray>("effective");
+        QTest::addColumn<bool>("create"); QTest::addColumn<bool>("manage"); QTest::addColumn<bool>("quota");
+        const QJsonArray read{"libre.graph/driveItem/content/read", "libre.graph/driveItem/permissions/read"};
+        auto editor = read; editor.append("libre.graph/driveItem/upload/create"); editor.append("libre.graph/driveItem/path/update");
+        auto manager = editor; manager.append("libre.graph/driveItem/permissions/delete");
+        QTest::newRow("viewer") << QJsonArray{} << read << false << false << false;
+        QTest::newRow("editor") << QJsonArray{} << editor << false << false << false;
+        QTest::newRow("workspace-manager") << QJsonArray{} << manager << false << true << false;
+        QTest::newRow("user-with-create-rights") << QJsonArray{"Drives.Create.all"} << read << true << false << false;
+        QTest::newRow("administrator") << QJsonArray{"Drives.Create.all", "Drives.ReadWriteEnabled.all", "Drives.ReadWriteProjectQuota.all"} << manager << true << true << true;
+    }
+    void workspaceRoleControls()
+    {
+        const auto previousView = ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"))->value(QStringLiteral("workspaceViewMode"));
+        const auto restoreView = qScopeGuard([previousView] {
+            auto settings = ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"));
+            if (previousView.isValid()) settings->setValue(QStringLiteral("workspaceViewMode"), previousView);
+            else settings->remove(QStringLiteral("workspaceViewMode"));
+        });
+        QFETCH(QJsonArray, global); QFETCH(QJsonArray, effective); QFETCH(bool, create); QFETCH(bool, manage); QFETCH(bool, quota);
+        DriveServer server; server.globalPermissions = global; server.workspacePermissions.insert("@libre.graph.permissions.actions.allowedValues", effective);
+        auto *account = new Account(QUuid::createUuid(), "test", server.url()); account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account)); account->credentials()->fetchFromKeychain();
+        AccountState state(account); UDriveFileBrowser browser(&state); browser.resize(1100, 760); browser.show();
+        browser.showWorkspacesOverview(); browser.findChild<QAction *>("driveWorkspaceViewTable")->trigger();
+        auto *table = browser.findChild<QTreeView *>("driveWorkspacesTable");
+        auto *operations = browser.findChild<UDriveWorkspaceActions *>(); QVERIFY(operations);
+        QTRY_VERIFY(table->model()->rowCount() > 0); QTRY_VERIFY(operations->permissionsReady()); QCOMPARE(browser.canCreate(), create);
+        table->selectionModel()->select(table->model()->index(0, 0), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        QCOMPARE(browser.findChild<QAction *>("driveWorkspaceBulk_disable")->isEnabled(), manage);
+        QCOMPARE(browser.findChild<QAction *>("driveWorkspaceBulk_quota")->isEnabled(), quota);
+        QCOMPARE(browser.findChild<QAction *>("driveWorkspaceBulk_duplicate")->isEnabled(), create);
+        QTest::mouseClick(table->viewport(), Qt::LeftButton, Qt::NoModifier, table->visualRect(table->model()->index(0, 5)).center());
+        QPointer<QMenu> menu = browser.findChild<QMenu *>("driveWorkspaceActionsMenu"); QTRY_VERIFY(menu && menu->isVisible());
+        QCOMPARE(menu->findChild<QAction *>("driveWorkspace_rename")->isEnabled(), manage);
+        QCOMPARE(menu->findChild<QAction *>("driveWorkspace_quota")->isEnabled(), quota);
+        menu->close(); QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        if (!create) { const int before = server.requests.size(); QVERIFY(!browser.createNewWorkspace()); QCOMPARE(server.requests.size(), before); }
+        // Refresh immediately disables old grants, then installs the reduced access.
+        server.globalPermissions = {}; server.workspacePermissions.insert("@libre.graph.permissions.actions.allowedValues", QJsonArray{});
+        operations->refreshPermissions(); QVERIFY(!browser.canCreate()); QTRY_VERIFY(operations->permissionsReady());
+        QVERIFY(!browser.findChild<QAction *>("driveWorkspaceBulk_disable")->isEnabled());
+        QTest::mouseClick(table->viewport(), Qt::LeftButton, Qt::NoModifier, table->visualRect(table->model()->index(0, 5)).center());
+        menu = browser.findChild<QMenu *>("driveWorkspaceActionsMenu"); QTRY_VERIFY(menu && menu->isVisible());
+        QVERIFY(!menu->findChild<QAction *>("driveWorkspace_rename")->isEnabled());
+        const int before = server.requests.size(); menu->findChild<QAction *>("driveWorkspace_rename")->trigger(); QCOMPARE(server.requests.size(), before);
+        menu->close();
+    }
     void workspaceManagementActions()
     {
         const auto previousView = ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"))->value(QStringLiteral("workspaceViewMode"));
@@ -3917,7 +3973,7 @@ private Q_SLOTS:
         QVERIFY(table && toolbar && count && duplicate && quota);
         QTRY_COMPARE(table->model()->rowCount(), 2); QVERIFY(!toolbar->isVisible());
         table->selectionModel()->select(table->model()->index(0, 0), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-        QVERIFY(toolbar->isVisible()); QVERIFY(duplicate->isEnabled()); QVERIFY(quota->isEnabled());
+        QVERIFY(toolbar->isVisible()); QTRY_VERIFY(duplicate->isEnabled()); QTRY_VERIFY(quota->isEnabled());
         auto showMenu = [&]() -> QMenu * {
             const QRect rect = table->visualRect(table->model()->index(0, 5));
             QTest::mouseClick(table->viewport(), Qt::LeftButton, Qt::NoModifier, rect.center());
@@ -3984,6 +4040,7 @@ private Q_SLOTS:
         auto *view = browser.findChild<QListView *>(QStringLiteral("driveWorkspacesView"));
         QTRY_VERIFY(view->isVisible());
         QTRY_COMPARE(view->model()->rowCount(), 1);
+        QTRY_VERIFY(browser.findChild<UDriveWorkspaceActions *>()->permissionsReady());
         const auto index = view->model()->index(0, 0);
         const QRect rect = view->visualRect(index);
         if (scenario == QStringLiteral("checkbox")) {

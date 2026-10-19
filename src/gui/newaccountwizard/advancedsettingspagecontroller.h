@@ -40,6 +40,7 @@ public:
     explicit AdvancedSettingsPageController(QWizardPage *page, QObject *parent);
     bool validate() override;
     AdvancedSettingsResult defaultResult();
+    void setAccountIdentity(const QString &displayName, const QUrl &serverUrl);
 
 Q_SIGNALS:
     void success(const OCC::AdvancedSettingsResult &result);

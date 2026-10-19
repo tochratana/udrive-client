@@ -185,6 +185,13 @@ AdvancedSettingsResult AdvancedSettingsPageController::defaultResult()
     return result;
 }
 
+void AdvancedSettingsPageController::setAccountIdentity(const QString &displayName, const QUrl &serverUrl)
+{
+    const bool usingDefault = _rootDirEdit && _rootDirEdit->text() == _defaultSyncRoot;
+    _defaultSyncRoot = FolderMan::suggestSyncFolder(FolderMan::NewFolderType::SpacesSyncRoot, {}, displayName, serverUrl);
+    if (usingDefault) _rootDirEdit->setText(_defaultSyncRoot);
+}
+
 bool AdvancedSettingsPageController::validate()
 {
     // this is a safety net because for unknown reasons, on windows when you hit enter to commit hand edited text

@@ -94,8 +94,9 @@ private:
     QPointer<NewAccountModel> _model = nullptr;
     QPointer<NewAccountWizard> _wizard = nullptr;
 
-    // this is the only controller we need to explicitly keep our eye on as we need to give it values to start the oauth step
+    // Keep controllers that receive values after their pages have been built.
     OAuthPageController *_oauthController = nullptr;
+    AdvancedSettingsPageController *_advancedSettingsController = nullptr;
     bool _autoValidateOAuthPage = false;
 
     QHash<int, QList<QWizard::WizardButton>> _buttonLayouts;

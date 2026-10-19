@@ -47,7 +47,7 @@ private:
 };
 }
 
-UDriveAdminApi::UDriveAdminApi(AccountState *state, QObject *parent) : QObject(parent), _state(state)
+UDriveAdminApi::UDriveAdminApi(AccountState *state, QObject *parent, bool loadRoles) : QObject(parent), _state(state), _loadRoles(loadRoles)
 {
     if (state && state->account()) {
         connect(state, &AccountState::stateChanged, this, [this] {
@@ -196,7 +196,7 @@ void UDriveAdminApi::refreshAccess()
             for (const auto &permission : data.value(QStringLiteral("permissions")).toArray())
                 if (permission.isString()) _permissions.insert(permission.toString());
             Q_EMIT accessChanged();
-            if (!canRead(Resource::Users)) { finish(true); return; }
+            if (!_loadRoles || !canRead(Resource::Users)) { finish(true); return; }
             // App roles are supplied by the server; never infer an administrator
             // from a username, token payload, or a workspace Manager grant.
             request("GET", graphUrl(QStringLiteral("applications")), {}, [this](const QJsonObject &apps) {

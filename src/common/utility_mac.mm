@@ -22,6 +22,8 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QLoggingCategory>
+#include <QFileInfo>
+#include <QSet>
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #include <QtMacExtras/QtMacExtras>
@@ -55,6 +57,87 @@ void Utility::setupFavLink(const QString &folder)
             CFRelease(item);
         }
     }
+}
+
+bool Utility::setupAccountFavLink(const QString &folder, const QString &displayName, const QStringList &legacyFolders, bool addIfMissing)
+{
+    const QString root = QFileInfo(folder).canonicalFilePath();
+    if (root.isEmpty() || !QFileInfo(root).isDir() || displayName.isEmpty()) return false;
+    QSet<QString> obsolete;
+    for (const auto &path : legacyFolders) {
+        const auto canonical = QFileInfo(path).canonicalFilePath();
+        if (!canonical.isEmpty() && canonical.startsWith(root + QLatin1Char('/'))) obsolete.insert(canonical);
+    }
+    auto *list = LSSharedFileListCreate(nullptr, kLSSharedFileListFavoriteItems, nullptr);
+    if (!list) return false;
+    const auto freeList = qScopeGuard([list] { CFRelease(list); });
+    auto *snapshot = LSSharedFileListCopySnapshot(list, nullptr);
+    if (!snapshot) return false;
+    const auto freeSnapshot = qScopeGuard([snapshot] { CFRelease(snapshot); });
+    QList<LSSharedFileListItemRef> roots, children;
+    QStringList rootNames;
+    LSSharedFileListItemRef keep = nullptr;
+    LSSharedFileListItemRef after = kLSSharedFileListItemLast;
+    for (CFIndex i = 0; i < CFArrayGetCount(snapshot); ++i) {
+        auto item = static_cast<LSSharedFileListItemRef>(const_cast<void *>(CFArrayGetValueAtIndex(snapshot, i)));
+        CFURLRef url = nullptr;
+        if (LSSharedFileListItemResolve(item, kLSSharedFileListNoUserInteraction | kLSSharedFileListDoNotMountVolumes, &url, nullptr) != noErr || !url) continue;
+        const auto freeUrl = qScopeGuard([url] { CFRelease(url); });
+        const auto path = QFileInfo(QString::fromNSString([(__bridge NSURL *)url path])).canonicalFilePath();
+        CFStringRef title = LSSharedFileListItemCopyDisplayName(item);
+        const QString name = title ? QString::fromCFString(title) : QString();
+        if (title) CFRelease(title);
+        if (path == root) {
+            if (roots.isEmpty()) after = i == 0 ? kLSSharedFileListItemBeforeFirst
+                : static_cast<LSSharedFileListItemRef>(const_cast<void *>(CFArrayGetValueAtIndex(snapshot, i - 1)));
+            roots.append(item);
+            rootNames.append(name);
+            if (!keep && name == displayName) keep = item;
+        } else if (obsolete.contains(path) && name == QFileInfo(path).fileName()) {
+            // Preserve a user's explicitly renamed shortcut.
+            children.append(item);
+        }
+    }
+    if (roots.isEmpty() && children.isEmpty() && !addIfMissing) return false;
+    LSSharedFileListItemRef inserted = nullptr;
+    if (!keep) {
+        const auto url = CFURLCreateWithFileSystemPath(nullptr, (__bridge CFStringRef)root.toNSString(), kCFURLPOSIXPathStyle, true);
+        if (!url) return false;
+        const auto freeUrl = qScopeGuard([url] { CFRelease(url); });
+        // Finder deduplicates an insertion for an existing URL without updating its
+        // saved name. Replace the old entries, restoring them if insertion fails.
+        QStringList removedNames;
+        const auto restoreRoots = [&] {
+            for (const auto &name : removedNames) {
+                const auto oldTitle = name.toCFString();
+                auto restored = LSSharedFileListInsertItemURL(list, after, oldTitle, nullptr, url, nullptr, nullptr);
+                CFRelease(oldTitle);
+                if (restored) CFRelease(restored);
+            }
+        };
+        for (qsizetype i = 0; i < roots.size(); ++i) {
+            if (LSSharedFileListItemRemove(list, roots.at(i)) != noErr) {
+                restoreRoots();
+                return false;
+            }
+            removedNames.append(rootNames.at(i));
+        }
+        const auto title = displayName.toCFString();
+        inserted = LSSharedFileListInsertItemURL(list, after, title, nullptr, url, nullptr, nullptr);
+        CFRelease(title);
+        if (!inserted) {
+            restoreRoots();
+            return false;
+        }
+        keep = inserted;
+    }
+    const auto freeInserted = qScopeGuard([inserted] { if (inserted) CFRelease(inserted); });
+    const auto keepId = LSSharedFileListItemGetID(keep);
+    if (!inserted) {
+        for (const auto &item : roots) if (LSSharedFileListItemGetID(item) != keepId) LSSharedFileListItemRemove(list, item);
+    }
+    for (const auto &item : children) LSSharedFileListItemRemove(list, item);
+    return true;
 }
 
 bool Utility::hasSystemLaunchOnStartup(const QString &appName)

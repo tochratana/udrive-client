@@ -16,12 +16,18 @@
 
 using namespace OCC;
 namespace {
-class TestCredentials : public Credentials { public: using Credentials::Credentials; void persist() override { } };
+class TestCredentials : public Credentials { public: using Credentials::Credentials; void persist() override { } bool refreshAccessToken() override { return false; } };
 class WorkspaceServer : public QTcpServer
 {
 public:
     struct Request { QByteArray verb; QUrl url; QByteArray body; QMap<QByteArray, QByteArray> headers; };
     QList<Request> requests;
+    QJsonArray permissions{"Drives.Create.all", "Drives.ReadWriteEnabled.all", "Drives.ReadWriteProjectQuota.all"};
+    QJsonArray effectiveActions{"libre.graph/driveItem/permissions/read", "libre.graph/driveItem/permissions/create",
+        "libre.graph/driveItem/permissions/delete", "libre.graph/driveItem/content/read", "libre.graph/driveItem/deleted/read"};
+    int permissionStatus = 200;
+    QMap<QString, QJsonArray> driveActions;
+    bool malformedPermissions = false;
     int deny = 0, delay = 0, copies = 0, created = 0;
     bool failCopy = false, missingFileId = false, truncatedArchive = false, absoluteHrefs = false;
     QString hrefHost;
@@ -66,6 +72,14 @@ public:
     void handle(QTcpSocket *s, const Request &req)
     {
         const auto path = req.url.path();
+        if (path == QStringLiteral("/graph/v1.0/me")) { reply(s, 200, "{\"id\":\"self\"}"); return; }
+        if (path == QStringLiteral("/api/v0/settings/permissions-list")) {
+            reply(s, permissionStatus, malformedPermissions ? QByteArray("{\"permissions\":\"Admin\"}") : QJsonDocument(QJsonObject{{"permissions", permissions}}).toJson()); return;
+        }
+        if (req.verb == "GET" && path.endsWith(QStringLiteral("/root/permissions"))) {
+            const auto id = path.section(QLatin1Char('/'), 4, 4);
+            reply(s, 200, QJsonDocument(QJsonObject{{"@libre.graph.permissions.actions.allowedValues", driveActions.value(id, effectiveActions)}}).toJson()); return;
+        }
         if (deny) { reply(s, deny); return; }
         if (req.verb == "POST" && path == QStringLiteral("/graph/v1.0/drives")) {
             ++created; auto d = drive(QStringLiteral("copy%1").arg(created)).asJsonObject();
@@ -99,11 +113,102 @@ class TestUDriveWorkspaceActions : public QObject
 private Q_SLOTS:
     void initTestCase() { previous = qgetenv("UDRIVE_ALLOW_LOCAL_HTTP"); qputenv("UDRIVE_ALLOW_LOCAL_HTTP", "1"); ConfigFile::setConfDir(config.path()); Account::setCommonCacheDirectory(config.path() + "/cache"); folders = FolderMan::createInstance(); }
     void cleanupTestCase() { if (previous.isNull()) qunsetenv("UDRIVE_ALLOW_LOCAL_HTTP"); else qputenv("UDRIVE_ALLOW_LOCAL_HTTP", previous); }
+    void effectiveAccess_data()
+    {
+        QTest::addColumn<QJsonArray>("global"); QTest::addColumn<QJsonArray>("effective");
+        QTest::addColumn<bool>("create"); QTest::addColumn<bool>("manage"); QTest::addColumn<bool>("quota");
+        const QJsonArray viewer{"libre.graph/driveItem/content/read", "libre.graph/driveItem/permissions/read"};
+        auto editor = viewer; editor.append("libre.graph/driveItem/upload/create"); editor.append("libre.graph/driveItem/path/update");
+        auto manager = editor; manager.append("libre.graph/driveItem/permissions/delete");
+        QTest::newRow("viewer") << QJsonArray{} << viewer << false << false << false;
+        QTest::newRow("editor") << QJsonArray{} << editor << false << false << false;
+        QTest::newRow("manager-direct-or-group-effective-grant") << QJsonArray{} << manager << false << true << false;
+        QTest::newRow("normal-user-with-create-permission") << QJsonArray{"Drives.Create.all"} << viewer << true << false << false;
+        QTest::newRow("misleading-role-labels") << QJsonArray{"Admin", "Manager"} << viewer << false << false << false;
+        QTest::newRow("quota-only") << QJsonArray{"Drives.ReadWriteProjectQuota.all"} << viewer << false << false << true;
+        QTest::newRow("administrator") << QJsonArray{"Drives.Create.all", "Drives.ReadWriteEnabled.all", "Drives.ReadWriteProjectQuota.all"} << viewer << true << true << true;
+    }
+    void effectiveAccess()
+    {
+        QFETCH(QJsonArray, global); QFETCH(QJsonArray, effective); QFETCH(bool, create); QFETCH(bool, manage); QFETCH(bool, quota);
+        WorkspaceServer server; server.permissions = global; server.effectiveActions = effective;
+        auto *account = new Account(QUuid::createUuid(), "test", server.url()); account->setCredentials(new TestCredentials("browser-test-token", "test-refresh-token", account)); account->credentials()->fetchFromKeychain();
+        AccountState state(account); UDriveWorkspaceActions actions(&state);
+        const auto drive = server.drive(); QVERIFY(!actions.canCreate()); QVERIFY(!actions.patch({drive}, {{"name", "Denied before discovery"}}));
+        actions.setPermissionDrives({drive}); QTRY_VERIFY(actions.permissionsReady());
+        QCOMPARE(actions.canCreate(), create); QCOMPARE(actions.can("rename", drive), manage); QCOMPARE(actions.can("disable", drive), manage);
+        QCOMPARE(actions.can("quota", drive), quota); QVERIFY(actions.can("download", drive));
+        const int before = server.requests.size();
+        if (!manage) { QVERIFY(!actions.patch({drive}, {{"name", "Denied"}})); QVERIFY(!actions.disable({drive})); }
+        if (!quota) QVERIFY(!actions.patch({drive}, {{"quota", QJsonObject{{"total", 1}}}}));
+        if (!create) { QVERIFY(!actions.create("Denied")); QVERIFY(!actions.duplicate({drive}, {"Denied"})); }
+        QCOMPARE(server.requests.size(), before);
+        // A manager shown in the catalog can be somebody else. Only the
+        // effective action response above may grant the current account access.
+        auto misleading = drive; auto root = misleading.getRoot(); OpenAPI::OAIPermission grant;
+        grant.fromJsonObject(QJsonObject{{"roles", QJsonArray{"manager"}}}); root.setPermissions({grant}); misleading.setRoot(root);
+        QCOMPARE(actions.can("rename", misleading), manage);
+        if (create) {
+            QSignalSpy done(&actions, &UDriveWorkspaceActions::finished); QVERIFY(actions.create("Allowed project")); QTRY_COMPARE(done.size(), 1); QVERIFY(done.first().at(0).toBool());
+            QCOMPARE(QJsonDocument::fromJson(server.requests.last().body).object().value("driveType").toString(), QStringLiteral("project"));
+        }
+    }
+    void accessRevocationAndMixedBulkSelection()
+    {
+        WorkspaceServer server; server.permissions = {};
+        server.driveActions.insert("second", QJsonArray{"libre.graph/driveItem/content/read"});
+        auto *account = new Account(QUuid::createUuid(), "test", server.url()); account->setCredentials(new TestCredentials("browser-test-token", "test-refresh-token", account)); account->credentials()->fetchFromKeychain();
+        AccountState state(account); UDriveWorkspaceActions actions(&state);
+        actions.setPermissionDrives({server.drive(), server.drive("second")}); QTRY_VERIFY(actions.permissionsReady());
+        QVERIFY(actions.can("rename", server.drive())); QVERIFY(!actions.can("rename", server.drive("second")));
+        const int before = server.requests.size(); QVERIFY(!actions.patch({server.drive(), server.drive("second")}, {{"name", "Blocked batch"}})); QCOMPARE(server.requests.size(), before);
+        server.effectiveActions = {"libre.graph/driveItem/content/read"}; actions.refreshPermissions();
+        QVERIFY(!actions.can("rename", server.drive())); QTRY_VERIFY(actions.permissionsReady()); QVERIFY(!actions.can("rename", server.drive()));
+        state.signOutByUi(); QVERIFY(!actions.canCreate()); QVERIFY(!actions.can("download", server.drive()));
+    }
+    void discoveryFailsClosed_data()
+    {
+        QTest::addColumn<int>("status"); QTest::addColumn<bool>("malformed");
+        for (int status : {401, 403, 404, 500}) QTest::newRow(qPrintable(QString::number(status))) << status << false;
+        QTest::newRow("malformed") << 200 << true;
+    }
+    void permissionRepliesStayWithTheirAccount()
+    {
+        WorkspaceServer adminServer, userServer; userServer.permissions = {}; userServer.effectiveActions = {"libre.graph/driveItem/content/read"};
+        auto accountFor = [](WorkspaceServer &server) {
+            auto *account = new Account(QUuid::createUuid(), "test", server.url());
+            account->setCredentials(new TestCredentials("browser-test-token", "test-refresh-token", account)); account->credentials()->fetchFromKeychain(); return account;
+        };
+        AccountState admin(accountFor(adminServer)), user(accountFor(userServer));
+        UDriveWorkspaceActions adminActions(&admin), userActions(&user);
+        adminActions.setPermissionDrives({adminServer.drive()}); userActions.setPermissionDrives({userServer.drive()});
+        QTRY_VERIFY(adminActions.permissionsReady()); QTRY_VERIFY(userActions.permissionsReady());
+        QVERIFY(adminActions.canCreate()); QVERIFY(!userActions.canCreate()); QVERIFY(!userActions.can("rename", userServer.drive()));
+        adminServer.delay = 200; adminActions.refreshPermissions();
+        QTRY_VERIFY(adminServer.requests.last().url.path() == QStringLiteral("/graph/v1.0/me"));
+        admin.signOutByUi(); QTest::qWait(250);
+        QVERIFY(!adminActions.permissionsReady()); QVERIFY(!adminActions.canCreate()); QVERIFY(!adminActions.can("rename", adminServer.drive()));
+        QVERIFY(userActions.can("download", userServer.drive())); QVERIFY(!userActions.canCreate());
+    }
+    void discoveryFailsClosed()
+    {
+        QFETCH(int, status); QFETCH(bool, malformed);
+        WorkspaceServer server;
+        auto *account = new Account(QUuid::createUuid(), "test", server.url()); account->setCredentials(new TestCredentials("browser-test-token", "test-refresh-token", account)); account->credentials()->fetchFromKeychain();
+        AccountState state(account); UDriveWorkspaceActions actions(&state);
+        actions.setPermissionDrives({server.drive()}); QTRY_VERIFY(actions.permissionsReady()); QVERIFY(actions.canCreate());
+        server.permissionStatus = status; server.malformedPermissions = malformed;
+        QSignalSpy changed(&actions, &UDriveWorkspaceActions::permissionsChanged); actions.refreshPermissions(); QVERIFY(!actions.canCreate());
+        QTRY_VERIFY(server.requests.last().url.path() == QStringLiteral("/api/v0/settings/permissions-list"));
+        QTest::qWait(100); QVERIFY(changed.size() > 0); QVERIFY(!actions.permissionsReady());
+        const int before = server.requests.size(); QVERIFY(!actions.create("Denied")); QVERIFY(!actions.patch({server.drive()}, {{"name", "Denied"}})); QCOMPARE(server.requests.size(), before);
+    }
     void mutationsAndErrors()
     {
         WorkspaceServer server;
         auto *account = new Account(QUuid::createUuid(), "test", server.url()); account->setCredentials(new TestCredentials("browser-test-token", "test-refresh-token", account)); account->credentials()->fetchFromKeychain();
-        AccountState state(account); UDriveWorkspaceActions actions(&state); QSignalSpy done(&actions, &UDriveWorkspaceActions::finished);
+        AccountState state(account); UDriveWorkspaceActions actions(&state);
+        actions.setPermissionDrives({server.drive(), server.drive("second")}); QTRY_VERIFY(actions.permissionsReady()); QSignalSpy done(&actions, &UDriveWorkspaceActions::finished);
         const auto drive = server.drive();
         QVERIFY(actions.patch({drive}, {{"name", "Renamed"}})); QTRY_COMPARE(done.size(), 1); QVERIFY(done.takeFirst().at(0).toBool());
         QCOMPARE(QJsonDocument::fromJson(server.requests.last().body).object().value("name").toString(), QStringLiteral("Renamed"));
@@ -111,17 +216,23 @@ private Q_SLOTS:
         QCOMPARE(QJsonDocument::fromJson(server.requests.last().body).object().value("quota").toObject().value("total").toInteger(), 2000000000LL);
         QVERIFY(actions.disable({drive})); QTRY_COMPARE(done.size(), 1); QVERIFY(done.takeFirst().at(0).toBool());
         QCOMPARE(server.requests.last().verb, QByteArray("DELETE")); QVERIFY(!server.requests.last().headers.contains("purge"));
-        QVERIFY(actions.disable({drive}, true)); QTRY_COMPARE(done.size(), 1); QVERIFY(done.takeFirst().at(0).toBool()); QCOMPARE(server.requests.last().headers.value("restore"), QByteArray("T"));
+        auto disabledData = drive.asJsonObject(); auto disabledRoot = disabledData.value("root").toObject();
+        disabledRoot.insert("deleted", QJsonObject{{"state", "trashed"}}); disabledData.insert("root", disabledRoot);
+        OpenAPI::OAIDrive disabled; disabled.fromJsonObject(disabledData);
+        QVERIFY(actions.disable({disabled}, true)); QTRY_COMPARE(done.size(), 1); QVERIFY(done.takeFirst().at(0).toBool()); QCOMPARE(server.requests.last().headers.value("restore"), QByteArray("T"));
         server.deny = 403; QVERIFY(actions.patch({drive}, {{"description", "No"}})); QTRY_COMPARE(done.size(), 1); auto result = done.takeFirst(); QVERIFY(!result.at(0).toBool()); QVERIFY(result.at(1).toString().contains("Permission"));
         const int count = server.requests.size(); server.deny = 500;
+        QVERIFY(!actions.canCreate()); actions.refreshPermissions(); QTRY_VERIFY(actions.permissionsReady());
+        const int beforeWrite = server.requests.size();
         QVERIFY(actions.patch({drive}, {{"name", "No replay"}})); QTRY_COMPARE(done.size(), 1); QVERIFY(!done.takeFirst().at(0).toBool());
-        QCOMPARE(server.requests.size(), count + 1);
+        QVERIFY(beforeWrite > count); QCOMPARE(server.requests.size(), beforeWrite + 1);
     }
     void specialFilesAndDescription()
     {
         WorkspaceServer server;
         auto *account = new Account(QUuid::createUuid(), "test", server.url()); account->setCredentials(new TestCredentials("browser-test-token", "test-refresh-token", account)); account->credentials()->fetchFromKeychain();
-        AccountState state(account); UDriveWorkspaceActions actions(&state); QSignalSpy done(&actions, &UDriveWorkspaceActions::finished);
+        AccountState state(account); UDriveWorkspaceActions actions(&state);
+        actions.setPermissionDrives({server.drive(), server.drive("second")}); QTRY_VERIFY(actions.permissionsReady()); QSignalSpy done(&actions, &UDriveWorkspaceActions::finished);
         auto drive = server.drive();
         for (const auto &kind : {QStringLiteral("readme"), QStringLiteral("image")}) {
             server.missingFileId = kind == QStringLiteral("image");
@@ -140,7 +251,8 @@ private Q_SLOTS:
     {
         WorkspaceServer server;
         auto *account = new Account(QUuid::createUuid(), "test", server.url()); account->setCredentials(new TestCredentials("browser-test-token", "test-refresh-token", account)); account->credentials()->fetchFromKeychain();
-        AccountState state(account); UDriveWorkspaceActions actions(&state); QSignalSpy done(&actions, &UDriveWorkspaceActions::finished);
+        AccountState state(account); UDriveWorkspaceActions actions(&state);
+        actions.setPermissionDrives({server.drive(), server.drive("second")}); QTRY_VERIFY(actions.permissionsReady()); QSignalSpy done(&actions, &UDriveWorkspaceActions::finished);
         auto drive = server.drive(); auto data = drive.asJsonObject(); data.insert("special", QJsonArray{QJsonObject{{"id", "readme"}, {"name", "readme.md"}, {"specialFolder", QJsonObject{{"name", "readme"}}}}}); drive.fromJsonObject(data);
         QVERIFY(actions.duplicate({drive}, {"Research copy"})); QTRY_COMPARE(done.size(), 1); QVERIFY(done.takeFirst().at(0).toBool()); QCOMPARE(server.copies, 2);
         bool copied = false, linked = false;
@@ -168,6 +280,7 @@ private Q_SLOTS:
         account->setCredentials(new TestCredentials("browser-test-token", "test-refresh-token", account));
         account->credentials()->fetchFromKeychain();
         AccountState state(account); UDriveWorkspaceActions actions(&state);
+        actions.setPermissionDrives({server.drive(), server.drive("second")}); QTRY_VERIFY(actions.permissionsReady());
         QSignalSpy done(&actions, &UDriveWorkspaceActions::finished);
         QVERIFY(actions.duplicate({server.drive()}, {QStringLiteral("Preserved names")}));
         QTRY_COMPARE(done.size(), 1);
@@ -200,6 +313,7 @@ private Q_SLOTS:
         account->setCredentials(new TestCredentials("browser-test-token", "test-refresh-token", account));
         account->credentials()->fetchFromKeychain();
         AccountState state(account); UDriveWorkspaceActions actions(&state);
+        actions.setPermissionDrives({server.drive(), server.drive("second")}); QTRY_VERIFY(actions.permissionsReady());
         QSignalSpy done(&actions, &UDriveWorkspaceActions::finished);
         QVERIFY(actions.duplicate({server.drive()}, {QStringLiteral("Rejected listing")}));
         QTRY_COMPARE(done.size(), 1); QVERIFY(!done.first().at(0).toBool());
@@ -212,7 +326,8 @@ private Q_SLOTS:
         WorkspaceServer server;
         auto *account = new Account(QUuid::createUuid(), "test", server.url()); account->setCredentials(new TestCredentials("browser-test-token", "test-refresh-token", account)); account->credentials()->fetchFromKeychain();
         account->setCapabilities(Capabilities(server.url(), QVariantMap{{"spaces", QVariantMap{{"enabled", true}}}, {"files", QVariantMap{{"archivers", QVariantList{QVariantMap{{"enabled", true}, {"version", "v2.0.0"}, {"archiver_url", "/archive"}}}}}}}));
-        AccountState state(account); UDriveWorkspaceActions actions(&state); QSignalSpy done(&actions, &UDriveWorkspaceActions::finished);
+        AccountState state(account); UDriveWorkspaceActions actions(&state);
+        actions.setPermissionDrives({server.drive(), server.drive("second")}); QTRY_VERIFY(actions.permissionsReady()); QSignalSpy done(&actions, &UDriveWorkspaceActions::finished);
         QTemporaryDir folder; const auto path = folder.filePath("archive.zip");
         QVERIFY(actions.archiveAvailable()); QVERIFY(actions.download({server.drive(), server.drive("second")}, path)); QTRY_COMPARE(done.size(), 1); QVERIFY(done.takeFirst().at(0).toBool());
         QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), server.archive); file.close();

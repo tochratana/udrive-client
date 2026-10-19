@@ -68,6 +68,11 @@ endif(UNIX AND NOT APPLE)
 owncloud_add_test(FileSystem)
 
 owncloud_add_test(FolderMan)
+owncloud_add_test(NewAccountSettings ../src/gui/newaccountwizard/advancedsettingspagecontroller.cpp)
+if(APPLE)
+    owncloud_add_test(FinderFavorites)
+    target_link_libraries(FinderFavoritesTest "-framework CoreServices")
+endif()
 
 owncloud_add_test(OAuth ../src/gui/creds/oauth.cpp ../src/gui/networkadapters/userinfoadapter.cpp ../src/gui/creds/oauthhtmlpage.cpp)
 

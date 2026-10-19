@@ -22,9 +22,10 @@ class OWNCLOUDGUI_EXPORT UDriveAdminApi : public QObject
 public:
     enum class Resource { Users, Groups, Workspaces };
     Q_ENUM(Resource)
-    explicit UDriveAdminApi(AccountState *state, QObject *parent = nullptr);
+    explicit UDriveAdminApi(AccountState *state, QObject *parent = nullptr, bool loadRoles = true);
     ~UDriveAdminApi() override;
     bool available() const;
+    bool hasPermission(const char *permission) const { return !_checkingAccess && has(permission); }
     bool busy() const { return _busy; }
     bool canRead(Resource resource) const;
     bool canCreate(Resource resource) const;
@@ -70,5 +71,6 @@ private:
     QJsonArray _roles;
     bool _busy = false;
     bool _checkingAccess = false;
+    bool _loadRoles = true;
 };
 }
