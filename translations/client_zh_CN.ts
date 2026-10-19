@@ -2206,4 +2206,39 @@
             <translation>工作区已复制。</translation>
         </message>
     </context>
+    <context>
+        <name>OCC::AppearanceWidget</name>
+        <message>
+            <source>Appearance</source>
+            <translation>外观</translation>
+        </message>
+        <message>
+            <source>Customize the color theme and display mode of your workspace.</source>
+            <translation>自定义工作区的颜色主题和显示模式。</translation>
+        </message>
+        <message>
+            <source>Light</source>
+            <translation>浅色</translation>
+        </message>
+        <message>
+            <source>Bright &amp; clear daytime look</source>
+            <translation>明亮清晰的日间模式</translation>
+        </message>
+        <message>
+            <source>Dark</source>
+            <translation>深色</translation>
+        </message>
+        <message>
+            <source>60-30-10 charcoal workspace</source>
+            <translation>60-30-10 炭黑工作区</translation>
+        </message>
+        <message>
+            <source>System</source>
+            <translation>跟随系统</translation>
+        </message>
+        <message>
+            <source>Follows macOS &amp; OS settings</source>
+            <translation>跟随 macOS 及操作系统设置</translation>
+        </message>
+    </context>
 </TS>

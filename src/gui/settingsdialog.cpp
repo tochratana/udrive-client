@@ -21,6 +21,7 @@
 #include "udriveadminwidget.h"
 #include "udriveicons.h"
 #include "udrivepopup.h"
+#include "common/utility.h"
 #include "resources/resources.h"
 #include "libsync/graphapi/spacesmanager.h"
 #include <QLineEdit>
@@ -49,8 +50,10 @@
 #include <QScrollArea>
 #include <QPainter>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QTextOption>
 #include <algorithm>
+#include <functional>
 
 #ifdef Q_OS_MAC
 #include "settingsdialog_mac.h"
@@ -284,6 +287,438 @@ public:
 
 namespace OCC {
 
+class NotificationBadgeButton : public QPushButton
+{
+public:
+    explicit NotificationBadgeButton(QWidget *parent = nullptr)
+        : QPushButton(parent)
+    {
+        setObjectName(QStringLiteral("driveHeaderTool"));
+        setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Bell));
+        setIconSize(QSize(20, 20));
+        setFixedSize(36, 36);
+        setCursor(Qt::PointingHandCursor);
+        setAccessibleName(tr("Notifications"));
+        setToolTip(tr("Notifications"));
+    }
+
+    void setUnreadCount(int count)
+    {
+        if (_unreadCount == count)
+            return;
+        _unreadCount = count;
+        setToolTip(_unreadCount > 0
+            ? tr("Notifications (%1 unread)").arg(_unreadCount)
+            : tr("Notifications"));
+        update();
+    }
+
+    int unreadCount() const { return _unreadCount; }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        QPushButton::paintEvent(event);
+        if (_unreadCount <= 0)
+            return;
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+
+        const QString badgeText = _unreadCount > 99 ? QStringLiteral("99+") : QString::number(_unreadCount);
+        QFont badgeFont = font();
+        badgeFont.setPixelSize(10);
+        badgeFont.setBold(true);
+        painter.setFont(badgeFont);
+
+        const QFontMetrics fm(badgeFont);
+        const int textWidth = fm.horizontalAdvance(badgeText);
+        const int badgeHeight = 16;
+        const int badgeWidth = qMax(badgeHeight, textWidth + 8);
+        const QRect badgeRect(width() - badgeWidth - 1, 1, badgeWidth, badgeHeight);
+
+        const bool dark = palette().color(QPalette::Window).lightness() < 128;
+        painter.setPen(QPen(QColor(dark ? "#2B2D2F" : "#FFFFFF"), 1.5));
+        painter.setBrush(QColor(QStringLiteral("#FF4B55")));
+        painter.drawRoundedRect(QRectF(badgeRect).adjusted(-0.5, -0.5, 0.5, 0.5), badgeHeight / 2.0 + 0.5, badgeHeight / 2.0 + 0.5);
+
+        painter.setPen(Qt::white);
+        painter.drawText(badgeRect, Qt::AlignCenter, badgeText);
+    }
+
+private:
+    int _unreadCount = 0;
+};
+
+class NotificationAvatar : public QWidget
+{
+public:
+    explicit NotificationAvatar(const QString &initials, QWidget *parent = nullptr)
+        : QWidget(parent)
+        , _initials(initials.isEmpty() ? QStringLiteral("?") : initials.toUpper())
+    {
+        setFixedSize(36, 36);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(QStringLiteral("#007C58")));
+        painter.drawEllipse(rect());
+
+        painter.setPen(Qt::white);
+        QFont f = font();
+        f.setPixelSize(13);
+        f.setBold(true);
+        painter.setFont(f);
+        painter.drawText(rect(), Qt::AlignCenter, _initials);
+    }
+
+private:
+    QString _initials;
+};
+
+class UnreadDotWidget : public QWidget
+{
+public:
+    explicit UnreadDotWidget(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setFixedSize(8, 8);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(QStringLiteral("#00856B")));
+        painter.drawEllipse(rect());
+    }
+};
+
+static QString sanitizeNotificationRichText(const QString &raw, int maxLen = 128)
+{
+    QString clean = raw.trimmed().simplified();
+    clean.remove(QRegularExpression(QStringLiteral("[\\p{Cc}\\x{202a}-\\x{202e}\\x{2066}-\\x{2069}]")));
+    if (clean.size() > maxLen)
+        clean = clean.left(maxLen - 1) + QStringLiteral("…");
+    return clean.toHtmlEscaped();
+}
+
+class NotificationRowWidget : public QWidget
+{
+public:
+    explicit NotificationRowWidget(const UDriveShareNotification &item,
+                                  std::function<void(const QString &)> onClicked,
+                                  QWidget *parent = nullptr)
+        : QWidget(parent)
+        , _notificationId(item.id)
+        , _isRead(item.isRead)
+        , _onClicked(std::move(onClicked))
+    {
+        setCursor(Qt::PointingHandCursor);
+        setFocusPolicy(Qt::StrongFocus);
+        setAttribute(Qt::WA_Hover);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+        auto *rowLayout = new QHBoxLayout(this);
+        rowLayout->setContentsMargins(12, 10, 12, 10);
+        rowLayout->setSpacing(12);
+
+        auto *avatar = new NotificationAvatar(item.sharerInitials, this);
+        rowLayout->addWidget(avatar, 0, Qt::AlignTop);
+
+        auto *textLayout = new QVBoxLayout;
+        textLayout->setContentsMargins(0, 0, 0, 0);
+        textLayout->setSpacing(4);
+
+        const bool dark = palette().color(QPalette::Window).lightness() < 128;
+        const QString safeSharer = sanitizeNotificationRichText(item.sharerName, 64);
+        const QString safeFile = sanitizeNotificationRichText(item.fileName, 128);
+        const QString textColor = dark ? QStringLiteral("#EDEEF0") : QStringLiteral("#24332C");
+        const QString mutedColor = dark ? QStringLiteral("#AFB8B2") : QStringLiteral("#64776B");
+
+        auto *descLabel = new QLabel(this);
+        descLabel->setTextFormat(Qt::RichText);
+        descLabel->setWordWrap(true);
+        descLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+        descLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 13px; }").arg(textColor));
+
+        const QString richText = safeSharer.isEmpty()
+            ? tr("Someone shared <b>%1</b> with you").arg(safeFile)
+            : tr("<b>%1</b> shared <b>%2</b> with you").arg(safeSharer, safeFile);
+        descLabel->setText(richText);
+        textLayout->addWidget(descLabel);
+
+        const QString timeAgo = Utility::timeAgoInWords(item.timestamp);
+        auto *timeLabel = new QLabel(timeAgo, this);
+        timeLabel->setTextFormat(Qt::PlainText);
+        timeLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+        timeLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 12px; }").arg(mutedColor));
+        textLayout->addWidget(timeLabel);
+
+        rowLayout->addLayout(textLayout, 1);
+
+        _unreadDot = new UnreadDotWidget(this);
+        _unreadDot->setVisible(!_isRead);
+        rowLayout->addWidget(_unreadDot, 0, Qt::AlignCenter);
+    }
+
+    void markRead()
+    {
+        if (!_isRead) {
+            _isRead = true;
+            if (_unreadDot) {
+                _unreadDot->hide();
+            }
+            update();
+        }
+    }
+
+    void activate()
+    {
+        markRead();
+        if (_onClicked) {
+            _onClicked(_notificationId);
+        }
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            activate();
+            event->accept();
+            return;
+        }
+        QWidget::mousePressEvent(event);
+    }
+
+    void keyPressEvent(QKeyEvent *event) override
+    {
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter || event->key() == Qt::Key_Space) {
+            activate();
+            event->accept();
+            return;
+        }
+        QWidget::keyPressEvent(event);
+    }
+
+    void focusInEvent(QFocusEvent *event) override
+    {
+        QWidget::focusInEvent(event);
+        update();
+    }
+
+    void focusOutEvent(QFocusEvent *event) override
+    {
+        QWidget::focusOutEvent(event);
+        update();
+    }
+
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        if (underMouse() || hasFocus()) {
+            const bool dark = palette().color(QPalette::Window).lightness() < 128;
+            painter.setBrush(QColor(dark ? "#383A3C" : "#F0F4F2"));
+            painter.setPen(hasFocus() ? QPen(QColor(QStringLiteral("#00856B")), 1.5) : Qt::NoPen);
+            painter.drawRoundedRect(QRectF(rect()).adjusted(2, 1, -2, -1), 8, 8);
+        }
+    }
+
+    void enterEvent(QEnterEvent *event) override
+    {
+        QWidget::enterEvent(event);
+        update();
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        QWidget::leaveEvent(event);
+        update();
+    }
+
+private:
+    QString _notificationId;
+    bool _isRead = false;
+    std::function<void(const QString &)> _onClicked;
+    UnreadDotWidget *_unreadDot = nullptr;
+};
+
+class UDriveNotificationPopup : public QFrame
+{
+public:
+    explicit UDriveNotificationPopup(UDriveIncomingSharesNotifier *notifier,
+                                    std::function<void(const QString &)> onItemClicked,
+                                    QWidget *parent = nullptr)
+        : QFrame(parent, Qt::Popup | Qt::FramelessWindowHint)
+        , _notifier(notifier)
+        , _onItemClicked(std::move(onItemClicked))
+    {
+        setObjectName(QStringLiteral("driveNotificationPopup"));
+        setFrameShape(QFrame::NoFrame);
+        setAttribute(Qt::WA_DeleteOnClose);
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_NoMouseReplay);
+
+        setupUI();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const bool dark = palette().color(QPalette::Window).lightness() < 128;
+        painter.setPen(QPen(QColor(dark ? "#464B48" : "#DFE6E1"), 1));
+        painter.setBrush(QColor(dark ? "#2B2D2F" : "#FFFFFF"));
+        painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 14, 14);
+    }
+
+    void keyPressEvent(QKeyEvent *event) override
+    {
+        if (event->key() == Qt::Key_Escape) {
+            close();
+            event->accept();
+            return;
+        } else if (event->key() == Qt::Key_Down || event->key() == Qt::Key_Up) {
+            moveRowFocus(event->key() == Qt::Key_Down);
+            event->accept();
+            return;
+        }
+        QFrame::keyPressEvent(event);
+    }
+
+private:
+    void setupUI()
+    {
+        const bool dark = palette().color(QPalette::Window).lightness() < 128;
+        const QString titleColor = dark ? QStringLiteral("#EDEEF0") : QStringLiteral("#24332C");
+        const QString linkColor = dark ? QStringLiteral("#40D979") : QStringLiteral("#00856B");
+        const QString linkHoverColor = dark ? QStringLiteral("#63E493") : QStringLiteral("#006E4E");
+        const QString dividerColor = dark ? QStringLiteral("#404642") : QStringLiteral("#E3EAE6");
+
+        auto *mainLayout = new QVBoxLayout(this);
+        mainLayout->setContentsMargins(8, 12, 8, 8);
+        mainLayout->setSpacing(4);
+
+        // Header
+        auto *headerWidget = new QWidget(this);
+        auto *headerLayout = new QHBoxLayout(headerWidget);
+        headerLayout->setContentsMargins(8, 0, 8, 4);
+        headerLayout->setSpacing(8);
+
+        auto *title = new QLabel(tr("Notifications"), headerWidget);
+        title->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 16px; font-weight: 700; }").arg(titleColor));
+        headerLayout->addWidget(title);
+        headerLayout->addStretch(1);
+
+        auto *markAll = new QPushButton(tr("Mark all as read"), headerWidget);
+        markAll->setFlat(true);
+        markAll->setCursor(Qt::PointingHandCursor);
+        markAll->setStyleSheet(QStringLiteral(
+            "QPushButton { background: transparent; border: none; color: %1; font-size: 13px; font-weight: 500; padding: 2px 4px; }"
+            "QPushButton:hover { color: %2; }"
+            "QPushButton:disabled { color: %3; }")
+            .arg(linkColor, linkHoverColor, dark ? QStringLiteral("#6B7280") : QStringLiteral("#9CA3AF")));
+
+        const int unreadCount = _notifier ? _notifier->unreadCount() : 0;
+        markAll->setEnabled(unreadCount > 0);
+        connect(markAll, &QPushButton::clicked, this, [this, markAll] {
+            if (_notifier) {
+                _notifier->markAllAsRead();
+            }
+            markAll->setEnabled(false);
+            for (auto *row : _rows) {
+                if (row) {
+                    row->markRead();
+                }
+            }
+        });
+        headerLayout->addWidget(markAll);
+
+        mainLayout->addWidget(headerWidget);
+
+        // Divider
+        auto *divider = new QFrame(this);
+        divider->setFixedHeight(1);
+        divider->setStyleSheet(QStringLiteral("background: %1; border: none;").arg(dividerColor));
+        mainLayout->addWidget(divider);
+
+        // Content (display up to 50 most recent notifications for optimal performance)
+        const auto allNotifications = _notifier ? _notifier->notifications() : QList<UDriveShareNotification>();
+        const auto notifications = allNotifications.mid(0, 50);
+
+        auto *scroll = new QScrollArea(this);
+        scroll->setWidgetResizable(true);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        scroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; border: none; }"));
+
+        auto *content = new QWidget(scroll);
+        content->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
+        auto *contentLayout = new QVBoxLayout(content);
+        contentLayout->setContentsMargins(0, 4, 0, 4);
+        contentLayout->setSpacing(2);
+        contentLayout->setAlignment(Qt::AlignTop);
+
+        if (notifications.isEmpty()) {
+            auto *emptyLabel = new QLabel(tr("No notifications"), content);
+            emptyLabel->setAlignment(Qt::AlignCenter);
+            emptyLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 13px; padding: 36px 16px; }")
+                .arg(dark ? QStringLiteral("#AFB8B2") : QStringLiteral("#64776B")));
+            contentLayout->addWidget(emptyLabel);
+            scroll->setFixedHeight(120);
+        } else {
+            for (const auto &item : notifications) {
+                auto *row = new NotificationRowWidget(item, [this](const QString &id) {
+                    close();
+                    if (_onItemClicked) {
+                        _onItemClicked(id);
+                    }
+                }, content);
+                _rows.append(row);
+                contentLayout->addWidget(row);
+            }
+            const int totalHeight = qMin(380, qMax(80, int(notifications.size()) * 78 + 8));
+            scroll->setFixedHeight(totalHeight);
+        }
+
+        scroll->setWidget(content);
+        mainLayout->addWidget(scroll);
+    }
+
+    void moveRowFocus(bool forward)
+    {
+        if (_rows.isEmpty())
+            return;
+        QWidget *current = focusWidget();
+        int index = -1;
+        for (int i = 0; i < _rows.size(); ++i) {
+            if (_rows.at(i) == current) {
+                index = i;
+                break;
+            }
+        }
+        const int target = index < 0 ? 0 : (index + (forward ? 1 : _rows.size() - 1)) % _rows.size();
+        _rows.at(target)->setFocus(forward ? Qt::TabFocusReason : Qt::BacktabFocusReason);
+        if (auto *scroll = findChild<QScrollArea *>())
+            scroll->ensureWidgetVisible(_rows.at(target));
+    }
+
+    QPointer<UDriveIncomingSharesNotifier> _notifier;
+    std::function<void(const QString &)> _onItemClicked;
+    QList<NotificationRowWidget *> _rows;
+};
+
 SettingsDialog::SettingsDialog(ownCloudGui *gui, QWidget *parent)
     : QMainWindow(parent)
     , _ui(new Ui::SettingsDialog)
@@ -390,12 +825,20 @@ SettingsDialog::~SettingsDialog()
     QObject::disconnect(this, nullptr, this, nullptr);
     if (_accountPopup)
         _accountPopup->close();
+    if (_notificationPopup) {
+        _notificationPopup->disconnect();
+        _notificationPopup->close();
+        delete _notificationPopup.data();
+    }
     delete _ui;
 }
 
 bool SettingsDialog::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched == qApp && (event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::ThemeChange)) {
+        if (ConfigFile().themeMode() != ConfigFile::ThemeMode::System) {
+            Application::applyApplicationTheme(ConfigFile().themeMode());
+        }
         // Allow QApplication to finish applying the new system palette first.
         QTimer::singleShot(0, this, &SettingsDialog::updateUDriveAppearance);
     }
@@ -455,6 +898,9 @@ void SettingsDialog::createWorkspaceHeader()
     emptySearch->setEnabled(false);
     _searchStack->addWidget(emptySearch);
     row->addWidget(_searchStack, 1);
+    _notificationButton = new NotificationBadgeButton(header);
+    connect(_notificationButton, &QPushButton::clicked, this, &SettingsDialog::showNotificationPopup);
+    row->addWidget(_notificationButton);
     auto addTool = [this, header, row](UDriveIcons::Symbol symbol, const QString &label, SettingsPage page) {
         auto *button = new QPushButton(header);
         button->setObjectName(QStringLiteral("driveHeaderTool"));
@@ -625,6 +1071,68 @@ void SettingsDialog::showAccountPopup()
     (firstButton ? firstButton : add)->setFocus(Qt::PopupFocusReason);
 }
 
+void SettingsDialog::showNotificationPopup()
+{
+    if (_notificationPopup) {
+        const bool wasVisible = _notificationPopup->isVisible();
+        _notificationPopup->close();
+        delete _notificationPopup.data();
+        if (wasVisible)
+            return;
+    }
+    if (!_notificationButton)
+        return;
+
+    auto *files = qobject_cast<UDriveFileBrowser *>(_ui->stack->currentWidget());
+    if (!files && _lastAccount) {
+        files = _filesForAccount.value(_lastAccount->uuid(), nullptr);
+    }
+    auto *notifier = files ? files->sharesNotifier() : nullptr;
+
+    QPointer<UDriveFileBrowser> safeFiles = files;
+    auto *popup = new UDriveNotificationPopup(notifier, [this, safeFiles](const QString &id) {
+        if (safeFiles) {
+            if (safeFiles->sharesNotifier()) {
+                safeFiles->sharesNotifier()->markAsRead(id);
+            }
+            setCurrentPage(SettingsPage::Files);
+            safeFiles->navigateToSharesTab();
+        }
+    }, this);
+    _notificationPopup = popup;
+
+    connect(AccountManager::instance(), &AccountManager::accountsChanged, popup, &QWidget::close);
+    connect(this, &SettingsDialog::currentAccountChanged, popup, &QWidget::close);
+
+    const QRect available = udrivePopupBounds(this);
+    popup->setFixedWidth(qMin(380, available.width() - 20));
+    popup->adjustSize();
+
+    const QPoint anchor = _notificationButton->mapToGlobal(QPoint(_notificationButton->width() / 2, _notificationButton->height() + 8));
+    int x = anchor.x() - popup->width() / 2;
+    x = qBound(available.left() + 8, x, available.right() - popup->width() - 8);
+    int y = anchor.y();
+    if (y + popup->height() > available.bottom() - 8)
+        y = _notificationButton->mapToGlobal(QPoint(0, -8)).y() - popup->height();
+    y = qBound(available.top() + 8, y, available.bottom() - popup->height() - 8);
+
+    popup->move(x, y);
+    popup->show();
+}
+
+void SettingsDialog::updateNotificationBadge()
+{
+    if (!_notificationButton)
+        return;
+
+    auto *files = qobject_cast<UDriveFileBrowser *>(_ui->stack->currentWidget());
+    if (!files && _lastAccount) {
+        files = _filesForAccount.value(_lastAccount->uuid(), nullptr);
+    }
+    const int count = (files && files->sharesNotifier()) ? files->sharesNotifier()->unreadCount() : 0;
+    _notificationButton->setUnreadCount(count);
+}
+
 void SettingsDialog::updateWorkspaceHeader()
 {
     if (!_searchStack)
@@ -650,6 +1158,7 @@ void SettingsDialog::updateWorkspaceHeader()
     }
     _searchStack->setCurrentIndex(search ? _searchStack->indexOf(search) : 0);
     _profileButton->setText(_lastAccount ? _lastAccount->initials().toUpper().left(3) : QStringLiteral("+"));
+    updateNotificationBadge();
     Q_EMIT workspaceChanged();
 }
 
@@ -740,8 +1249,10 @@ void SettingsDialog::updateUDriveAppearance()
         return;
 
     // Scope these styles to the content area; OAuth wizards and native dialogs
-    // continue to use their own palettes. Follow the system's light/dark mode.
-    const bool dark = qApp->palette().color(QPalette::Window).lightness() < 128;
+    // continue to use their own palettes. Follow the system's light/dark mode or user preference.
+    const auto themeMode = ConfigFile().themeMode();
+    const bool dark = themeMode == ConfigFile::ThemeMode::Dark
+        || (themeMode == ConfigFile::ThemeMode::System && qApp->palette().color(QPalette::Window).lightness() < 128);
     const QString surface = dark ? QStringLiteral("#292929") : QStringLiteral("#FFFFFF");
     const QString text = dark ? QStringLiteral("#EDEEF0") : QStringLiteral("#2B3035");
     const QString border = dark ? QStringLiteral("#414141") : QStringLiteral("#E1E5E8");
@@ -950,6 +1461,10 @@ void SettingsDialog::onAccountAdded(AccountState *state)
         auto *files = new UDriveFileBrowser(state, this);
         _ui->stack->addWidget(files);
         _filesForAccount.insert(state->account()->uuid(), files);
+        if (files->sharesNotifier()) {
+            connect(files->sharesNotifier(), &UDriveIncomingSharesNotifier::unreadCountChanged,
+                    this, &SettingsDialog::updateNotificationBadge);
+        }
         auto *admin = new UDriveAdminWidget(state, this);
         _adminForAccount.insert(state->account()->uuid(), admin);
         _ui->stack->addWidget(admin);
@@ -1021,6 +1536,11 @@ void SettingsDialog::onAccountRemoved(AccountState *state)
         _ui->stack->removeWidget(files);
         delete files;
     }
+    if (_notificationPopup) {
+        _notificationPopup->close();
+        delete _notificationPopup.data();
+    }
+
     if (_lastAccount == acc)
         _lastAccount.clear();
 
@@ -1101,6 +1621,25 @@ void SettingsDialog::setVisible(bool visible)
     }
 #endif
     QMainWindow::setVisible(visible);
+}
+
+void SettingsDialog::changeEvent(QEvent *event)
+{
+    if (event->type() == QEvent::LanguageChange) {
+        _ui->retranslateUi(this);
+        setWindowTitle(tr("%1").arg(Theme::instance()->appNameGUI()));
+        if (_ui->quickWidget && _ui->quickWidget->engine()) {
+            _ui->quickWidget->engine()->retranslate();
+        }
+        updateWorkspaceHeader();
+        updateNotificationBadge();
+        for (auto *browser : _filesForAccount) {
+            if (browser) browser->retranslate();
+        }
+        Q_EMIT workspaceChanged();
+        Q_EMIT currentPageChanged();
+    }
+    QMainWindow::changeEvent(event);
 }
 
 void SettingsDialog::setCurrentPage(SettingsPage currentPage)

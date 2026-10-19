@@ -19,6 +19,8 @@
 #include <QSet>
 #include <QString>
 
+class QApplication;
+
 namespace OCC {
 
 namespace Translations {
@@ -45,6 +47,14 @@ namespace Translations {
      * @return list of locales for which translations are available
      */
     OWNCLOUDGUI_EXPORT QSet<QString> listAvailableTranslations();
+
+    /**
+     * Installs or switches application translations dynamically in real time.
+     * @param locale Canonical or raw locale code (e.g., "km", "zh_CN", "en_US").
+     * @param app Optional pointer to QApplication (defaults to qApp).
+     * @return The canonical display language installed.
+     */
+    OWNCLOUDGUI_EXPORT QString installLanguage(const QString &locale, QApplication *app = nullptr);
 
 } // namespace Translations
 

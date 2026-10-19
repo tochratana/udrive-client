@@ -46,6 +46,11 @@ build tooling; the application itself is written in C++ and QML.
 ## Features
 
 - Browse Personal files, Workspaces, Shares, Favorites and Deleted files.
+- Shares lists show recipients (or the sender for incoming shares), each file's
+  location, and a selection details panel. Their menu offers Open, Share,
+  Copy permanent link, Download, Rename and Details. Rename requires the
+  signed-in user's permissions from an authenticated DAV lookup of that item;
+  permissions granted to recipients never enable the owner's actions.
 - Navigate folders through clickable breadcrumbs and search the current folder.
 - Switch between default table, condensed table and tile views.
 - Sort by Recent, A–Z, Z–A, Newest, Oldest, Largest or Smallest. Recent tracks

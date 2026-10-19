@@ -35,6 +35,7 @@ class QTemporaryDir;
 class QTimer;
 class QListView;
 class QAbstractItemView;
+class QScrollArea;
 
 namespace OpenAPI { class OAIDrive; }
 
@@ -47,6 +48,7 @@ class UDrivePdfPreview;
 class UDriveThumbnails;
 class UDriveWorkspaceActions;
 class DeleteConfirmDialog;
+class UDriveIncomingSharesNotifier;
 
 class UDriveFileBrowser : public QWidget
 {
@@ -93,6 +95,9 @@ public:
     QLineEdit *takeSearchField();
     bool canCreate() const;
     void showNewMenu(const QPoint &globalPosition, int minimumWidth = 0);
+    UDriveIncomingSharesNotifier *sharesNotifier() const { return _sharesNotifier; }
+    void navigateToSharesTab();
+    void retranslate();
 
 Q_SIGNALS:
     void creationAvailabilityChanged();
@@ -106,6 +111,7 @@ protected:
     void hideEvent(QHideEvent *event) override;
     void showEvent(QShowEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
+    void changeEvent(QEvent *event) override;
 
 private:
     enum class ViewMode { Default, Condensed, Tiles };
@@ -138,6 +144,10 @@ private:
     void cancelOperation();
     void confirmDelete(bool permanent);
     void addFileActions(QMenu *menu);
+    void buildFileDetails();
+    void updateFileDetails();
+    void updateFileColumns();
+    void loadShareItemPermissions();
     void updateBreadcrumbs();
     void navigateToBreadcrumb(const QString &path, const QUrl &root);
     void updateSpaces();
@@ -272,6 +282,21 @@ private:
     QAction *_linkAction;
     QAction *_webAction;
     QAction *_shareAction;
+    QAction *_detailsAction = nullptr;
+    QWidget *_fileDetails = nullptr;
+    QLabel *_detailsName = nullptr;
+    QLabel *_detailsIcon = nullptr;
+    QLabel *_detailsLocation = nullptr;
+    QLabel *_detailsModified = nullptr;
+    QLabel *_detailsSize = nullptr;
+    QLabel *_detailsPeople = nullptr;
+    QPushButton *_detailsShare = nullptr;
+    QPushButton *_detailsDownload = nullptr;
+    QPushButton *_detailsRename = nullptr;
+    QPushButton *_detailsWeb = nullptr;
+    bool _detailsRequested = false;
+    QPersistentModelIndex _detailsIndex;
+    QPointer<PropfindJob> _shareItemJob;
     QProgressBar *_progress;
     QTreeView *_tree;
     QListView *_tiles;
@@ -287,6 +312,7 @@ private:
     UDriveThumbnails *_thumbnails;
     QTimer *_thumbnailTimer;
     QSet<QPersistentModelIndex> _thumbnailRows;
+    UDriveIncomingSharesNotifier *_sharesNotifier = nullptr;
 };
 
 class DeleteConfirmDialog : public QDialog
@@ -332,11 +358,16 @@ private:
     void fetchShares();
     void revokeShare(const QString &shareId);
     void copyLink();
+    void createPublicLink();
+    void updatePublicLinkPermissions(const QString &shareId, int permissions);
+    void copyPublicLink(const QString &url);
+    void deletePublicLink(const QString &shareId);
     void fetchWorkspaceMembers();
     void inviteWorkspaceMember();
     void removeWorkspaceMember(const QString &permissionId);
     SimpleNetworkJob *workspaceRequest(const QByteArray &verb, const QString &suffix, const QJsonObject &body);
     void cancelWorkspaceRequest();
+    void cancelPublicLinkRequest();
 
     QPointer<AccountState> _accountState;
     QTimer *_recipientTimer = nullptr;
@@ -344,6 +375,7 @@ private:
     QStandardItemModel *_recipientModel = nullptr;
     QPointer<JsonApiJob> _recipientJob;
     QPointer<SimpleNetworkJob> _workspaceJob;
+    QPointer<JsonApiJob> _publicLinkJob;
     Target _target = Target::File;
     QMap<QString, QString> _workspaceRoles;
     bool _canInviteMembers = false;
@@ -366,5 +398,64 @@ private:
     QVBoxLayout *_sharesLayout = nullptr;
     QWidget *_sharesContainer = nullptr;
     QPushButton *_copyLinkButton = nullptr;
+    QWidget *_publicLinksSection = nullptr;
+    QPushButton *_addLinkButton = nullptr;
+    QScrollArea *_publicLinksScrollArea = nullptr;
+    QWidget *_publicLinksContainer = nullptr;
+    QVBoxLayout *_publicLinksLayout = nullptr;
+};
+
+struct UDriveShareNotification
+{
+    QString id;
+    QString fileName;
+    QString sharerName;
+    QString sharerInitials;
+    QDateTime timestamp;
+    bool isRead = false;
+};
+
+class UDriveIncomingSharesNotifier : public QObject
+{
+    Q_OBJECT
+public:
+    explicit UDriveIncomingSharesNotifier(AccountState *accountState, QObject *parent = nullptr);
+    ~UDriveIncomingSharesNotifier() override;
+
+    void checkNow();
+    bool hasBaseline() const;
+    bool isInFlight() const;
+    void recordKnownShareIds(const QSet<QString> &ids);
+
+    QList<UDriveShareNotification> notifications() const;
+    int unreadCount() const;
+    void markAllAsRead();
+    void markAsRead(const QString &id);
+
+Q_SIGNALS:
+    void incomingSharesUpdated();
+    void newSharesDetected(const QStringList &fileNames, const QStringList &sharers);
+    void notificationsChanged();
+    void unreadCountChanged(int count);
+
+private Q_SLOTS:
+    void poll();
+    void onJobFinished();
+    void onAccountStateChanged();
+
+private:
+    void loadReadState();
+    void saveReadState();
+    void dispatchNotifications(const QList<QPair<QString, QString>> &newShares);
+
+    QPointer<AccountState> _accountState;
+    QTimer *_pollTimer = nullptr;
+    QPointer<JsonJob> _pollJob;
+    QSet<QString> _knownShareIds;
+    QSet<QString> _readShareIds;
+    QList<UDriveShareNotification> _notifications;
+    bool _initialFetchDone = false;
+    bool _apiAvailable = true;
+    bool _recheckRequested = false;
 };
 }

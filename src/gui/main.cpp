@@ -238,126 +238,9 @@ void setupLogging(const CommandLineOptions &options)
 
 QString setupTranslations(QApplication *app)
 {
-    const auto trPath = Translations::translationsDirectoryPath();
-    qCDebug(lcMain) << "Translations directory path:" << trPath;
-
-#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
-    QStringList uiLanguages = QLocale::system().uiLanguages(QLocale::TagSeparator::Underscore);
-#else
-    QStringList uiLanguages;
-    for (auto lang : QLocale::system().uiLanguages()) {
-        uiLanguages << lang.replace(QLatin1Char('-'), QLatin1Char('_'));
-    }
-#endif
-    qCDebug(lcMain) << "UI languages:" << uiLanguages;
-
-    // the user can also set a locale in the settings, so we need to load the config file
     const ConfigFile cfg;
-
-    // we need to track the enforced language separately, since we need to distinguish between locale-provided
-    // and user-enforced one below
     const QString enforcedLocale = cfg.uiLanguage();
-    qCDebug(lcMain) << "Enforced language:" << enforcedLocale;
-
-    // note that user-enforced language are prioritized over the theme enforced one
-    // to make testing easier.
-    if (!enforcedLocale.isEmpty()) {
-        uiLanguages.prepend(enforcedLocale);
-    }
-
-    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
-        const QString preferred = enforcedLocale.isEmpty() ? uiLanguages.value(0, QStringLiteral("en_US")) : enforcedLocale;
-        uiLanguages = {Translations::udriveLocale(preferred), QStringLiteral("en_US")};
-        uiLanguages.removeDuplicates();
-    }
-
-    QString displayLanguage;
-
-    auto substLang = [](const QString &lang) {
-        // Map the more appropriate script codes
-        // to country codes as used by Qt and
-        // transifex translation conventions.
-
-        if (lang == QLatin1String("zh_Hans")) {
-            // Simplified Chinese
-            return QStringLiteral("zh_CN");
-        } else if (lang == QLatin1String("zh_Hant")) {
-            // Traditional Chinese
-            return QStringLiteral("zh_TW");
-        }
-
-        return lang;
-    };
-
-    for (QString lang : std::as_const(uiLanguages)) {
-        lang = substLang(lang);
-        const QString trFile = Translations::translationsFilePrefix() + lang;
-        if (QTranslator *translator = new QTranslator(app); translator->load(trFile, trPath) || lang.startsWith(QLatin1String("en"))) {
-            // Permissive approach: Qt and keychain translations
-            // may be missing, but Qt translations must be there in order
-            // for us to accept the language. Otherwise, we try with the next.
-            // "en" is an exception as it is the default language and may not
-            // have a translation file provided.
-            qCInfo(lcMain) << "Using" << lang << "translation" << translator->language();
-            displayLanguage = lang;
-
-            const QString qtTrPath = QLibraryInfo::path(QLibraryInfo::TranslationsPath);
-            qCDebug(lcMain) << "qtTrPath:" << qtTrPath;
-            const QString qtTrFile = QLatin1String("qt_") + lang;
-            qCDebug(lcMain) << "qtTrFile:" << qtTrFile;
-            const QString qtBaseTrFile = QLatin1String("qtbase_") + lang;
-            qCDebug(lcMain) << "qtBaseTrFile:" << qtBaseTrFile;
-
-            QTranslator *qtTranslator = new QTranslator(app);
-            QTranslator *qtkeychainTranslator = new QTranslator(app);
-
-            if (!qtTranslator->load(qtTrFile, qtTrPath)) {
-                if (!qtTranslator->load(qtTrFile, trPath)) {
-                    if (!qtTranslator->load(qtBaseTrFile, qtTrPath)) {
-                        if (!qtTranslator->load(qtBaseTrFile, trPath)) {
-                            qCCritical(lcMain) << "Could not load Qt translations";
-                        }
-                    }
-                }
-            }
-
-            const QString qtkeychainTrFile = QLatin1String("qtkeychain_") + lang;
-            if (!qtkeychainTranslator->load(qtkeychainTrFile, qtTrPath)) {
-                if (!qtkeychainTranslator->load(qtkeychainTrFile, trPath)) {
-                    qCCritical(lcMain) << "Could not load qtkeychain translations";
-                }
-            }
-
-            if (!translator->isEmpty() && !qApp->installTranslator(translator)) {
-                qCCritical(lcMain) << "Failed to install translator";
-                translator->deleteLater();
-            }
-            if (!qtTranslator->isEmpty() && !qApp->installTranslator(qtTranslator)) {
-                qCCritical(lcMain) << "Failed to install Qt translator";
-                qtTranslator->deleteLater();
-            }
-            if (!qtkeychainTranslator->isEmpty() && !qApp->installTranslator(qtkeychainTranslator)) {
-                qCCritical(lcMain) << "Failed to install qtkeychain translator";
-                qtkeychainTranslator->deleteLater();
-            }
-
-            // makes sure widgets with locale-dependent formatting, e.g., QDateEdit, display the correct formatting
-            // if the language is provided by the system locale anyway (i.e., coming from QLocale::system().uiLanguages()), we should
-            // not mess with the system locale, though
-            // if we did, we would enforce a locale for no apparent reason
-            // see https://github.com/owncloud/client/issues/8608 for more information
-            if (enforcedLocale == lang) {
-                QLocale newLocale(lang);
-                qCDebug(lcMain) << "language" << lang << "was enforced, changing default locale to" << newLocale;
-                QLocale::setDefault(newLocale);
-            }
-            break;
-        } else {
-            translator->deleteLater();
-        }
-    }
-
-    return displayLanguage;
+    return Translations::installLanguage(enforcedLocale, app);
 }
 } // Anonymous namespace
 
@@ -373,8 +256,10 @@ int main(int argc, char **argv)
 
         // Create the (Q)Application instance:
         QApplication app(argc, argv);
-        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive"))
+        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
             Resources::loadUDriveFonts();
+            Application::applyApplicationTheme(ConfigFile().themeMode());
+        }
         app.setOrganizationDomain(Theme::instance()->orgDomainName());
         app.setApplicationName(Theme::instance()->appName());
         app.setApplicationDisplayName(Theme::instance()->appNameGUI());

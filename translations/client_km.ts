@@ -2206,4 +2206,39 @@
             <translation>បានចម្លងកន្លែងធ្វើការ។</translation>
         </message>
     </context>
+    <context>
+        <name>OCC::AppearanceWidget</name>
+        <message>
+            <source>Appearance</source>
+            <translation>រូបរាង</translation>
+        </message>
+        <message>
+            <source>Customize the color theme and display mode of your workspace.</source>
+            <translation>ប្ដូររូបរាងពណ៌ និងទម្រង់បង្ហាញនៃកន្លែងការងាររបស់អ្នក។</translation>
+        </message>
+        <message>
+            <source>Light</source>
+            <translation>ភ្លឺ</translation>
+        </message>
+        <message>
+            <source>Bright &amp; clear daytime look</source>
+            <translation>រូបរាងភ្លឺច្បាស់សម្រាប់ពេលថ្ងៃ</translation>
+        </message>
+        <message>
+            <source>Dark</source>
+            <translation>ងងឹត</translation>
+        </message>
+        <message>
+            <source>60-30-10 charcoal workspace</source>
+            <translation>កន្លែងការងារពណ៌ធ្យូង 60-30-10</translation>
+        </message>
+        <message>
+            <source>System</source>
+            <translation>ប្រព័ន្ធ</translation>
+        </message>
+        <message>
+            <source>Follows macOS &amp; OS settings</source>
+            <translation>ធ្វើតាមការកំណត់របស់ macOS និងប្រព័ន្ធប្រតិបត្តិការ</translation>
+        </message>
+    </context>
 </TS>

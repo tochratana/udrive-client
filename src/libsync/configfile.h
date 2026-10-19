@@ -53,6 +53,15 @@ public:
         SystemScope
     };
 
+    enum class ThemeMode {
+        System = 0,
+        Light = 1,
+        Dark = 2
+    };
+
+    ThemeMode themeMode() const;
+    void setThemeMode(ThemeMode mode);
+
     QString excludeFile(Scope scope) const;
     static QString excludeFileFromSystem(); // doesn't access config dir
 

@@ -32,6 +32,7 @@ set(client_SRCS
     folderman.cpp
     folderwatcher.cpp
     generalsettings.cpp
+    appearancewidget.cpp
     ignorelisteditor.cpp
     lockwatcher.cpp
     logbrowser.cpp

@@ -38,6 +38,7 @@ class ActivitySettings;
 class GeneralSettings;
 class UDriveFileBrowser;
 class UDriveAdminWidget;
+class NotificationBadgeButton;
 
 /**
  * @brief The SettingsDialog class
@@ -110,6 +111,7 @@ protected Q_SLOTS:
 protected:
     void setVisible(bool visible) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
+    void changeEvent(QEvent *event) override;
 
 
 private:
@@ -117,10 +119,14 @@ private:
     void createWorkspaceHeader();
     void updateWorkspaceHeader();
     void showAccountPopup();
+    void showNotificationPopup();
+    void updateNotificationBadge();
     QWidget *_brandWidget = nullptr;
     QPointer<QWidget> _accountPopup;
     QStackedWidget *_searchStack = nullptr;
     QPushButton *_profileButton = nullptr;
+    NotificationBadgeButton *_notificationButton = nullptr;
+    QPointer<QWidget> _notificationPopup;
     bool _sidebarVisible = true;
     Ui::SettingsDialog *const _ui;
 

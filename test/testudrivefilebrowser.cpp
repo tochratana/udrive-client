@@ -9,6 +9,7 @@
 #include <QTranslator>
 #include <QUrlQuery>
 #include <QScrollBar>
+#include <QScrollArea>
 #include <QHeaderView>
 #include <QProcess>
 #include <QElapsedTimer>
@@ -121,6 +122,10 @@ public:
     QJsonArray globalPermissions{"Drives.Create.all", "Drives.ReadWriteEnabled.all", "Drives.ReadWriteProjectQuota.all"};
     int outgoingDelay = 0;
     int outgoingStatus = 200;
+    int itemPermissionDelay = 0;
+    int itemPermissionStatus = 207;
+    QString itemPermissionHref;
+    QMap<QString, QString> itemPermissions;
     QJsonObject workspacePermissions{{"value", QJsonArray{}},
         {"@libre.graph.permissions.actions.allowedValues", QJsonArray{"libre.graph/driveItem/permissions/create", "libre.graph/driveItem/permissions/delete",
             "libre.graph/driveItem/permissions/read", "libre.graph/driveItem/content/read", "libre.graph/driveItem/deleted/read"}},
@@ -141,8 +146,12 @@ public:
     int sharePosts = 0;
     QString expectedShareReference;
     QString expectedSharePath;
-    QList<QUrlQuery> shareQueries;
     int sharePostDelay = 0;
+    QList<QUrlQuery> shareQueries;
+    QJsonArray existingShares;
+    int shareGetStatus = 200;
+    QStringList shareDeletions;
+    QList<QUrlQuery> sharePuts;
     bool slowStarted = false;
     bool rejectFavorite = false;
     bool readOnly = false;
@@ -261,13 +270,53 @@ public:
                             return;
                         }
                         const QPointer<QTcpSocket> guard(socket);
-                        QTimer::singleShot(sharePostDelay, this, [this, guard] {
-                            if (guard && guard->state() == QAbstractSocket::ConnectedState)
-                                respond(guard, 200, "application/json", R"({"ocs":{"meta":{"statuscode":100},"data":{"id":"test-share"}}})");
+                        QTimer::singleShot(sharePostDelay, this, [this, guard, arguments] {
+                            if (guard && guard->state() == QAbstractSocket::ConnectedState) {
+                                if (arguments.queryItemValue("shareType") == "3") {
+                                    const QString shareId = QStringLiteral("public-share-") + QString::number(existingShares.size() + 1);
+                                    const QString publicUrl = url(QStringLiteral("/s/") + shareId).toString();
+                                    const QJsonObject shareObj{
+                                        {"id", shareId},
+                                        {"share_type", 3},
+                                        {"permissions", arguments.queryItemValue("permissions").toInt()},
+                                        {"name", arguments.queryItemValue("name")},
+                                        {"url", publicUrl},
+                                        {"token", shareId}
+                                    };
+                                    existingShares.append(shareObj);
+                                    const auto body = QJsonDocument(QJsonObject{{"ocs", QJsonObject{{"meta", QJsonObject{{"statuscode", 100}}}, {"data", shareObj}}}}).toJson();
+                                    respond(guard, 200, "application/json", body);
+                                } else {
+                                    respond(guard, 200, "application/json", R"({"ocs":{"meta":{"statuscode":100},"data":{"id":"test-share"}}})");
+                                }
+                            }
                         });
+                    } else if (parts.at(0) == "PUT" && path.startsWith(QStringLiteral("/ocs/v1.php/apps/files_sharing/api/v1/shares/"))) {
+                        const QString shareId = path.section('/', -1);
+                        const QUrlQuery arguments(QString::fromUtf8(requestBodies.value(key)));
+                        sharePuts.append(arguments);
+                        for (int i = 0; i < existingShares.size(); ++i) {
+                            auto obj = existingShares.at(i).toObject();
+                            if (obj.value("id").toString() == shareId) {
+                                obj.insert("permissions", arguments.queryItemValue("permissions").toInt());
+                                existingShares.replace(i, obj);
+                                break;
+                            }
+                        }
+                        respond(socket, 200, "application/json", R"({"ocs":{"meta":{"statuscode":100},"data":{}}})");
+                    } else if (parts.at(0) == "DELETE" && path.startsWith(QStringLiteral("/ocs/v1.php/apps/files_sharing/api/v1/shares/"))) {
+                        const QString shareId = path.section('/', -1);
+                        shareDeletions.append(shareId);
+                        QJsonArray remaining;
+                        for (const auto &s : existingShares) {
+                            if (s.toObject().value("id").toString() != shareId) remaining.append(s);
+                        }
+                        existingShares = remaining;
+                        respond(socket, 200, "application/json", R"({"ocs":{"meta":{"statuscode":100},"data":[]}})");
                     } else if (parts.at(0) == "GET" && path == QStringLiteral("/ocs/v1.php/apps/files_sharing/api/v1/shares")) {
                         shareQueries.append(QUrlQuery(QUrl::fromEncoded(parts.at(1))));
-                        respond(socket, 200, "application/json", R"({"ocs":{"meta":{"status":"ok","statuscode":100},"data":[]}})");
+                        const auto body = QJsonDocument(QJsonObject{{"ocs", QJsonObject{{"meta", QJsonObject{{"status", "ok"}, {"statuscode", 100}}}, {"data", existingShares}}}}).toJson();
+                        respond(socket, shareGetStatus, "application/json", body);
                     } else if (parts.at(0) == "GET" && path == QStringLiteral("/graph/v1beta1/me/drive/sharedWithMe")) {
                         const auto body = QJsonDocument(QJsonObject{{"value", incomingShares}}).toJson();
                         const int status = incomingStatus;
@@ -369,6 +418,18 @@ public:
                         } else if (!exists(path)) respond(socket, 404, "text/plain", "Missing");
                         else { removed.insert(path); trash.insert(QStringLiteral("deleted-%1").arg(trash.size() + 1), path); respond(socket, 204, "text/plain", {}); }
                     } else if (parts.at(0) == "PROPFIND") {
+                        if (headers.value("depth") == "0") {
+                            const auto permissions = itemPermissions.value(path, readOnly ? QStringLiteral("S") : QStringLiteral("RDNVCKW"));
+                            const auto href = itemPermissionHref.isEmpty() ? path : itemPermissionHref;
+                            const auto xml = QStringLiteral("<d:multistatus xmlns:d=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\"><d:response><d:href>%1</d:href><d:propstat><d:prop><oc:permissions>%2</oc:permissions><d:getetag>&quot;tag&quot;</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>")
+                                .arg(href.toHtmlEscaped(), permissions.toHtmlEscaped()).toUtf8();
+                            const QPointer<QTcpSocket> guard(socket);
+                            const auto status = itemPermissionStatus;
+                            QTimer::singleShot(itemPermissionDelay, this, [this, guard, status, xml] {
+                                if (guard && guard->state() == QAbstractSocket::ConnectedState) respond(guard, status, "application/xml; charset=utf-8", xml);
+                            });
+                            return;
+                        }
                         QByteArray xml = "<?xml version=\"1.0\"?><d:multistatus xmlns:d=\"DAV:\">";
                         xml += entry(path, true);
                         if (path == graphDavPrefix + "/personal") {
@@ -3002,6 +3063,110 @@ private Q_SLOTS:
         settings.remove(QStringLiteral("UDrive/sidebarVisible"));
     }
 
+    void sharesLayoutAndActions()
+    {
+        DriveServer server(true);
+        const auto person = [](const QString &id, const QString &name) {
+            return QJsonObject{{"user", QJsonObject{{"id", id}, {"displayName", name}}}};
+        };
+        const QJsonObject grant{{"grantedToV2", QJsonArray{person("sp", "Seng Porekeat"), person("ty", "Toch Vanna")}},
+            {"roles", QJsonArray{"owner"}}};
+        const auto item = [&grant](const QString &name, const QString &id) {
+            const QString itemId = QStringLiteral("personal!") + id;
+            return QJsonObject{{"id", itemId}, {"name", name}, {"file", QJsonObject{}}, {"size", 1234},
+                {"lastModifiedDateTime", "2026-10-16T08:00:00Z"}, {"permissions", QJsonArray{grant}},
+                {"parentReference", QJsonObject{{"driveId", "personal"}, {"path", "."}}}};
+        };
+        server.outgoingShares = {item("a&b.txt", "one"), item("denied.txt", "two"), item("truncated.txt", "three")};
+        // Even an owner's grant to a recipient must not grant the signed-in user rename rights.
+        server.itemPermissions.insert("/dav/personal/denied.txt", "S");
+        server.itemPermissions.insert("/dav/personal/truncated.txt", "");
+        server.itemPermissionDelay = 120;
+        auto *account = new Account(QUuid::createUuid(), QStringLiteral("test"), server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        browser.resize(1160, 800); browser.show();
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        auto *menu = browser.findChild<QMenu *>("driveActionsMenu");
+        auto *details = browser.findChild<QWidget *>("driveFileDetails");
+        auto *detailsAction = browser.findChild<QAction *>("driveDetailsAction");
+        auto *close = browser.findChild<QToolButton *>("driveDetailsClose");
+        auto *name = browser.findChild<QLabel *>("driveDetailsName");
+        auto *people = browser.findChild<QLabel *>("driveDetailsPeople");
+        QVERIFY(tree && menu && details && detailsAction && close && name && people);
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        browser.showShares(); browser.setShareTab(UDriveFileBrowser::ShareTab::WithOthers);
+        QTRY_COMPARE(tree->model()->rowCount(), 3);
+        QCOMPARE(tree->model()->headerData(3, Qt::Horizontal).toString(), QStringLiteral("Shared with"));
+        QVERIFY(tree->isColumnHidden(1)); QVERIFY(tree->isColumnHidden(2)); QVERIFY(!tree->isColumnHidden(3));
+        QVERIFY(select(tree, "a&b.txt").isValid());
+        QTRY_VERIFY(details->isVisible());
+        QCOMPARE(name->text(), QStringLiteral("a&b.txt"));
+        QVERIFY(people->text().contains("Seng Porekeat")); QVERIFY(people->text().contains("Toch Vanna"));
+        QVERIFY(browser.findChild<QLabel *>("driveDetailsLocation")->text().contains("Personal"));
+        const auto rename = [&menu] {
+            for (auto *action : menu->actions()) if (action->text() == QStringLiteral("Rename")) return action;
+            return static_cast<QAction *>(nullptr);
+        }();
+        QVERIFY(rename); QVERIFY(!rename->isEnabled());
+        QTRY_VERIFY(rename->isEnabled());
+        QCOMPARE(server.requestHeaders.value("PROPFIND /dav/personal/a&b.txt").value("depth"), QByteArray("0"));
+        menu->popup(tree->viewport()->mapToGlobal(tree->visualRect(tree->currentIndex()).center()));
+        QTRY_VERIFY(menu->isVisible());
+        QStringList labels;
+        for (auto *action : menu->actions()) if (action->isVisible() && !action->isSeparator()) {
+            labels.append(action->text()); QVERIFY(!action->icon().isNull());
+            QVERIFY(!action->isShortcutVisibleInContextMenu());
+        }
+        QCOMPARE(labels, QStringList({"Open file", "Share", "Copy permanent link", "Download", "Rename", "Details"}));
+        menu->close();
+        close->click(); QVERIFY(details->isHidden());
+        detailsAction->trigger(); QVERIFY(details->isVisible());
+        QSignalSpy operation(&browser, &UDriveFileBrowser::operationFinished);
+        QVERIFY(browser.renameSelected("renamed.txt"));
+        QTRY_VERIFY(server.requests.contains({"MOVE", "/dav/personal/a&b.txt"}));
+        QTRY_COMPARE(operation.size(), 1);
+        QTRY_COMPARE(tree->model()->rowCount(), 3);
+        QCOMPARE(server.requestHeaders.value("MOVE /dav/personal/a&b.txt").value("overwrite"), QByteArray("F"));
+        QVERIFY(select(tree, "denied.txt").isValid());
+        QTest::qWait(160); QVERIFY(!rename->isEnabled());
+        QVERIFY(!browser.renameSelected("forbidden.txt"));
+        QVERIFY(select(tree, "truncated.txt").isValid());
+        QTest::qWait(160); QVERIFY(!rename->isEnabled());
+        QVERIFY(!browser.renameSelected("missing-permissions.txt"));
+
+        // A stale response for the old row cannot enable actions on a new selection.
+        browser.findChild<QPushButton *>("driveRefresh")->click();
+        QTRY_COMPARE(tree->model()->rowCount(), 3);
+        QVERIFY(select(tree, "a&b.txt").isValid());
+        QVERIFY(select(tree, "denied.txt").isValid());
+        QTest::qWait(180);
+        QCOMPARE(name->text(), QStringLiteral("denied.txt")); QVERIFY(!rename->isEnabled());
+        if (qEnvironmentVariableIsSet("UDRIVE_SHARES_TEST_CAPTURE")) {
+            browser.grab().save("/tmp/udrive-shares-layout.png");
+            menu->popup(tree->viewport()->mapToGlobal(tree->visualRect(tree->currentIndex()).center()));
+            QTest::qWait(50); menu->grab().save("/tmp/udrive-shares-menu.png"); menu->close();
+        }
+        server.itemPermissionStatus = 403;
+        browser.findChild<QPushButton *>("driveRefresh")->click();
+        QTRY_COMPARE(tree->model()->rowCount(), 3);
+        QVERIFY(select(tree, "a&b.txt").isValid());
+        QTest::qWait(180); QVERIFY(!rename->isEnabled());
+        server.itemPermissionStatus = 207;
+        server.itemPermissionHref = "/dav/personal/somebody-else.txt";
+        browser.findChild<QPushButton *>("driveRefresh")->click();
+        QTRY_COMPARE(tree->model()->rowCount(), 3);
+        QVERIFY(select(tree, "a&b.txt").isValid());
+        QTest::qWait(180); QVERIFY(!rename->isEnabled());
+        browser.showPersonal();
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        QVERIFY(details->isHidden());
+        QVERIFY(!tree->isColumnHidden(1)); QVERIFY(!tree->isColumnHidden(2));
+        QCOMPARE(tree->model()->headerData(3, Qt::Horizontal).toString(), QStringLiteral("Location"));
+    }
+
     void outgoingAndIncomingShares()
     {
         DriveServer server(true);
@@ -3410,6 +3575,200 @@ private Q_SLOTS:
         }
         for (const auto &request : server.requests)
             QCOMPARE(request.first, QByteArray("GET"));
+    }
+
+    void publicLinkManagement()
+    {
+        DriveServer server;
+        auto *account = new Account(QUuid::createUuid(), QStringLiteral("test"), server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState accountState(account);
+        UDriveShareDialog dialog(&accountState, QStringLiteral("Report.pdf"), false, QStringLiteral("/Docs/Report.pdf"), QUrl(QStringLiteral("https://example.com/f/123")), QStringLiteral("space-1"));
+        dialog.show();
+        auto *addBtn = dialog.findChild<QPushButton *>(QStringLiteral("shareAddLinkButton"));
+        auto *publicScroll = dialog.findChild<QScrollArea *>(QStringLiteral("publicLinksScrollArea"));
+        auto *status = dialog.findChild<QLabel *>(QStringLiteral("shareStatusLabel"));
+        QVERIFY(addBtn);
+        QVERIFY(publicScroll);
+        QVERIFY(status);
+
+        // Initially no public links exist
+        QTRY_VERIFY(publicScroll->widget()->findChild<QLabel *>());
+        QCOMPARE(publicScroll->widget()->findChild<QLabel *>()->text(), QStringLiteral("This file has no public link."));
+
+        // Click Add link to create a public link
+        addBtn->click();
+        QTRY_COMPARE(server.sharePosts, 1);
+        QCOMPARE(server.existingShares.size(), 1);
+        QTRY_VERIFY(!status->text().isEmpty());
+        QVERIFY(status->text().contains(QStringLiteral("Public link created")));
+
+        // Check clipboard got populated
+        QVERIFY(QApplication::clipboard()->text().contains(QStringLiteral("/s/public-share-1")));
+
+        // Verify public link row is rendered
+        auto *roleCombo = dialog.findChild<QComboBox *>(QStringLiteral("publicLinkRoleCombo"));
+        QTRY_VERIFY(roleCombo);
+        QCOMPARE(roleCombo->currentData().toInt(), 1);
+
+        // Update permissions to Can edit (15)
+        roleCombo->setCurrentIndex(1);
+        Q_EMIT roleCombo->activated(1);
+        QTRY_COMPARE(server.sharePuts.size(), 1);
+        QCOMPARE(server.sharePuts.first().queryItemValue("permissions"), QStringLiteral("15"));
+        QTRY_VERIFY(status->text().contains(QStringLiteral("Public link permissions updated")));
+
+        // Click copy action button
+        auto actionButtons = dialog.findChildren<QToolButton *>(QStringLiteral("publicLinkActionButton"));
+        QVERIFY(actionButtons.size() >= 2);
+        auto *copyBtn = actionButtons.at(0);
+        auto *deleteBtn = actionButtons.at(1);
+        copyBtn->click();
+        QCOMPARE(QApplication::clipboard()->text(), server.url(QStringLiteral("/s/public-share-1")).toString());
+        QVERIFY(status->text().contains(QStringLiteral("copied to clipboard")));
+
+        // Delete public link
+        deleteBtn->click();
+        QTRY_COMPARE(server.shareDeletions.size(), 1);
+        QCOMPARE(server.shareDeletions.first(), QStringLiteral("public-share-1"));
+        QTRY_COMPARE(publicScroll->widget()->findChild<QLabel *>()->text(), QStringLiteral("This file has no public link."));
+
+        // When target is Workspace, public links section is hidden
+        UDriveShareDialog workspaceDialog(&accountState, QStringLiteral("Team files"), true, {}, {}, QStringLiteral("team"), nullptr,
+            UDriveShareDialog::Target::Workspace);
+        workspaceDialog.show();
+        auto *wsPublicSection = workspaceDialog.findChild<QScrollArea *>(QStringLiteral("publicLinksScrollArea"));
+        QVERIFY(wsPublicSection);
+        QVERIFY(wsPublicSection->parentWidget()->isHidden());
+    }
+
+    void incomingShareNotifications()
+    {
+        DriveServer server(true);
+        server.incomingStatus = 200;
+
+        const QString jail = QStringLiteral("a0ca6a90-a365-4782-871e-d44447bbc668$a0ca6a90-a365-4782-871e-d44447bbc668");
+        const auto makeShare = [&jail](const QString &name, const QString &creatorId, bool hidden = false, const QString &displayName = {}) {
+            const QString display = displayName.isEmpty() ? creatorId : displayName;
+            QJsonObject userObj;
+            userObj.insert(QStringLiteral("id"), creatorId);
+            userObj.insert(QStringLiteral("displayName"), display);
+
+            QJsonObject invitedByObj;
+            invitedByObj.insert(QStringLiteral("user"), userObj);
+
+            QJsonObject invitationObj;
+            invitationObj.insert(QStringLiteral("invitedBy"), invitedByObj);
+
+            QJsonObject permissionObj;
+            permissionObj.insert(QStringLiteral("invitation"), invitationObj);
+
+            QJsonArray permissionsArray;
+            permissionsArray.append(permissionObj);
+
+            QJsonObject remoteItemObj;
+            remoteItemObj.insert(QStringLiteral("file"), QJsonObject());
+            remoteItemObj.insert(QStringLiteral("permissions"), permissionsArray);
+
+            QJsonObject parentRef;
+            parentRef.insert(QStringLiteral("driveId"), jail);
+
+            QJsonObject share;
+            share.insert(QStringLiteral("id"), QString(jail + QLatin1Char('!') + name));
+            share.insert(QStringLiteral("name"), name);
+            share.insert(QStringLiteral("parentReference"), parentRef);
+            share.insert(QStringLiteral("@UI.Hidden"), hidden);
+            share.insert(QStringLiteral("@client.synchronize"), true);
+            share.insert(QStringLiteral("remoteItem"), remoteItemObj);
+            return share;
+        };
+
+        server.incomingShares = { makeShare("existing1.pdf", "Toch Vanna"), makeShare("existing2.pdf", "Seng Porekeat") };
+
+        auto *account = new Account(QUuid::createUuid(), QStringLiteral("test"), server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState accountState(account);
+
+        UDriveIncomingSharesNotifier notifier(&accountState);
+        QSignalSpy newShareSpy(&notifier, &UDriveIncomingSharesNotifier::newSharesDetected);
+        QSignalSpy updateSpy(&notifier, &UDriveIncomingSharesNotifier::incomingSharesUpdated);
+
+        // Initial check: baseline established, no notification sent!
+        notifier.checkNow();
+        QTRY_VERIFY(notifier.hasBaseline());
+        QTRY_VERIFY(!notifier.isInFlight());
+        QCOMPARE(newShareSpy.size(), 0);
+
+        // Now add a new incoming share
+        server.incomingShares.append(makeShare("Quarterly_Report.pdf", "Toch Vanna"));
+        notifier.checkNow();
+        QTRY_COMPARE(newShareSpy.size(), 1);
+        const auto fileNames = newShareSpy.first().at(0).toStringList();
+        const auto sharers = newShareSpy.first().at(1).toStringList();
+        QCOMPARE(fileNames, QStringList{"Quarterly_Report.pdf"});
+        QCOMPARE(sharers, QStringList{"Toch Vanna"});
+        QCOMPARE(updateSpy.size(), 1);
+
+        // Check again without changes: no new notifications
+        newShareSpy.clear();
+        notifier.checkNow();
+        QTest::qWait(100);
+        QCOMPARE(newShareSpy.size(), 0);
+
+        // Add hidden share: should not notify
+        server.incomingShares.append(makeShare("hidden.pdf", "Secret", true));
+        notifier.checkNow();
+        QTest::qWait(100);
+        QCOMPARE(newShareSpy.size(), 0);
+
+        // Security check: HTML / script tags in share name & sharer handled safely
+        newShareSpy.clear();
+        server.incomingShares.append(makeShare("<img src=x>report.pdf", "alice-id", false, "<b>Alice & Bob</b>"));
+        notifier.checkNow();
+        QTRY_COMPARE(newShareSpy.size(), 1);
+        QCOMPARE(newShareSpy.first().at(0).toStringList(), QStringList{"<img src=x>report.pdf"});
+        QCOMPARE(newShareSpy.first().at(1).toStringList(), QStringList{"<b>Alice & Bob</b>"});
+
+        // Notifications model & unread state verification
+        const auto notifications = notifier.notifications();
+        QVERIFY(!notifications.isEmpty());
+        QCOMPARE(notifier.unreadCount(), notifications.size());
+
+        // Sharer initials check
+        bool foundToch = false;
+        for (const auto &n : notifications) {
+            if (n.sharerName == QStringLiteral("Toch Vanna")) {
+                QCOMPARE(n.sharerInitials, QStringLiteral("TV"));
+                foundToch = true;
+            }
+        }
+        QVERIFY(foundToch);
+
+        // Mark single notification as read
+        QSignalSpy unreadSpy(&notifier, &UDriveIncomingSharesNotifier::unreadCountChanged);
+        const QString firstId = notifications.first().id;
+        notifier.markAsRead(firstId);
+        QCOMPARE(notifier.unreadCount(), notifications.size() - 1);
+        QCOMPARE(unreadSpy.size(), 1);
+        QCOMPARE(unreadSpy.last().at(0).toInt(), notifications.size() - 1);
+
+        // Mark all as read
+        notifier.markAllAsRead();
+        QCOMPARE(notifier.unreadCount(), 0);
+        QCOMPARE(unreadSpy.last().at(0).toInt(), 0);
+        for (const auto &n : notifier.notifications()) {
+            QVERIFY(n.isRead);
+        }
+
+        // Sign out: in-flight request ignored, no crash
+        server.incomingDelay = 150;
+        server.incomingShares.append(makeShare("after_logout.pdf", "Nobody"));
+        notifier.checkNow();
+        accountState.signOutByUi();
+        QTest::qWait(200);
+        QCOMPARE(newShareSpy.size(), 1);
     }
     void shareRecipientSearch_data()
     {

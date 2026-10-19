@@ -58,6 +58,7 @@ const QString optionalDesktopNotificationsC()
 }
 const QString updateCheckIntervalC() { return QStringLiteral("updateCheckInterval"); }
 const QString uiLanguageC() { return QStringLiteral("uiLanguage"); }
+const QString themeModeC() { return QStringLiteral("themeMode"); }
 const QString geometryC() { return QStringLiteral("geometry"); }
 const QString timeoutC() { return QStringLiteral("timeout"); }
 const QString automaticLogDirC() { return QStringLiteral("logToTemporaryLogDir"); }
@@ -452,6 +453,24 @@ void ConfigFile::setUiLanguage(const QString &uiLanguage)
     settings.setValue(uiLanguageC(), uiLanguage);
 }
 
+ConfigFile::ThemeMode ConfigFile::themeMode() const
+{
+    auto settings = makeQSettings();
+    const int val = settings.value(themeModeC(), static_cast<int>(ThemeMode::System)).toInt();
+    if (val == static_cast<int>(ThemeMode::Light)) {
+        return ThemeMode::Light;
+    } else if (val == static_cast<int>(ThemeMode::Dark)) {
+        return ThemeMode::Dark;
+    }
+    return ThemeMode::System;
+}
+
+void ConfigFile::setThemeMode(ThemeMode mode)
+{
+    auto settings = makeQSettings();
+    settings.setValue(themeModeC(), static_cast<int>(mode));
+}
+
 void ConfigFile::setProxyType(QNetworkProxy::ProxyType proxyType, const QString &host, int port, bool needsAuth, const QString &user)
 {
     auto settings = makeQSettings();
@@ -550,8 +569,7 @@ bool ConfigFile::monoIcons() const
     auto settings = makeQSettings();
     bool monoDefault = false; // On Mac we want bw by default
 #ifdef Q_OS_MAC
-    // OEM themes are not obliged to ship mono icons
-    monoDefault = Theme::instance()->appNameGUI() == QStringLiteral("ownCloud");
+    monoDefault = Resources::hasMonoTheme() || Theme::instance()->appNameGUI() == QStringLiteral("UDrive") || Theme::instance()->appNameGUI() == QStringLiteral("ownCloud");
 #endif
     return settings.value(monoIconsC(), monoDefault).toBool();
 }

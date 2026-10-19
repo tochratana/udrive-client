@@ -149,6 +149,23 @@ private Q_SLOTS:
         QVERIFY(!count.contains(QStringLiteral("%n")));
         QCOMPARE(QCoreApplication::translate("UDriveSidebar", "Personal"), personal);
     }
+    void testRealtimeLanguageInstallation()
+    {
+        // 1. Switch to Khmer in real time
+        QCOMPARE(Translations::installLanguage(QStringLiteral("km")), QStringLiteral("km"));
+        QCOMPARE(QCoreApplication::translate("UDriveSidebar", "Personal"), QString::fromUtf8("ផ្ទាល់ខ្លួន"));
+        QCOMPARE(QCoreApplication::translate("OCC::AppearanceWidget", "Appearance"), QString::fromUtf8("រូបរាង"));
+
+        // 2. Switch to Chinese in real time
+        QCOMPARE(Translations::installLanguage(QStringLiteral("zh_CN")), QStringLiteral("zh_CN"));
+        QCOMPARE(QCoreApplication::translate("UDriveSidebar", "Personal"), QString::fromUtf8("个人"));
+        QCOMPARE(QCoreApplication::translate("OCC::AppearanceWidget", "Appearance"), QString::fromUtf8("外观"));
+
+        // 3. Switch back to English in real time
+        QCOMPARE(Translations::installLanguage(QStringLiteral("en_US")), QStringLiteral("en_US"));
+        QCOMPARE(QCoreApplication::translate("UDriveSidebar", "Personal"), QStringLiteral("Personal"));
+        QCOMPARE(QCoreApplication::translate("OCC::AppearanceWidget", "Appearance"), QStringLiteral("Appearance"));
+    }
 };
 
 QTEST_GUILESS_MAIN(TestTranslations)

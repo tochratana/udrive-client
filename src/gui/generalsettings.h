@@ -24,6 +24,7 @@ class QDialog;
 namespace OCC {
 class IgnoreListEditor;
 class SyncLogDialog;
+class AppearanceWidget;
 
 namespace Ui {
     class GeneralSettings;
@@ -54,6 +55,7 @@ private Q_SLOTS:
 
 protected:
     void showEvent(QShowEvent *event) override;
+    void changeEvent(QEvent *event) override;
 
 private:
     void reloadConfig();
@@ -61,6 +63,7 @@ private:
     void showLanguageRestartNotice();
 
     Ui::GeneralSettings *_ui;
+    QPointer<AppearanceWidget> _appearanceWidget;
     QPointer<IgnoreListEditor> _ignoreEditor;
     QPointer<QDialog> _languageRestartNotice;
     bool _currentlyLoading;

@@ -39,6 +39,9 @@
 #include <QApplication>
 #include <QDesktopServices>
 #include <QFileOpenEvent>
+#include <QPalette>
+#include <QStyleHints>
+#include "gui/translations.h"
 
 namespace OCC {
 
@@ -83,6 +86,17 @@ Application::Application(Platform *platform, const QString &displayLanguage, boo
 
     qApp->setQuitOnLastWindowClosed(false);
 
+#ifdef Q_OS_MAC
+    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+        ConfigFile cfgFile;
+        auto settings = ConfigFile::makeQSettings();
+        if (!settings.contains(QStringLiteral("monoIconsMacMigrated"))) {
+            cfgFile.setMonoIcons(true);
+            settings.setValue(QStringLiteral("monoIconsMacMigrated"), true);
+        }
+    }
+#endif
+
     Theme::instance()->setSystrayUseMonoIcons(cfg.monoIcons());
     connect(Theme::instance(), &Theme::systrayUseMonoIconsChanged, this, &Application::slotUseMonoIconsChanged);
 
@@ -121,6 +135,7 @@ Application::~Application()
     // Make sure all folders are gone, otherwise removing the
     // accounts will remove the associated folders from the settings.
     FolderMan::instance()->unloadAndDeleteAllFolders();
+    _instance = nullptr;
 }
 
 void Application::lastAccountStateRemoved() const
@@ -182,6 +197,94 @@ void Application::updateAutoRun(bool firstRun)
 void Application::slotUseMonoIconsChanged(bool)
 {
     _gui->slotComputeOverallSyncStatus();
+}
+
+void Application::applyApplicationTheme(ConfigFile::ThemeMode mode)
+{
+    static std::optional<QPalette> s_systemPalette;
+    if (!s_systemPalette.has_value() && qApp) {
+        s_systemPalette = qApp->palette();
+    }
+
+    if (!qApp)
+        return;
+
+    if (mode == ConfigFile::ThemeMode::Light) {
+        QPalette pal = s_systemPalette.value_or(qApp->palette());
+        const QColor windowColor(QStringLiteral("#FFFFFF"));
+        const QColor baseColor(QStringLiteral("#FFFFFF"));
+        const QColor textColor(QStringLiteral("#2B3035"));
+        const QColor textMuted(QStringLiteral("#7D8781"));
+        const QColor buttonColor(QStringLiteral("#F4F5F4"));
+        const QColor highlightColor(QStringLiteral("#00856B"));
+
+        pal.setColor(QPalette::Window, windowColor);
+        pal.setColor(QPalette::WindowText, textColor);
+        pal.setColor(QPalette::Base, baseColor);
+        pal.setColor(QPalette::AlternateBase, QColor(QStringLiteral("#F6F7F8")));
+        pal.setColor(QPalette::ToolTipBase, windowColor);
+        pal.setColor(QPalette::ToolTipText, textColor);
+        pal.setColor(QPalette::Text, textColor);
+        pal.setColor(QPalette::Button, buttonColor);
+        pal.setColor(QPalette::ButtonText, textColor);
+        pal.setColor(QPalette::Highlight, highlightColor);
+        pal.setColor(QPalette::HighlightedText, Qt::white);
+        pal.setColor(QPalette::Disabled, QPalette::Text, textMuted);
+        pal.setColor(QPalette::Disabled, QPalette::WindowText, textMuted);
+        pal.setColor(QPalette::Disabled, QPalette::ButtonText, textMuted);
+        qApp->setPalette(pal);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+        if (qApp->styleHints())
+            qApp->styleHints()->setColorScheme(Qt::ColorScheme::Light);
+#endif
+    } else if (mode == ConfigFile::ThemeMode::Dark) {
+        QPalette pal = s_systemPalette.value_or(qApp->palette());
+        const QColor windowColor(QStringLiteral("#202020"));
+        const QColor baseColor(QStringLiteral("#292929"));
+        const QColor textColor(QStringLiteral("#EDEEF0"));
+        const QColor textMuted(QStringLiteral("#939D97"));
+        const QColor buttonColor(QStringLiteral("#2B2D2F"));
+        const QColor highlightColor(QStringLiteral("#40D979"));
+
+        pal.setColor(QPalette::Window, windowColor);
+        pal.setColor(QPalette::WindowText, textColor);
+        pal.setColor(QPalette::Base, baseColor);
+        pal.setColor(QPalette::AlternateBase, QColor(QStringLiteral("#303330")));
+        pal.setColor(QPalette::ToolTipBase, windowColor);
+        pal.setColor(QPalette::ToolTipText, textColor);
+        pal.setColor(QPalette::Text, textColor);
+        pal.setColor(QPalette::Button, buttonColor);
+        pal.setColor(QPalette::ButtonText, textColor);
+        pal.setColor(QPalette::Highlight, highlightColor);
+        pal.setColor(QPalette::HighlightedText, QColor(QStringLiteral("#12351D")));
+        pal.setColor(QPalette::Disabled, QPalette::Text, textMuted);
+        pal.setColor(QPalette::Disabled, QPalette::WindowText, textMuted);
+        pal.setColor(QPalette::Disabled, QPalette::ButtonText, textMuted);
+        qApp->setPalette(pal);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+        if (qApp->styleHints())
+            qApp->styleHints()->setColorScheme(Qt::ColorScheme::Dark);
+#endif
+    } else {
+        if (s_systemPalette.has_value()) {
+            qApp->setPalette(s_systemPalette.value());
+        }
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+        if (qApp->styleHints())
+            qApp->styleHints()->setColorScheme(Qt::ColorScheme::Unknown);
+#endif
+    }
+}
+
+void Application::applyLanguage(const QString &locale)
+{
+    _displayLanguage = Translations::installLanguage(locale);
+    ConfigFile cfg;
+    cfg.setUiLanguage(locale);
+
+    if (_gui) {
+        _gui->setupTrayContextMenu();
+    }
 }
 
 bool Application::debugMode()

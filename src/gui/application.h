@@ -19,6 +19,7 @@
 #include "folderman.h"
 #include "owncloudgui.h"
 #include "platform.h"
+#include "libsync/configfile.h"
 
 #include <QPointer>
 
@@ -48,6 +49,9 @@ public:
     static std::unique_ptr<Application> createInstance(Platform *platform, const QString &displayLanguage, bool debugMode);
     ~Application();
 
+    static Application *instance() { return _instance; }
+    static bool hasInstance() { return _instance != nullptr; }
+
     bool debugMode();
 
     ownCloudGui *gui() const;
@@ -65,6 +69,8 @@ public:
      * Once we have a real application builder this should be a simpler proccess but for now this is what we have.
      */
     void updateAutoRun(bool firstRun);
+    static void applyApplicationTheme(ConfigFile::ThemeMode mode);
+    void applyLanguage(const QString &locale);
 
 protected Q_SLOTS:
     void slotUseMonoIconsChanged(bool);

@@ -22,11 +22,27 @@
 #include <QLoggingCategory>
 #include <QStandardPaths>
 
+#include <QLibraryInfo>
+#include <QLocale>
+#include <QPointer>
+#include <QTranslator>
+#include "libsync/theme.h"
+#include "libsync/configfile.h"
+
 namespace OCC {
 
 namespace Translations {
 
     Q_LOGGING_CATEGORY(lcTranslations, "gui.translations", QtInfoMsg)
+
+    namespace {
+    struct InstalledTranslators {
+        QPointer<QTranslator> clientTranslator;
+        QPointer<QTranslator> qtTranslator;
+        QPointer<QTranslator> qtkeychainTranslator;
+    };
+    static InstalledTranslators s_installed;
+    }
 
     const QString translationsFilePrefix()
     {
@@ -74,6 +90,109 @@ namespace Translations {
         }
 
         return availableTranslations;
+    }
+
+    QString installLanguage(const QString &locale, QApplication *app)
+    {
+        auto *application = app ? app : qApp;
+        if (!application)
+            return QString();
+
+        // 1. Remove previously installed translators
+        if (s_installed.clientTranslator) {
+            application->removeTranslator(s_installed.clientTranslator.data());
+            delete s_installed.clientTranslator.data();
+            s_installed.clientTranslator = nullptr;
+        }
+        if (s_installed.qtTranslator) {
+            application->removeTranslator(s_installed.qtTranslator.data());
+            delete s_installed.qtTranslator.data();
+            s_installed.qtTranslator = nullptr;
+        }
+        if (s_installed.qtkeychainTranslator) {
+            application->removeTranslator(s_installed.qtkeychainTranslator.data());
+            delete s_installed.qtkeychainTranslator.data();
+            s_installed.qtkeychainTranslator = nullptr;
+        }
+
+        // 2. Resolve preferred language code
+        QString lang = locale;
+        if (lang.isEmpty()) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
+            const auto uiLanguages = QLocale::system().uiLanguages(QLocale::TagSeparator::Underscore);
+#else
+            QStringList uiLanguages;
+            for (auto l : QLocale::system().uiLanguages()) {
+                uiLanguages << l.replace(QLatin1Char('-'), QLatin1Char('_'));
+            }
+#endif
+            lang = uiLanguages.value(0, QStringLiteral("en_US"));
+        }
+
+        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+            lang = udriveLocale(lang);
+        } else {
+            if (lang == QLatin1String("zh_Hans")) {
+                lang = QStringLiteral("zh_CN");
+            } else if (lang == QLatin1String("zh_Hant")) {
+                lang = QStringLiteral("zh_TW");
+            }
+        }
+
+        const auto trPath = translationsDirectoryPath();
+        const QString trFile = translationsFilePrefix() + lang;
+        auto *translator = new QTranslator(application);
+        const bool clientLoaded = translator->load(trFile, trPath) || lang.startsWith(QLatin1String("en"));
+        if (clientLoaded && !translator->isEmpty()) {
+            if (application->installTranslator(translator)) {
+                s_installed.clientTranslator = translator;
+                qCInfo(lcTranslations) << "Installed client translation for" << lang;
+            } else {
+                delete translator;
+            }
+        } else {
+            delete translator;
+        }
+
+        const QString qtTrPath = QLibraryInfo::path(QLibraryInfo::TranslationsPath);
+        const QString qtTrFile = QLatin1String("qt_") + lang;
+        const QString qtBaseTrFile = QLatin1String("qtbase_") + lang;
+        auto *qtTranslator = new QTranslator(application);
+        if (qtTranslator->load(qtTrFile, qtTrPath) || qtTranslator->load(qtTrFile, trPath)
+            || qtTranslator->load(qtBaseTrFile, qtTrPath) || qtTranslator->load(qtBaseTrFile, trPath)) {
+            if (!qtTranslator->isEmpty()) {
+                if (application->installTranslator(qtTranslator)) {
+                    s_installed.qtTranslator = qtTranslator;
+                } else {
+                    delete qtTranslator;
+                }
+            } else {
+                delete qtTranslator;
+            }
+        } else {
+            delete qtTranslator;
+        }
+
+        const QString qtkeychainTrFile = QLatin1String("qtkeychain_") + lang;
+        auto *qtkeychainTranslator = new QTranslator(application);
+        if (qtkeychainTranslator->load(qtkeychainTrFile, qtTrPath) || qtkeychainTranslator->load(qtkeychainTrFile, trPath)) {
+            if (!qtkeychainTranslator->isEmpty()) {
+                if (application->installTranslator(qtkeychainTranslator)) {
+                    s_installed.qtkeychainTranslator = qtkeychainTranslator;
+                } else {
+                    delete qtkeychainTranslator;
+                }
+            } else {
+                delete qtkeychainTranslator;
+            }
+        } else {
+            delete qtkeychainTranslator;
+        }
+
+        QLocale newLocale(lang);
+        QLocale::setDefault(newLocale);
+
+        return lang;
     }
 
 } // namespace Translations

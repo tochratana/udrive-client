@@ -51,7 +51,8 @@ enum class Symbol {
     Filter,
     Cloud,
     Disable,
-    Help
+    Help,
+    Bell
 };
 
 // Draw the same rounded, 24-unit stroke icons at any device pixel ratio.
@@ -308,6 +309,21 @@ public:
             body2.moveTo(15.5, 14);
             body2.cubicTo(17.5, 14.2, 20.5, 15.2, 20.5, 18.5);
             painter->drawPath(body2);
+            break;
+        }
+        case Symbol::Bell: {
+            QPainterPath bell;
+            bell.moveTo(18, 8.5);
+            bell.arcTo(QRectF(6, 2.5, 12, 12), 0, 180);
+            bell.cubicTo(6, 13.5, 3.5, 15.5, 3.5, 17.5);
+            bell.lineTo(20.5, 17.5);
+            bell.cubicTo(20.5, 15.5, 18, 13.5, 18, 8.5);
+            painter->drawPath(bell);
+
+            QPainterPath clapper;
+            clapper.moveTo(10.2, 18.5);
+            clapper.cubicTo(10.2, 21.0, 13.8, 21.0, 13.8, 18.5);
+            painter->drawPath(clapper);
             break;
         }
         }

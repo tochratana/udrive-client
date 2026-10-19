@@ -21,6 +21,7 @@
 #include "gui/ignorelisteditor.h"
 #include "gui/settingsdialog.h"
 #include "gui/translations.h"
+#include "appearancewidget.h"
 #include "libsync/configfile.h"
 #include "libsync/theme.h"
 
@@ -44,6 +45,16 @@ GeneralSettings::GeneralSettings(QWidget *parent)
     _ui->setupUi(this);
 
     if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+        _appearanceWidget = new AppearanceWidget(this);
+        _appearanceWidget->setObjectName(QStringLiteral("appearanceSection"));
+        _ui->verticalLayout_5->insertWidget(0, _appearanceWidget);
+
+        connect(_appearanceWidget, &AppearanceWidget::themeChanged, this, [](ConfigFile::ThemeMode mode) {
+            ConfigFile cfg;
+            cfg.setThemeMode(mode);
+            Application::applyApplicationTheme(mode);
+        });
+
         auto *languages = _ui->languageDropdown;
         languages->setMinimumWidth(240);
         languages->setMaximumWidth(320);
@@ -73,7 +84,16 @@ GeneralSettings::GeneralSettings(QWidget *parent)
         // first, store selected language in config file
         saveMiscSettings();
 
-        showLanguageRestartNotice();
+        const QString pickedLocale = _ui->languageDropdown->currentData().toString();
+        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+            if (auto *app = Application::instance()) {
+                app->applyLanguage(pickedLocale);
+            } else {
+                Translations::installLanguage(pickedLocale);
+            }
+        } else {
+            showLanguageRestartNotice();
+        }
     });
 
     /* handle the hidden file checkbox */
@@ -184,6 +204,11 @@ void GeneralSettings::loadMiscSettings()
 {
     QScopedValueRollback<bool> scope(_currentlyLoading, true);
     ConfigFile cfgFile;
+    if (_appearanceWidget) {
+        _appearanceWidget->setThemeMode(cfgFile.themeMode(), false);
+        _appearanceWidget->updateSystemAppearance();
+        _appearanceWidget->updateThemeStyles();
+    }
     _ui->monoIconsCheckBox->setChecked(cfgFile.monoIcons());
     _ui->desktopNotificationsCheckBox->setChecked(cfgFile.optionalDesktopNotifications());
     _ui->crashreporterCheckBox->setChecked(cfgFile.crashReporter());
@@ -199,9 +224,33 @@ void GeneralSettings::loadMiscSettings()
     _ui->languageDropdown->setCurrentIndex(index < 0 ? 0 : index);
 }
 
-void GeneralSettings::showEvent(QShowEvent *)
+void GeneralSettings::showEvent(QShowEvent *event)
 {
     reloadConfig();
+    if (_appearanceWidget) {
+        _appearanceWidget->setThemeMode(ConfigFile().themeMode(), false);
+        _appearanceWidget->updateSystemAppearance();
+        _appearanceWidget->updateThemeStyles();
+    }
+    QWidget::showEvent(event);
+}
+
+void GeneralSettings::changeEvent(QEvent *event)
+{
+    if (event->type() == QEvent::LanguageChange) {
+        _ui->retranslateUi(this);
+        loadLanguageNamesIntoDropdown();
+        ConfigFile cfg;
+        QString locale = cfg.uiLanguage();
+        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive"))
+            locale = Translations::udriveLocale(locale.isEmpty() ? QLocale::system().uiLanguages().value(0, QLocale::system().name()) : locale);
+        const auto index = _ui->languageDropdown->findData(locale);
+        _ui->languageDropdown->setCurrentIndex(index < 0 ? 0 : index);
+        if (_appearanceWidget) {
+            _appearanceWidget->retranslate();
+        }
+    }
+    QWidget::changeEvent(event);
 }
 
 void GeneralSettings::saveMiscSettings()
