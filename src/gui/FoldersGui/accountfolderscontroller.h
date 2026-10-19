@@ -43,8 +43,6 @@ signals:
 
 protected:
     void onUnsyncedSpaceCountChanged(const QUuid &accountId, int unsyncedSpaceCount, int totalSpaceCount);
-    void onAddFolder();
-    void onFolderWizardAccepted(OCC::FolderMan::SyncConnectionDescription result);
 
 private:
     AccountState *_accountState = nullptr;

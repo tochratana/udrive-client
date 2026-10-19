@@ -83,13 +83,16 @@ Pane {
             Layout.alignment: sidebar.collapsed ? Qt.AlignHCenter : Qt.AlignLeft
             Layout.topMargin: 4
             Layout.bottomMargin: 14
-            text: settingsDialog.isWorkspacesOverview ? qsTr("+  New Workspace") : qsTr("+  New")
+            text: settingsDialog.currentPage === SettingsDialog.Administration ? "+  " + settingsDialog.adminCreationLabel
+                : settingsDialog.isWorkspacesOverview ? qsTr("+  New Workspace") : qsTr("+  New")
             hoverEnabled: true
             enabled: settingsDialog.canCreateFiles
-            Accessible.name: settingsDialog.isWorkspacesOverview ? qsTr("Create a new workspace") : qsTr("Create a folder or upload a file")
+            Accessible.name: settingsDialog.currentPage === SettingsDialog.Administration ? settingsDialog.adminCreationLabel
+                : settingsDialog.isWorkspacesOverview ? qsTr("Create a new workspace") : qsTr("Create a folder or upload a file")
             ToolTip.visible: sidebar.collapsed && hovered
             ToolTip.delay: 300
-            ToolTip.text: settingsDialog.isWorkspacesOverview ? qsTr("New Workspace") : qsTr("New")
+            ToolTip.text: settingsDialog.currentPage === SettingsDialog.Administration ? settingsDialog.adminCreationLabel
+                : settingsDialog.isWorkspacesOverview ? qsTr("New Workspace") : qsTr("New")
             background: Rectangle {
                 radius: sidebar.collapsed ? 8 : 9
                 color: !newButton.enabled ? (sidebar.dark ? "#353B37" : "#E4EAE6")

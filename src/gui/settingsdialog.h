@@ -37,6 +37,7 @@ class ownCloudGui;
 class ActivitySettings;
 class GeneralSettings;
 class UDriveFileBrowser;
+class UDriveAdminWidget;
 
 /**
  * @brief The SettingsDialog class
@@ -49,6 +50,8 @@ class OWNCLOUDGUI_EXPORT SettingsDialog : public QMainWindow
     Q_PROPERTY(Account *currentAccount READ currentAccount WRITE setCurrentAccount NOTIFY currentAccountChanged)
     Q_PROPERTY(bool canCreateFiles READ canCreateFiles NOTIFY workspaceChanged)
     Q_PROPERTY(bool isWorkspacesOverview READ isWorkspacesOverview NOTIFY workspaceChanged)
+    Q_PROPERTY(bool canAdminister READ canAdminister NOTIFY workspaceChanged)
+    Q_PROPERTY(QString adminCreationLabel READ adminCreationLabel NOTIFY workspaceChanged)
     Q_PROPERTY(QString storageLabel READ storageLabel NOTIFY workspaceChanged)
     Q_PROPERTY(double storageFraction READ storageFraction NOTIFY workspaceChanged)
     Q_PROPERTY(bool sidebarVisible READ isSidebarVisible WRITE setSidebarVisible NOTIFY sidebarVisibilityChanged)
@@ -56,7 +59,7 @@ class OWNCLOUDGUI_EXPORT SettingsDialog : public QMainWindow
     QML_UNCREATABLE("C++ only")
     OC_DECLARE_WIDGET_FOCUS
 public:
-    enum class SettingsPage { None, Activity, Settings, Account, Files, Workspaces, Shares, Favorites, Trash };
+    enum class SettingsPage { None, Activity, Settings, Account, Files, Workspaces, Shares, Favorites, Trash, Administration };
     Q_ENUM(SettingsPage)
     explicit SettingsDialog(ownCloudGui *gui, QWidget *parent = nullptr);
     ~SettingsDialog() override;
@@ -83,6 +86,8 @@ public Q_SLOTS:
     void openNewFileMenu();
     bool canCreateFiles() const;
     bool isWorkspacesOverview() const;
+    bool canAdminister() const;
+    QString adminCreationLabel() const;
     QString storageLabel() const;
     double storageFraction() const;
     void runFolderWizard(Account *account);
@@ -122,6 +127,7 @@ private:
 
     QHash<QUuid, AccountView *> _viewForAccount;
     QHash<QUuid, UDriveFileBrowser *> _filesForAccount;
+    QHash<QUuid, UDriveAdminWidget *> _adminForAccount;
     QPointer<Account> _lastAccount;
 
     ActivitySettings *_activitySettings;

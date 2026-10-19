@@ -37,6 +37,7 @@
 #include "scheduling/syncscheduler.h"
 #include "settingsdialog.h"
 #include "theme.h"
+#include "udriveicons.h"
 
 #include <QAction>
 #include <QDir>
@@ -71,8 +72,15 @@ AccountView::AccountView(AccountState *accountState, QWidget *parent)
 {
     ui->setupUi(this);
 
-    ui->brandLogo->setPixmap(Theme::instance()->applicationIcon().pixmap(48, 48));
-    ui->workspaceTitle->setText(tr("Your %1 workspace").arg(Theme::instance()->appNameGUI()));
+    setProperty("udriveSync", true);
+    ui->workspaceTitle->setText(tr("Sync"));
+    ui->openFolderButton->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Folder));
+    ui->viewOnlineButton->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Online));
+    ui->manageAccountButton->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Settings));
+    for (auto *button : {ui->openFolderButton, ui->viewOnlineButton, ui->manageAccountButton}) {
+        button->setIconSize(QSize(18, 18));
+        button->setProperty("syncAction", true);
+    }
     ui->openFolderButton->setEnabled(false);
     ui->viewOnlineButton->setEnabled(false);
 

@@ -63,6 +63,21 @@ class TestHttpLogger : public QObject
 {
     Q_OBJECT
 private Q_SLOTS:
+    void sensitiveAdministrationBodiesAreOmitted()
+    {
+        const QByteArray payload = R"({"mail":"PRIVATE_DIRECTORY_EMAIL","passwordProfile":{"password":"PRIVATE_ADMIN_PASSWORD"}})";
+        QNetworkRequest request(QUrl(QStringLiteral("https://example.invalid/graph/v1.0/users")));
+        request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+        request.setAttribute(OCC::HttpLogger::OmitBodyAttribute, true);
+        QBuffer body; body.setData(payload); QVERIFY(body.open(QIODevice::ReadOnly));
+        Reply reply(request, payload, QStringLiteral("application/json"));
+        captured.clear(); const auto handler = qInstallMessageHandler(capture);
+        OCC::HttpLogger::logRequest(&reply, QNetworkAccessManager::PostOperation, &body); reply.finish();
+        qInstallMessageHandler(handler);
+        QVERIFY(!captured.contains(QStringLiteral("PRIVATE_")));
+        QCOMPARE(captured.count(QStringLiteral("[sensitive body omitted]")), 2);
+        QVERIFY(captured.contains(QStringLiteral("REQUEST"))); QVERIFY(captured.contains(QStringLiteral("RESPONSE")));
+    }
     void payloads_data()
     {
         QTest::addColumn<QByteArray>("payload");

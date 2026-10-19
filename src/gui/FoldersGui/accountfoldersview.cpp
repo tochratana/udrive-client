@@ -16,11 +16,9 @@
 
 #include <QApplication>
 #include <QFocusEvent>
-#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QMenu>
-#include <QPushButton>
 #include <QStandardItemModel>
 #include <QTreeView>
 #include <QVBoxLayout>
@@ -53,34 +51,25 @@ AccountFoldersView::AccountFoldersView(QWidget *parent)
 void AccountFoldersView::buildView()
 {
     QVBoxLayout *mainLayout = new QVBoxLayout();
-    mainLayout->setContentsMargins(0, 8, 0, 0);
-    mainLayout->setSpacing(12);
+    mainLayout->setContentsMargins(0, 12, 0, 0);
+    mainLayout->setSpacing(8);
     //: This shows as 'Folder sync' or 'Space sync'
     QString titleString = tr("Synced %1").arg(CommonStrings::spaces());
     QLabel *titleLabel = new QLabel(titleString, this);
+    titleLabel->setObjectName("syncSectionTitle");
     QFont f = titleLabel->font();
     f.setBold(true);
-    f.setPointSize(f.pointSize() + 3);
+    f.setPointSize(f.pointSize() + 1);
     titleLabel->setFont(f);
     titleLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    mainLayout->addWidget(titleLabel, 0, Qt::AlignLeft);
-
-    QHBoxLayout *buttonLineLayout = new QHBoxLayout();
+    mainLayout->addWidget(titleLabel);
     QString descString = tr("Choose which %1 are available on this computer.").arg(CommonStrings::spaces());
     QLabel *description = new QLabel(descString, this);
-    description->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    description->setObjectName("syncSectionDescription");
+    description->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     description->setWordWrap(true);
-    buttonLineLayout->addWidget(description, 0, Qt::AlignLeft);
 
-    //: This shows as 'Add new folder sync…' or 'Add new Space sync…'
-    QString addSyncString = tr("Add new %1 sync…").arg(CommonStrings::space());
-    _addFolderButton = new QPushButton(addSyncString, this);
-    _addFolderButton->setObjectName("addFolderSyncButton");
-    _addFolderButton->setFocusPolicy(Qt::StrongFocus);
-    connect(_addFolderButton, &QPushButton::clicked, this, &AccountFoldersView::addFolderTriggered);
-    buttonLineLayout->addStretch(1);
-    buttonLineLayout->addWidget(_addFolderButton, 0, Qt::AlignRight);
-    mainLayout->addLayout(buttonLineLayout);
+    mainLayout->addWidget(description);
 
     _treeView = new QTreeView(this);
     _treeView->setObjectName("accountFoldersTreeView");
@@ -252,11 +241,6 @@ void AccountFoldersView::setItemModels(QStandardItemModel *model, QItemSelection
 void AccountFoldersView::setSyncedFolderCount(int synced, int total)
 {
     _syncedFolderCountLabel->setText(tr("%1 out of %2 %3 are synchronized").arg(QString::number(synced), QString::number(total), CommonStrings::spaces()));
-}
-
-void AccountFoldersView::enableAddFolder(bool enableAdd)
-{
-    _addFolderButton->setEnabled(enableAdd);
 }
 
 void AccountFoldersView::setFolderActions(QList<QAction *> actions)

@@ -2,6 +2,14 @@ include(owncloud_add_test.cmake)
 
 add_subdirectory(testutils)
 
+if(APPLE)
+    find_package(Python3 3.9 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME MacOSReleasePolicyTest
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR} -p test_macos_release.py -v)
+    endif()
+endif()
+
 owncloud_add_test(JHash)
 
 owncloud_add_test(OwncloudPropagator)
@@ -71,6 +79,7 @@ if(APPLE)
     list(APPEND udrive_pdf_sources ../src/gui/udrivepdfpreview.cpp ../src/gui/udrivepdfdocument_mac.mm)
 endif()
 owncloud_add_test(UDriveWorkspaceActions ../src/gui/udriveworkspaceactions.cpp)
+owncloud_add_test(UDriveAdmin)
 owncloud_add_test(UDriveFileBrowser ../src/gui/udriveworkspaceactions.cpp ../src/gui/udrivefilebrowser.cpp ../src/gui/udrivethumbnails.cpp ${udrive_pdf_sources})
 if(APPLE)
     target_link_libraries(UDriveFileBrowserTest "-framework CoreGraphics")

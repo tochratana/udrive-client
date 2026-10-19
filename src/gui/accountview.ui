@@ -16,55 +16,35 @@
   <layout class="QVBoxLayout" name="verticalLayout_2">
    <property name="spacing"><number>16</number></property>
    <property name="leftMargin"><number>24</number></property>
-   <property name="topMargin"><number>16</number></property>
+   <property name="topMargin"><number>24</number></property>
    <property name="rightMargin"><number>24</number></property>
    <property name="bottomMargin"><number>20</number></property>
    <item>
     <widget class="QFrame" name="workspaceHeader">
-     <property name="styleSheet">
-      <string notr="true">QFrame#workspaceHeader { background: #083D39; border-radius: 16px; }
-QLabel { color: white; background: transparent; }
-QLabel#workspaceDescription { color: #C7E8DE; }
-QPushButton { padding: 9px 16px; border-radius: 8px; border: 1px solid #65A99A; color: white; background: #12564A; }
-QPushButton:hover { background: #196C5B; }
-QPushButton:pressed { background: #083D39; }
-QPushButton:focus { border: 2px solid #FFFFFF; }
-QPushButton:disabled { color: #A7C9BF; background: #204E45; border-color: #527E72; }
-QPushButton#openFolderButton { background: #FFFFFF; color: #083D39; border-color: #FFFFFF; }
-QPushButton#openFolderButton:hover { background: #D6F7E7; }
-QPushButton#openFolderButton:pressed { background: #C7E8DE; }
-QPushButton#openFolderButton:disabled { background: #91B5A7; color: #2C574A; }
-QPushButton#openFolderButton:focus { border: 2px solid #9CEFCA; }</string>
-     </property>
      <layout class="QVBoxLayout" name="workspaceLayout">
-      <property name="spacing"><number>14</number></property>
-      <property name="leftMargin"><number>20</number></property>
-      <property name="topMargin"><number>20</number></property>
-      <property name="rightMargin"><number>20</number></property>
-      <property name="bottomMargin"><number>20</number></property>
+      <property name="spacing"><number>16</number></property>
+      <property name="leftMargin"><number>0</number></property>
+      <property name="topMargin"><number>0</number></property>
+      <property name="rightMargin"><number>0</number></property>
+      <property name="bottomMargin"><number>0</number></property>
       <item>
        <layout class="QHBoxLayout" name="workspaceTitleLayout">
         <property name="spacing"><number>14</number></property>
-        <item><widget class="QLabel" name="brandLogo">
-         <property name="minimumSize"><size><width>48</width><height>48</height></size></property>
-         <property name="maximumSize"><size><width>48</width><height>48</height></size></property>
-         <property name="text"><string/></property>
-        </widget></item>
         <item><layout class="QVBoxLayout" name="workspaceTextLayout">
          <item><widget class="QLabel" name="workspaceTitle">
-          <property name="font"><font><pointsize>20</pointsize><bold>true</bold></font></property>
+          <property name="font"><font><pointsize>18</pointsize><bold>true</bold></font></property>
           <property name="text"><string>Your workspace</string></property>
           <property name="wordWrap"><bool>true</bool></property>
          </widget></item>
          <item><widget class="QLabel" name="workspaceDescription">
-          <property name="text"><string>Open synced files on your computer or manage your files online.</string></property>
+          <property name="text"><string>Keep your files up to date on this computer.</string></property>
           <property name="wordWrap"><bool>true</bool></property>
          </widget></item>
         </layout></item>
        </layout>
       </item>
       <item><layout class="QHBoxLayout" name="workspaceActionsLayout">
-       <property name="spacing"><number>10</number></property>
+       <property name="spacing"><number>8</number></property>
        <item><widget class="QPushButton" name="openFolderButton">
         <property name="text"><string>Open folder</string></property>
         <property name="focusPolicy"><enum>Qt::FocusPolicy::StrongFocus</enum></property>
@@ -84,6 +64,11 @@ QPushButton#openFolderButton:focus { border: 2px solid #9CEFCA; }</string>
    <item>
     <widget class="QWidget" name="accountStatus" native="true">
      <layout class="QHBoxLayout" name="horizontalLayout_4">
+      <property name="spacing"><number>10</number></property>
+      <property name="leftMargin"><number>0</number></property>
+      <property name="topMargin"><number>4</number></property>
+      <property name="rightMargin"><number>0</number></property>
+      <property name="bottomMargin"><number>4</number></property>
       <item>
        <widget class="QLabel" name="warningLabel">
         <property name="enabled">
@@ -97,14 +82,14 @@ QPushButton#openFolderButton:focus { border: 2px solid #9CEFCA; }</string>
         </property>
         <property name="minimumSize">
          <size>
-          <width>32</width>
-          <height>32</height>
+          <width>20</width>
+          <height>20</height>
          </size>
         </property>
         <property name="maximumSize">
          <size>
-          <width>32</width>
-          <height>32</height>
+          <width>20</width>
+          <height>20</height>
          </size>
         </property>
         <property name="text">
@@ -140,7 +125,7 @@ QPushButton#openFolderButton:focus { border: 2px solid #9CEFCA; }</string>
          <enum>Qt::FocusPolicy::StrongFocus</enum>
         </property>
         <property name="text">
-         <string>Manage Account</string>
+         <string>Account settings</string>
         </property>
        </widget>
       </item>

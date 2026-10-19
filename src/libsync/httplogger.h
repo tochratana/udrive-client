@@ -20,6 +20,8 @@
 
 namespace OCC {
 namespace HttpLogger {
+    // Local-only request metadata; never transmitted as an HTTP header.
+    inline constexpr auto OmitBodyAttribute = static_cast<QNetworkRequest::Attribute>(QNetworkRequest::User + 1);
     void OWNCLOUDSYNC_EXPORT logRequest(QNetworkReply *reply, QNetworkAccessManager::Operation operation, QIODevice *device);
 
     /**

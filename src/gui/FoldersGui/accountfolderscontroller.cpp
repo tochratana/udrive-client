@@ -20,7 +20,6 @@
 #include "commonstrings.h"
 #include "configfile.h"
 #include "foldermodelcontroller.h"
-#include "folderwizard.h"
 #include "selectivesyncwidget.h"
 #include "settingsdialog.h"
 
@@ -55,8 +54,6 @@ AccountFoldersController::AccountFoldersController(AccountState *state, AccountF
     QStandardItemModel *model = modelController->itemModel();
     _view->setItemModels(model, modelController->selectionModel());
 
-    connect(_view, &AccountFoldersView::addFolderTriggered, this, &AccountFoldersController::onAddFolder);
-
     FolderMan *folderMan = FolderMan::instance();
     modelController->connectSignals(folderMan);
 
@@ -68,7 +65,6 @@ void AccountFoldersController::onUnsyncedSpaceCountChanged(const QUuid &accountI
     if (accountId != _accountId)
         return;
 
-    _view->enableAddFolder(unsyncedSpaceCount > 0);
     // sometimes we have folders that are related to a space which has been removed server side. Because of this,
     // sometimes the total "synced" count can be larger than the space count, so min the diff to get something reasonable
     int reasonableCount = qMin(totalSpaceCount - unsyncedSpaceCount, totalSpaceCount);
@@ -81,36 +77,6 @@ void AccountFoldersController::onFolderChanged(OCC::Folder *folder)
         return;
 
     _currentFolder = folder;
-}
-
-void AccountFoldersController::onAddFolder()
-{
-    if (!_accountState || !_accountState->account()) {
-        return;
-    }
-
-    FolderWizard *folderWizard = new FolderWizard(_accountState->account(), nullptr);
-    folderWizard->setAttribute(Qt::WA_DeleteOnClose);
-
-    connect(folderWizard, &FolderWizard::folderWizardAccepted, this, &AccountFoldersController::onFolderWizardAccepted);
-
-    emit requestShowModalWidget(folderWizard);
-}
-
-void AccountFoldersController::onFolderWizardAccepted(OCC::FolderMan::SyncConnectionDescription result)
-{
-    if (!_accountState) {
-        return;
-    }
-
-    // The gui should not allow users to selectively choose any sync lists if vfs is enabled, but this kind of check was
-    // originally in play here so...keep it just in case.
-    if (result.useVirtualFiles && !result.selectiveSyncBlackList.empty()) {
-        result.selectiveSyncBlackList.clear();
-    }
-
-    // Refactoring todo: turn this into a signal/requestAddFolder
-    FolderMan::instance()->addFolderFromGui(_accountState, result);
 }
 
 void AccountFoldersController::buildMenuActions()

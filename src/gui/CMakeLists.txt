@@ -47,6 +47,8 @@ set(client_SRCS
     settingsdialog.cpp
     udrivefilebrowser.cpp
     udriveworkspaceactions.cpp
+    udriveadminapi.cpp
+    udriveadminwidget.cpp
     udrivethumbnails.cpp
     udriveicons.qrc
     tlserrordialog.cpp

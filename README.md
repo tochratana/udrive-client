@@ -26,6 +26,7 @@
 - [Connecting to your server](#connecting-to-your-server)
 - [Development](#development)
   - [Build tools and configuration](#build-tools-and-configuration)
+  - [macOS customer releases](#macos-customer-releases)
 - [Implementation notes and current limits](#implementation-notes-and-current-limits)
 - [Reporting issues and contributing](#reporting-issues-and-contributing)
 - [License](#license)
@@ -68,7 +69,7 @@ upstream diagnostics and system dialogs can still use English.
 
 | Platform             | Current status in this fork                                                                                                                             |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS, Apple Silicon | Development build and UDrive regression tests verified locally. A distributable installer still needs to be prepared.                                   |
+| macOS, Apple Silicon | Local development and release tooling are available. A customer installer requires the publisher's signing certificate, notarization, and clean-Mac verification. |
 | Windows, x64         | Existing build and packaging workflow is configured. The customized UDrive build has not yet been built and tested on Windows in this development work. |
 | Linux, x64           | Existing build workflow is configured. The customized UDrive build has not yet been verified on Linux in this development work.                         |
 | macOS, Intel         | Not verified for the current UDrive customization. Requires a separate compatible build.                                                                |
@@ -97,6 +98,32 @@ not the UDrive website address. Sign-in uses Authorization Code with S256 PKCE.
 The upstream 7.1.x client targets ownCloud Infinite Scale. Support for PHP
 ownCloud Server 10 was removed in 7.1.0; see [CHANGELOG.md](CHANGELOG.md).
 
+### Desktop administration
+
+Accounts with the corresponding server permissions see **Admin settings** in
+the profile menu. The native desktop pages support:
+
+- **Users:** search, group/role filters, creation, profile/password editing,
+  server role assignment, login access, and deletion.
+- **Groups:** search, creation, editing, deletion, and membership management.
+- **Workspaces:** list all project workspaces, create/edit them, change quotas,
+  and disable or re-enable access, subject to separate server permissions.
+
+Permission discovery uses the same authenticated settings API as ownCloud Web;
+the server authorizes every request. Read-only user attributes and disabled
+creation/deletion capabilities are respected. The desktop blocks deleting or
+disabling the signed-in user and changing that user's own role. Directory data
+is cleared on sign-out; administration request and response bodies are omitted
+from HTTP diagnostic logs. Lists support pagination up to 10,000 entries.
+
+**Web administration** opens additional server features, including custom
+Office Templates management. Office Templates has no native desktop editor in
+this implementation. Servers must expose the LibreGraph and settings APIs; a
+missing or denied permission response keeps the desktop admin area unavailable.
+The implementation is tested against local API fixtures, not by changing
+production users or groups. Server compatibility still requires an installed
+build check with an authorized account.
+
 ## Development
 
 ### Build tools and configuration
@@ -111,14 +138,30 @@ dependencies before configuring CMake; installing Qt Creator alone does not
 provide the project's dependency set.
 
 For a fresh clone, follow the [KDE Craft setup guide](https://community.kde.org/Craft)
-and the repository's [build workflow](.github/workflows/main.yml). Configure
+and the repository's [reference build workflow](.github/workflows/main.yml.disabled). Configure
 Craft's `owncloud/owncloud-client` package with `srcDir` pointing to this checkout
 so it compiles the UDrive fork. The workflow contains dependency, build, test
-and packaging stages for the configured platform targets.
+and packaging stages for the configured platform targets. GitHub workflows are
+currently disabled in this fork; local builds do not use GitHub Actions minutes.
 
 The default theme is selected from [branding/](branding/) by
 [THEME.cmake](THEME.cmake). Branding details are documented in
 [branding/README.md](branding/README.md).
+
+### macOS customer releases
+
+Use the local release workflow:
+
+```bash
+python3 admin/osx/release.py build
+python3 admin/osx/release.py release
+```
+
+Building works without an Apple Developer account. Creating a trusted customer
+package requires the publisher's Developer ID Application certificate and a
+local notarization profile. See [macOS release setup and verification](admin/osx/RELEASING.md)
+for one-time setup, packaging-only checks, and Keychain installation/upgrade
+acceptance tests. The workflow preserves existing accounts and Keychain storage.
 
 ## Implementation notes and current limits
 

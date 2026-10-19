@@ -18,6 +18,7 @@
 #include "accountmanager.h"
 #include "accountview.h"
 #include "udrivefilebrowser.h"
+#include "udriveadminwidget.h"
 #include "udriveicons.h"
 #include "udrivepopup.h"
 #include "resources/resources.h"
@@ -446,7 +447,7 @@ void SettingsDialog::createWorkspaceHeader()
     row->addWidget(_brandWidget);
     _searchStack = new QStackedWidget(header);
     _searchStack->setObjectName(QStringLiteral("driveHeaderSearch"));
-    _searchStack->setMaximumWidth(720);
+    _searchStack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     _searchStack->setFixedHeight(44);
     auto *emptySearch = new QLineEdit(header);
     emptySearch->setObjectName(QStringLiteral("driveSearch"));
@@ -454,7 +455,6 @@ void SettingsDialog::createWorkspaceHeader()
     emptySearch->setEnabled(false);
     _searchStack->addWidget(emptySearch);
     row->addWidget(_searchStack, 1);
-    row->addStretch(0);
     auto addTool = [this, header, row](UDriveIcons::Symbol symbol, const QString &label, SettingsPage page) {
         auto *button = new QPushButton(header);
         button->setObjectName(QStringLiteral("driveHeaderTool"));
@@ -600,6 +600,14 @@ void SettingsDialog::showAccountPopup()
             if (_lastAccount)
                 setCurrentPage(SettingsPage::Account);
         });
+        if (canAdminister()) {
+            auto *admin = new AccountPopupButton(tr("Admin settings"), {}, UDriveIcons::icon(UDriveIcons::Symbol::Members), popup);
+            admin->setObjectName(QStringLiteral("drivePopupAdminSettings"));
+            layout->addWidget(admin);
+            connect(admin, &QAbstractButton::clicked, this, [this, popup] {
+                popup->close(); setCurrentPage(SettingsPage::Administration);
+            });
+        }
     }
     for (auto *button : popup->findChildren<QAbstractButton *>())
         button->installEventFilter(popup);
@@ -626,9 +634,18 @@ void SettingsDialog::updateWorkspaceHeader()
     // Search fields live in the header after integration; retain account identity on each page.
     for (int i = 1; files && i < _searchStack->count(); ++i) {
         auto *field = _searchStack->widget(i);
-        if (field->property("accountId").toUuid() == files->accountState()->account()->uuid()) {
+        if (!field->property("administrationSearch").toBool() && field->property("accountId").toUuid() == files->accountState()->account()->uuid()) {
             search = qobject_cast<QLineEdit *>(field);
             break;
+        }
+    }
+    if (_currentPage == SettingsPage::Administration && _lastAccount) {
+        if (auto *admin = _adminForAccount.value(_lastAccount->uuid())) {
+            search = admin->searchField();
+            if (_searchStack->indexOf(search) < 0) {
+                admin->takeSearchField(); search->setProperty("accountId", _lastAccount->uuid()); search->setProperty("administrationSearch", true);
+                _searchStack->addWidget(search);
+            }
         }
     }
     _searchStack->setCurrentIndex(search ? _searchStack->indexOf(search) : 0);
@@ -638,12 +655,30 @@ void SettingsDialog::updateWorkspaceHeader()
 
 bool SettingsDialog::canCreateFiles() const
 {
+    if (_currentPage == SettingsPage::Administration && _lastAccount) {
+        auto *admin = _adminForAccount.value(_lastAccount->uuid()); return admin && admin->canCreate();
+    }
     auto *files = qobject_cast<UDriveFileBrowser *>(_ui->stack->currentWidget());
     return files && files->canCreate();
 }
 
+bool SettingsDialog::canAdminister() const
+{
+    auto *admin = _lastAccount ? _adminForAccount.value(_lastAccount->uuid()) : nullptr;
+    return admin && admin->api()->available();
+}
+QString SettingsDialog::adminCreationLabel() const
+{
+    auto *admin = _lastAccount ? _adminForAccount.value(_lastAccount->uuid()) : nullptr;
+    return admin ? admin->creationLabel() : QString();
+}
+
 void SettingsDialog::openNewFileMenu()
 {
+    if (_currentPage == SettingsPage::Administration && _lastAccount) {
+        if (auto *admin = _adminForAccount.value(_lastAccount->uuid())) admin->createNew();
+        return;
+    }
     auto *files = qobject_cast<UDriveFileBrowser *>(_ui->stack->currentWidget());
     auto *root = _ui->quickWidget->rootObject();
     auto *button = root ? root->findChild<QQuickItem *>(QStringLiteral("udriveNew")) : nullptr;
@@ -877,8 +912,25 @@ void SettingsDialog::updateUDriveAppearance()
         "QListView#driveSpacesPopup::item { padding: 4px 8px; border: none; border-radius: 5px; }"
         "QListView#driveSpacesPopup::item:hover { background: %6; }"
         "QListView#driveSpacesPopup::item:selected { background: %4; color: %11; }"
-        "QTreeView#accountFoldersTreeView { border: 1px solid %3; border-radius: 12px; background: %1; padding: 8px; }"
-        "QLabel#syncedFolderCount { color: %2; padding-top: 8px; }")
+        "QWidget[udriveSync=\"true\"], QWidget[udriveSync=\"true\"] QFrame#workspaceHeader, QWidget[udriveSync=\"true\"] QWidget#accountStatus { background: transparent; border: none; }"
+        "QWidget[udriveSync=\"true\"] QLabel { background: transparent; color: %2; }"
+        "QWidget[udriveSync=\"true\"] QLabel#workspaceDescription, QLabel#syncSectionDescription, QLabel#syncedFolderCount { color: %5; }"
+        "QStackedWidget#stack QWidget[udriveSync=\"true\"] QPushButton[syncAction=\"true\"] { background: transparent; border: 1px solid %3; border-radius: 8px; min-height: 20px; padding: 7px 12px; }"
+        "QStackedWidget#stack QWidget[udriveSync=\"true\"] QPushButton[syncAction=\"true\"]:hover { background: %4; border-color: %11; }"
+        "QStackedWidget#stack QWidget[udriveSync=\"true\"] QPushButton[syncAction=\"true\"]:pressed { background: %6; }"
+        "QStackedWidget#stack QWidget[udriveSync=\"true\"] QPushButton[syncAction=\"true\"]:focus { border-color: %11; }"
+        "QStackedWidget#stack QWidget[udriveSync=\"true\"] QPushButton[syncAction=\"true\"]:disabled { background: transparent; color: %5; border-color: %3; }"
+        "QWidget#driveAdministration, QWidget#driveAdministration QLabel { background: transparent; color: %2; }"
+        "QTreeView#driveAdminTable { border: none; background: %1; color: %2; outline: none; }"
+        "QTreeView#driveAdminTable::item { padding: 10px 8px; border-bottom: 1px solid %3; }"
+        "QTreeView#driveAdminTable::item:selected { background: %4; color: %2; }"
+        "QTreeView#driveAdminTable QHeaderView::section { background: %1; color: %2; border: none; border-bottom: 1px solid %3; padding: 10px 8px; }"
+        "QTabBar#driveAdminTabs::tab { background: transparent; color: %5; border-bottom: 2px solid transparent; padding: 8px 14px; }"
+        "QTabBar#driveAdminTabs::tab:selected { color: %2; border-bottom-color: %11; }"
+        "QComboBox#driveAdminGroupFilter, QComboBox#driveAdminRoleFilter { background: transparent; color: %2; border: 1px solid %3; border-radius: 8px; padding: 7px 28px 7px 10px; }"
+        "QLabel#driveAdminCount { color: %5; font-size: 12px; }"
+        "QTreeView#accountFoldersTreeView { border: none; border-radius: 0; background: %1; color: %2; padding: 0; }"
+        "QLabel#syncedFolderCount { padding-top: 8px; font-size: 12px; }")
         .arg(surface, text, border, hover, disabledText, disabledSurface, arrow, dark ? QStringLiteral("#202020") : QStringLiteral("#F6F7F8"))
         .arg(toolbarSurface, toolbarBorder, toolbarAccent, dark ? QStringLiteral("#383838") : QStringLiteral("#F4F5F4")));
 }
@@ -898,6 +950,17 @@ void SettingsDialog::onAccountAdded(AccountState *state)
         auto *files = new UDriveFileBrowser(state, this);
         _ui->stack->addWidget(files);
         _filesForAccount.insert(state->account()->uuid(), files);
+        auto *admin = new UDriveAdminWidget(state, this);
+        _adminForAccount.insert(state->account()->uuid(), admin);
+        _ui->stack->addWidget(admin);
+        connect(admin, &UDriveAdminWidget::controlsChanged, this, &SettingsDialog::workspaceChanged);
+        connect(admin, &UDriveAdminWidget::availabilityChanged, this, [this, admin, id = state->account()->uuid()] {
+            if (!_lastAccount || _lastAccount->uuid() != id) return;
+            if (_accountPopup) _accountPopup->close();
+            Q_EMIT workspaceChanged();
+            if (_currentPage == SettingsPage::Administration && !admin->api()->available()) setCurrentPage(SettingsPage::Files);
+        });
+        QTimer::singleShot(0, admin, [admin] { admin->api()->refreshAccess(); });
         auto *search = files->takeSearchField();
         search->setProperty("accountId", state->account()->uuid());
         _searchStack->addWidget(search);
@@ -939,6 +1002,12 @@ void SettingsDialog::onAccountRemoved(AccountState *state)
         return;
     // todo: #37. using the account after we know it's been removed is not ok.
     Account *acc = state->account();
+    if (auto *admin = _adminForAccount.take(acc->uuid())) {
+        admin->api()->clear();
+        auto *search = admin->searchField();
+        if (_searchStack && _searchStack->indexOf(search) >= 0) { _searchStack->removeWidget(search); search->deleteLater(); }
+        _ui->stack->removeWidget(admin); admin->deleteLater();
+    }
     ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowserRecent/") + acc->uuid().toString(QUuid::WithoutBraces))->remove(QString());
     if (auto *files = _filesForAccount.take(acc->uuid())) {
         for (int i = 1; _searchStack && i < _searchStack->count(); ++i) {
@@ -1047,6 +1116,15 @@ void SettingsDialog::setCurrentPage(SettingsPage currentPage)
     _currentPage = currentPage;
     _currentAccount = nullptr;
     switch (_currentPage) {
+    case SettingsPage::Administration: {
+        auto *admin = _lastAccount ? _adminForAccount.value(_lastAccount->uuid()) : nullptr;
+        if (!admin || !admin->api()->available()) {
+            _currentPage = SettingsPage::Settings; _ui->stack->setCurrentWidget(_settingsPage); break;
+        }
+        _currentAccount = _lastAccount;
+        _ui->stack->setCurrentWidget(admin);
+        break;
+    }
     case SettingsPage::Activity:
         _ui->stack->setCurrentWidget(_activityPage);
         break;

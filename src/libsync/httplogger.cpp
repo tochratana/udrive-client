@@ -105,6 +105,7 @@ struct HttpContext
         : originalUrl(safeUrl(request.url()))
         , lastUrl(request.url())
         , id(QString::fromUtf8(request.rawHeader(QByteArrayLiteral("X-Request-ID"))))
+        , omitBody(request.attribute(OCC::HttpLogger::OmitBodyAttribute).toBool())
     {
     }
 
@@ -118,6 +119,7 @@ struct HttpContext
     QUrl lastUrl;
     QStringList redirectUrls;
     const QString id;
+    const bool omitBody;
 
     OCC::Utility::ChronoElapsedTimer timer;
     bool send = false;
@@ -165,7 +167,9 @@ void logHttp(const QByteArray &verb, HttpContext *ctx, QJsonObject &&header, QIO
 
     const auto contentLength = device ? device->size() : 0;
     QJsonObject body = {{QStringLiteral("length"), device ? QString::number(contentLength) : QStringLiteral("null")}};
-    if (contentLength > 0) {
+    if (contentLength > 0 && ctx->omitBody) {
+        body[QStringLiteral("data")] = QStringLiteral("[sensitive body omitted]");
+    } else if (contentLength > 0) {
         QString contentType = header.value(QStringLiteral("Content-Type")).toString();
         if (contentType.isEmpty()) {
             contentType = header.value(QStringLiteral("content-type")).toString();
