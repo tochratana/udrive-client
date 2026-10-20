@@ -2,6 +2,7 @@
 """Exercise Windows packaging policy without executing Windows code on the host."""
 
 import argparse
+import configparser
 import importlib.util
 import json
 from pathlib import Path
@@ -108,6 +109,22 @@ class TestWindowsRelease(unittest.TestCase):
         runner.assert_not_called()
         self.assertFalse(args.work_root.exists())
         self.assertFalse(args.output_dir.exists())
+
+    def test_windows_settings_resolve_without_apple_signing_environment(self):
+        # Match CraftMaster's config resolution on a clean Windows runner.
+        config = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
+        config.optionxform = str
+        config.read([windows.ROOT / '.craft.ini', windows.ROOT / '.github/workflows/craft_override.ini'])
+        config['Variables'].update(Root='C:/udrive-build', WORKSPACE='C:/udrive-build',
+                                   PythonExecutable='C:/Python312/python.exe',
+                                   PackageOutput='C:/udrive-build/packages', CiBuild='False', CreateCache='False')
+        config.read_string(windows.WINDOWS_CRAFT_OVERRIDE)
+        settings = dict(config['GeneralSettings'])
+        self.assertEqual(settings['CodeSigning/MacDeveloperId'], '')
+        self.assertEqual(settings['CodeSigning/MacKeychainPath'], '')
+        self.assertEqual(settings['CodeSigning/Enabled'], 'False')
+        self.assertEqual(settings['Paths/Python'], 'C:/Python312/python.exe')
+        self.assertEqual(settings['Packager/Destination'], 'C:/udrive-build/packages')
 
     def test_test_installer_metadata_does_not_claim_signing_or_install_validation(self):
         args = self.fixture()

@@ -19,6 +19,19 @@ ROOT = Path(__file__).resolve().parents[2]
 TARGET = "windows-cl-msvc2022-x86_64"
 PACKAGE = "owncloud/owncloud-client"
 CRAFTMASTER_REVISION = "8a19d8fcab223b8b27126d98a46ed824b5948665"
+WINDOWS_CRAFT_OVERRIDE = """[GeneralSettings]
+Paths/Python = ${Variables:PythonExecutable}
+Packager/Destination = ${Variables:PackageOutput}
+Packager/CreateCache = False
+Packager/PackageType = NullsoftInstallerPackager
+CodeSigning/Enabled = False
+# Craft resolves shared settings even when signing is disabled.
+# Windows builds must not require the publisher's Apple signing environment.
+CodeSigning/MacDeveloperId =
+CodeSigning/MacKeychainPath =
+ContinuousIntegration/UpdateRepository = False
+Compile/BuildType = RelWithDebInfo
+"""
 
 
 class BuildError(Exception):
@@ -158,15 +171,7 @@ def build(args):
         raise BuildError("Unexpected CraftMaster revision. Use a new --work-root for the pinned Windows build.")
     packages = Path(tempfile.mkdtemp(prefix="windows-packages-", dir=work_root))
     override = work_root / "udrive-windows.ini"
-    override.write_text("""[GeneralSettings]
-Paths/Python = ${Variables:PythonExecutable}
-Packager/Destination = ${Variables:PackageOutput}
-Packager/CreateCache = False
-Packager/PackageType = NullsoftInstallerPackager
-CodeSigning/Enabled = False
-ContinuousIntegration/UpdateRepository = False
-Compile/BuildType = RelWithDebInfo
-""")
+    override.write_text(WINDOWS_CRAFT_OVERRIDE)
     env = os.environ.copy()
     env.update(APPLICATION_EXECUTABLE="udrive", APPLICATION_SHORTNAME="UDrive", SIGN_PACKAGE="False")
     base = [sys.executable, str(master / "CraftMaster.py"), "--config", str(ROOT / ".craft.ini"),
