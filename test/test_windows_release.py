@@ -118,6 +118,8 @@ class TestWindowsRelease(unittest.TestCase):
         def startup(*args, **kwargs):
             self.assertFalse(prefix.exists(), 'Installed app must run without the Craft prefix available')
             self.assertTrue(prefix.with_name(prefix.name + '.smoke-isolated').is_dir())
+            self.assertEqual(kwargs['env']['PATH'], windows.os.pathsep.join([
+                str(Path('C:/Windows') / 'System32'), 'C:/Windows']))
             if startup_fails:
                 raise windows.subprocess.CalledProcessError(1, args)
             return 'UDrive 7.1.1\n'
@@ -129,7 +131,9 @@ class TestWindowsRelease(unittest.TestCase):
         registry = SimpleNamespace(HKEY_CURRENT_USER=1, HKEY_LOCAL_MACHINE=2,
                                    OpenKey=Mock(side_effect=FileNotFoundError))
         stack.enter_context(patch.dict(windows.sys.modules, {'winreg': registry}))
-        stack.enter_context(patch.dict(windows.os.environ, {'SystemRoot': 'C:/Windows'}))
+        # Windows normalizes os.environ keys to uppercase. A plain copied dict
+        # no longer supports the case-insensitive lookup os.environ provides.
+        stack.enter_context(patch.dict(windows.os.environ, {'SYSTEMROOT': 'C:/Windows'}, clear=True))
         stack.enter_context(patch.object(windows.subprocess, 'run', side_effect=process))
         stack.enter_context(patch.object(windows, 'run', side_effect=startup))
         return (installer, prefix, work, '7.1.1'), commands, stdout, stderr

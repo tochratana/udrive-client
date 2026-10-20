@@ -156,7 +156,12 @@ def smoke_test(installer, prefix, work_root, expected_version):
             for key in list(env):
                 if key.upper().startswith(("QT_", "QML", "CRAFT")):
                     del env[key]
-            env["PATH"] = os.pathsep.join([str(Path(env["SystemRoot"]) / "System32"), env["SystemRoot"]])
+            # os.environ is case-insensitive on Windows, but its copy is an
+            # ordinary dict whose keys normally include uppercase SYSTEMROOT.
+            system_root = next((value for key, value in env.items() if key.upper() == "SYSTEMROOT"), None)
+            if not system_root:
+                raise BuildError("Windows SYSTEMROOT environment variable is missing.")
+            env["PATH"] = os.pathsep.join([str(Path(system_root) / "System32"), system_root])
             # Prove that the installed app cannot load missing files from Craft.
             prefix.rename(hidden_prefix)
             try:
