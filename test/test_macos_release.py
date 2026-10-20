@@ -2,6 +2,7 @@
 """Release-policy tests use synthetic identities and never access a Keychain."""
 
 import argparse
+from contextlib import contextmanager
 import importlib.util
 import json
 from pathlib import Path
@@ -279,6 +280,142 @@ Load command 4
         manifest = json.loads((app.parent / "release.json").read_text())
         self.assertEqual(manifest["team_id"], TEAM)
         self.assertTrue((app.parent / manifest["dmg"]).is_file())
+
+    def finished_download(self, **overrides):
+        directory = self.root / "finished"
+        directory.mkdir()
+        image = directory / "UDrive-7.1.1-arm64.dmg"
+        image.write_bytes(b"signed disk image")
+        manifest = {"bundle_id": release.BUNDLE_ID, "version": "7.1.1", "architecture": "arm64",
+                    "dmg": image.name, "team_id": TEAM, "sha256": release.file_sha256(image),
+                    "source_commit": "f" * 40, "source_dirty": False}
+        manifest.update(overrides)
+        (directory / "release.json").write_text(json.dumps(manifest))
+        return directory
+
+    @contextmanager
+    def export_checks(self):
+        calls = []
+
+        def fake_run(*args, **kwargs):
+            calls.append(args)
+            if args[0] == "/usr/bin/codesign" and "--display" in args:
+                return f"Authority=Developer ID Application: Test Publisher ({TEAM})\nTeamIdentifier={TEAM}\nTimestamp=Oct 20, 2026\n"
+            if args[0] == "/usr/bin/lipo":
+                return "arm64"
+            return ""
+
+        info = {"CFBundleShortVersionString": "7.1.1", "LSMinimumSystemVersion": "13.0"}
+        with patch.object(release, "run", side_effect=fake_run), \
+             patch.object(release, "validate_bundle", return_value=(info, [])) as validate, \
+             patch.object(release, "verify_signature") as signature:
+            yield info, calls, validate, signature
+
+    def test_export_rejects_prepared_and_testing_packages_before_native_checks(self):
+        for marker in ("PREPARED-ONLY.txt", "TESTING-ONLY.txt"):
+            directory = self.root / marker.replace(".txt", "")
+            directory.mkdir()
+            (directory / marker).touch()
+            with self.subTest(marker=marker), patch.object(release, "run") as runner:
+                with self.assertRaises(release.ReleaseError):
+                    release.export_download(directory, self.root / "public", TEAM, "./")
+                runner.assert_not_called()
+                self.assertFalse((self.root / "public").exists())
+
+    def test_export_rejects_modified_disk_image_before_native_checks(self):
+        directory = self.finished_download()
+        (directory / "UDrive-7.1.1-arm64.dmg").write_bytes(b"tampered image")
+        with patch.object(release, "run") as runner, self.assertRaises(release.ReleaseError):
+            release.export_download(directory, self.root / "public", TEAM, "./")
+        runner.assert_not_called()
+        self.assertFalse((self.root / "public").exists())
+
+    def test_export_rejects_external_image_symlink(self):
+        directory = self.finished_download()
+        external = self.root / "external.dmg"
+        image = directory / "UDrive-7.1.1-arm64.dmg"
+        image.rename(external)
+        image.symlink_to(external)
+        with patch.object(release, "run") as runner, self.assertRaises(release.ReleaseError):
+            release.export_download(directory, self.root / "public", TEAM, "./")
+        runner.assert_not_called()
+
+    def test_export_rejects_manifest_for_another_publisher(self):
+        directory = self.finished_download(team_id="OTHER12345")
+        with patch.object(release, "run") as runner, self.assertRaises(release.ReleaseError):
+            release.export_download(directory, self.root / "public", TEAM, "./")
+        runner.assert_not_called()
+
+    def test_export_rejects_ad_hoc_image_signature(self):
+        directory = self.finished_download()
+        with patch.object(release, "run", return_value="Signature=adhoc\nTeamIdentifier=not set\n"), \
+             patch.object(release, "validate_bundle") as validate, self.assertRaises(release.ReleaseError):
+            release.export_download(directory, self.root / "public", TEAM, "./")
+        validate.assert_not_called()
+        self.assertFalse((self.root / "public").exists())
+
+    def test_export_gatekeeper_failure_creates_no_downloads(self):
+        directory = self.finished_download()
+        def fake_run(*args, **kwargs):
+            if args[0] == "/usr/bin/codesign" and "--display" in args:
+                return f"TeamIdentifier={TEAM}\nAuthority=Developer ID Application: Test\nTimestamp=test\n"
+            if args[0] == "/usr/sbin/spctl":
+                raise release.ReleaseError("Gatekeeper rejected image")
+            return ""
+        with patch.object(release, "run", side_effect=fake_run), self.assertRaises(release.ReleaseError):
+            release.export_download(directory, self.root / "public", TEAM, "./")
+        self.assertFalse((self.root / "public").exists())
+
+    def test_export_checks_embedded_app_and_detaches_after_failure(self):
+        directory = self.finished_download()
+        with self.export_checks() as (info, calls, validate, signature):
+            info["CFBundleShortVersionString"] = "7.1.0"
+            with self.assertRaises(release.ReleaseError):
+                release.export_download(directory, self.root / "public", TEAM, "./")
+        self.assertEqual(validate.call_args.args[0].parent.name, "volume")
+        self.assertTrue(any(c[0] == "/usr/bin/hdiutil" and c[1] == "detach" for c in calls))
+        signature.assert_not_called()
+        self.assertFalse((self.root / "public").exists())
+
+    def test_export_only_copies_verified_public_download_files(self):
+        directory = self.finished_download()
+        (directory / "notary-upload.zip").write_bytes(b"private staging file")
+        (directory / "app-notarization.json").write_text("private notary response")
+        output = self.root / "public"
+        with self.export_checks() as (_, calls, validate, signature):
+            release.export_download(directory, output, TEAM, "https://downloads.example.com/udrive/7.1.1/")
+        self.assertEqual({p.name for p in output.iterdir()},
+                         {"UDrive-7.1.1-arm64.dmg", "SHA256SUMS", "download.json", "download-link.html"})
+        metadata = json.loads((output / "download.json").read_text())
+        self.assertEqual(metadata["url"], "https://downloads.example.com/udrive/7.1.1/UDrive-7.1.1-arm64.dmg")
+        self.assertEqual(metadata["sha256"], release.file_sha256(output / metadata["filename"]))
+        self.assertEqual(metadata["minimum_macos"], "13.0")
+        self.assertIn("Apple Silicon", (output / "download-link.html").read_text())
+        self.assertNotIn(str(directory), (output / "download.json").read_text())
+        signature.assert_called_once_with(validate.call_args.args[0], [], TEAM)
+        self.assertTrue(any(c[0] == "/usr/bin/xcrun" and c[1:3] == ("stapler", "validate") for c in calls))
+        self.assertEqual((directory / "notary-upload.zip").read_bytes(), b"private staging file")
+
+    def test_export_does_not_overwrite_existing_downloads(self):
+        directory = self.finished_download()
+        output = self.root / "public"
+        output.mkdir()
+        (output / "keep.txt").write_text("existing download")
+        with patch.object(release, "run") as runner, self.assertRaises(release.ReleaseError):
+            release.export_download(directory, output, TEAM, "./")
+        runner.assert_not_called()
+        self.assertEqual((output / "keep.txt").read_text(), "existing download")
+
+    def test_download_urls_require_https_or_a_local_website_path(self):
+        for base, expected in (("./", "./UDrive.dmg"), ("/downloads", "/downloads/UDrive.dmg"),
+                               ("https://example.com/downloads/", "https://example.com/downloads/UDrive.dmg")):
+            with self.subTest(base=base):
+                self.assertEqual(release.download_url(base, "UDrive.dmg"), expected)
+        for base in ("http://example.com", "//example.com", "javascript:alert(1)",
+                     "https://user:secret@example.com", "https://example.com/?token=secret",
+                     "https://example.com/#download", "https://example.com:invalid", "downloads"):
+            with self.subTest(base=base), self.assertRaises((release.ReleaseError, ValueError)):
+                release.download_url(base, "UDrive.dmg")
 
 
 if __name__ == "__main__":

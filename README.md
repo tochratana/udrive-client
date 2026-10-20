@@ -166,8 +166,10 @@ For a fresh clone, follow the [KDE Craft setup guide](https://community.kde.org/
 and the repository's [reference build workflow](.github/workflows/main.yml.disabled). Configure
 Craft's `owncloud/owncloud-client` package with `srcDir` pointing to this checkout
 so it compiles the UDrive fork. The workflow contains dependency, build, test
-and packaging stages for the configured platform targets. GitHub workflows are
-currently disabled in this fork; local builds do not use GitHub Actions minutes.
+and packaging stages for the configured platform targets. The upstream workflows
+remain disabled in this fork; the separate Windows installer
+workflow below can run manually or for changes to its build files. Local builds
+do not use GitHub Actions minutes.
 
 The default theme is selected from [branding/](branding/) by
 [THEME.cmake](THEME.cmake). Branding details are documented in
@@ -187,6 +189,26 @@ package requires the publisher's Developer ID Application certificate and a
 local notarization profile. See [macOS release setup and verification](admin/osx/RELEASING.md)
 for one-time setup, packaging-only checks, and Keychain installation/upgrade
 acceptance tests. The workflow preserves existing accounts and Keychain storage.
+After signing and notarization, the `export` command produces a verified DMG,
+checksum, download metadata and an HTML link for hosting on your own website.
+It rejects testing-only packages; see the same release guide for export and
+hosting instructions.
+
+### Windows installer
+
+On a Windows x64 machine with Visual Studio 2022 C++ tools, Git and Python
+3.12 or later, run:
+
+```powershell
+python admin/windows/build.py --work-root C:\udrive-build
+```
+
+The helper produces an unsigned test installer and checksum under
+`build-release-artifacts/windows/`. The included Windows GitHub Actions workflow
+can build it on a Windows runner when started from a Mac. See the
+[Windows build guide](admin/windows/README.md) for prerequisites, installation
+checks and download hosting. The Windows build has not yet been run or validated
+on a Windows machine.
 
 ## Implementation notes and current limits
 

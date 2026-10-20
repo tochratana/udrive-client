@@ -1,0 +1,58 @@
+name: UDrive Windows installer
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-build.yml'
+      - 'admin/windows/**'
+      - 'test/test_windows_release.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-installer:
+    name: Build and check Windows x64 installer
+    runs-on: windows-2022
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out UDrive source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Check packaging policies
+        run: python -m unittest discover -s test -p test_windows_release.py -v
+      - name: Restore dependency download cache
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            C:\udrive-build\cache
+            C:\udrive-build\downloads
+          key: udrive-windows-x64-${{ hashFiles('.craft.ini', '.craft.shelf') }}
+      - name: Build, package and test installation
+        run: python admin/windows/build.py --work-root C:\udrive-build --output-dir build-release-artifacts/windows --smoke-test
+      - name: Upload installer and checksum
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: UDrive-Windows-x64-testing
+          path: build-release-artifacts/windows/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload build diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: UDrive-Windows-build-diagnostics
+          path: C:\udrive-build\logs
+          if-no-files-found: ignore
+          retention-days: 7

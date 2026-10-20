@@ -5,6 +5,7 @@
 import argparse
 from datetime import datetime
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import quote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 BUNDLE_ID = "com.unity-workspace.udrive"
@@ -300,6 +302,104 @@ def notarize(artifact, profile, log):
     run("/usr/bin/xcrun", "stapler", "validate", artifact)
 
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def download_url(base, filename):
+    parts = urlsplit(base)
+    # Accessing port also rejects malformed ports before producing a website link.
+    parts.port
+    if parts.scheme or parts.netloc:
+        if (parts.scheme != "https" or not parts.hostname or parts.username or parts.password
+                or parts.query or parts.fragment or any(c.isspace() for c in base)):
+            raise ReleaseError("Download base URL must be HTTPS without credentials, a query or a fragment.")
+    elif not (base.startswith("/") or base.startswith("./")) or parts.query or parts.fragment:
+        raise ReleaseError("Download base must be an HTTPS URL or a website path starting with / or ./.")
+    return base.rstrip("/") + "/" + quote(filename)
+
+
+def export_download(release_dir, output, team, base_url):
+    """Export a verified customer image for static HTTPS hosting; never upload it."""
+    if not re.fullmatch(r"[A-Z0-9]{10}", team or ""):
+        raise ReleaseError("Export requires --team-id for the expected Apple Developer publisher.")
+    release_dir, output = release_dir.resolve(), output.resolve()
+    if output.exists():
+        raise ReleaseError(f"Output already exists; choose a new --output-dir: {output}")
+    for marker in ("PREPARED-ONLY.txt", "TESTING-ONLY.txt"):
+        if (release_dir / marker).exists():
+            raise ReleaseError("Prepared and testing-only packages cannot be exported as production downloads.")
+    manifest = json.loads((release_dir / "release.json").read_text())
+    if not isinstance(manifest, dict):
+        raise ReleaseError("Invalid release manifest.")
+    version, architecture, filename = (manifest.get(k) for k in ("version", "architecture", "dmg"))
+    if (manifest.get("bundle_id") != BUNDLE_ID or manifest.get("team_id") != team
+            or not isinstance(version, str) or not re.fullmatch(r"\d+(?:\.\d+){0,2}", version)
+            or architecture not in ("arm64", "x86_64", "arm64-x86_64")
+            or filename != f"UDrive-{version}-{architecture}.dmg"):
+        raise ReleaseError("Release manifest has an unexpected publisher, application, version or architecture.")
+    dmg = release_dir / filename
+    if not dmg.is_file() or not inside(dmg, release_dir):
+        raise ReleaseError("Release disk image is missing or outside the release directory.")
+    checksum = file_sha256(dmg)
+    if checksum != manifest.get("sha256"):
+        raise ReleaseError("Disk image checksum does not match the finished release.")
+    url = download_url(base_url, filename)
+    run("/usr/bin/hdiutil", "verify", dmg)
+    run("/usr/bin/codesign", "--verify", "--strict", dmg)
+    signature = run("/usr/bin/codesign", "--display", "--verbose=4", dmg, capture=True)
+    if (f"TeamIdentifier={team}\n" not in signature or "Authority=Developer ID Application:" not in signature
+            or "Timestamp=" not in signature):
+        raise ReleaseError("Disk image is not signed by the expected Developer ID publisher with a secure timestamp.")
+    run("/usr/bin/xcrun", "stapler", "validate", dmg)
+    run("/usr/sbin/spctl", "--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=2", dmg)
+
+    # Verify the app inside the image, rather than trusting an adjacent app bundle.
+    with tempfile.TemporaryDirectory(prefix="udrive-download-verify-") as temporary:
+        mount = Path(temporary) / "volume"
+        mount.mkdir()
+        run("/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint", mount, dmg)
+        try:
+            app = mount / "udrive.app"
+            info, binaries = validate_bundle(app)
+            if info["CFBundleShortVersionString"] != version:
+                raise ReleaseError("Disk image contains a different application version.")
+            actual_arch = "-".join(sorted(run("/usr/bin/lipo", "-archs", app / "Contents/MacOS/udrive", capture=True).split()))
+            if actual_arch != architecture:
+                raise ReleaseError("Disk image contains a different architecture.")
+            verify_signature(app, binaries, team)
+            run("/usr/bin/xcrun", "stapler", "validate", app)
+            run("/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=2", app)
+        finally:
+            run("/usr/bin/hdiutil", "detach", mount)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Publish the folder locally only after all checks and copies succeed.
+    with tempfile.TemporaryDirectory(prefix=".udrive-download-", dir=output.parent) as temporary:
+        staged = Path(temporary) / "download"
+        staged.mkdir()
+        shutil.copy2(dmg, staged / filename)
+        if file_sha256(staged / filename) != checksum:
+            raise ReleaseError("Disk image changed while exporting; no download folder was created.")
+        metadata = {"schema_version": 1, "channel": "stable", "signature": "developer-id", "notarized": True,
+                    "version": version, "platform": "macos", "architecture": architecture,
+                    "minimum_macos": info.get("LSMinimumSystemVersion"), "url": url,
+                    "filename": filename, "size_bytes": dmg.stat().st_size, "sha256": checksum,
+                    "bundle_id": BUNDLE_ID, "team_id": team,
+                    "source_commit": manifest.get("source_commit"), "source_dirty": manifest.get("source_dirty")}
+        (staged / "download.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        (staged / "SHA256SUMS").write_text(f"{checksum}  {filename}\n")
+        label = {"arm64": "Apple Silicon", "x86_64": "Intel", "arm64-x86_64": "Apple Silicon and Intel"}[architecture]
+        (staged / "download-link.html").write_text(
+            f'<a href="{html.escape(url, quote=True)}" download>Download UDrive {html.escape(version)} for Mac ({label})</a>\n')
+        staged.rename(output)
+    print(f"Verified website download files: {output}")
+
+
 class Workflow:
     def __init__(self, args):
         self.args = args
@@ -429,7 +529,7 @@ class Workflow:
         finally:
             shutil.rmtree(image_root)
         manifest = {"bundle_id": BUNDLE_ID, "version": info["CFBundleShortVersionString"], "team_id": self.args.team_id,
-                    "architecture": architecture, "dmg": final.name, "sha256": hashlib.sha256(final.read_bytes()).hexdigest(),
+                    "architecture": architecture, "dmg": final.name, "sha256": file_sha256(final),
                     "source_commit": run("git", "-C", ROOT, "rev-parse", "HEAD", capture=True).strip(),
                     "source_dirty": bool(run("git", "-C", ROOT, "status", "--porcelain", capture=True).strip())}
         (output / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -440,7 +540,7 @@ class Workflow:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("check", "build", "prepare", "release", "verify"))
+    parser.add_argument("command", choices=("check", "build", "prepare", "release", "verify", "export"))
     parser.add_argument("--prefix", type=Path, default=ROOT / "build-dev/macos-clang-arm64")
     parser.add_argument("--build-dir", type=Path, default=ROOT / "build-release/macos")
     parser.add_argument("--seed-build-dir", type=Path, default=ROOT / "build-dev/macos-clang-arm64/build/owncloud/owncloud-client/work/build")
@@ -450,16 +550,22 @@ def main(argv=None):
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--allow-debug", action="store_true", help="Only for prepare; never for a customer release")
     parser.add_argument("--app", type=Path, help="App to inspect with verify")
+    parser.add_argument("--release-dir", type=Path, help="Finished release directory to verify and export for website hosting")
+    parser.add_argument("--download-base-url", default="./", help="HTTPS download directory URL or website path (export only)")
     parser.add_argument("--team-id", default=os.environ.get("UDRIVE_TEAM_ID", ""))
     parser.add_argument("--identity", default=os.environ.get("UDRIVE_SIGN_IDENTITY", ""), help="Developer ID Application certificate SHA-1 fingerprint")
     parser.add_argument("--notary-profile", default=os.environ.get("UDRIVE_NOTARY_PROFILE", ""), help="Name of a notarytool profile stored in Keychain")
     args = parser.parse_args(argv)
     try:
         workflow = Workflow(args)
-        workflow.tools(deploy=args.command != "verify")
+        workflow.tools(deploy=args.command not in ("verify", "export"))
         if args.jobs < 1:
             raise ReleaseError("--jobs must be positive")
-        if args.command == "check":
+        if args.command == "export":
+            if not args.release_dir:
+                raise ReleaseError("Export requires --release-dir pointing to a finished signed and notarized release.")
+            export_download(args.release_dir, args.output_dir, args.team_id, args.download_base_url)
+        elif args.command == "check":
             print("Local CMake and Qt deployment tools found.")
             workflow.signing_identity()
             print("Developer ID signing identity and notarization tools found. Profile access is checked on submission.")

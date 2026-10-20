@@ -109,6 +109,54 @@ This prepares an app for inspection only; it is not distribution-signed. Debug
 packaging experiments may use `prepare --skip-build --allow-debug --build-dir
 PATH`, but `--allow-debug` is never accepted for a customer release.
 
+## Export the production download for your website
+
+After `release` finishes successfully, export the completed release to a new
+folder for HTTPS hosting:
+
+```bash
+python3 admin/osx/release.py export \
+  --release-dir '/absolute/path/to/finished-release' \
+  --team-id "$UDRIVE_TEAM_ID" \
+  --download-base-url 'https://downloads.example.com/udrive/7.1.1/' \
+  --output-dir 'build-release-artifacts/website-7.1.1'
+```
+
+Replace the example URL with the directory URL on your website. It must use
+HTTPS and must not contain credentials or temporary access tokens. A site path
+such as `/downloads/udrive/7.1.1/` also works. Omitting `--download-base-url` uses
+links relative to the exported folder. Export runs on the release Mac; it needs
+Apple's verification tools, but does not need Craft, Qt, or signing credentials.
+
+The command verifies the release manifest and disk-image checksum, the expected
+Developer ID publisher, the stapled notarization ticket, and Gatekeeper
+acceptance. It mounts the DMG read-only to verify the app actually inside it,
+including its version, architecture, signature and notarization. Prepared,
+testing-only, ad-hoc-signed, or modified images cannot become production downloads.
+If any check fails, no website download folder is created.
+
+The exported folder contains only these public files:
+
+- `UDrive-VERSION-ARCH.dmg`: the verified installer.
+- `SHA256SUMS`: its SHA-256 checksum.
+- `download.json`: version, architecture, minimum macOS, file size, checksum,
+  source revision and download URL for a website to consume.
+- `download-link.html`: an HTML download button/link to paste into your website.
+
+Upload the folder's contents to the website directory used in
+`--download-base-url`, then add the generated link to your existing download
+page. The folder is ready for a static web server, object storage, or a CDN;
+the desktop client does not need to run on the website's server. Serve the DMG
+with `Content-Type: application/x-apple-diskimage` and preferably
+`Content-Disposition: attachment`. Keep versioned download URLs immutable.
+
+The exporter prepares local files; it does not upload files or change your live
+website. Use your website's deployment process to publish them, then download
+the hosted DMG onto a clean Mac and complete the installation and upgrade checks
+below. Uploading only the exported files keeps signing/notarization logs and
+staging archives off the public website. This is a manual download endpoint;
+it does not enable automatic updates.
+
 ## Verification and Keychain acceptance checks
 
 The script signs the app with hardened runtime, a secure timestamp and its
