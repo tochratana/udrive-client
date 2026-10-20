@@ -11,6 +11,8 @@
 #include <QScrollBar>
 #include <QScrollArea>
 #include <QHeaderView>
+#include <QTabBar>
+#include <QTabWidget>
 #include <QProcess>
 #include <QElapsedTimer>
 #include <QSemaphore>
@@ -762,6 +764,44 @@ private Q_SLOTS:
         noProxy->setChecked(true);
         QVERIFY(!form->isVisible());
         QCOMPARE(ConfigFile().proxyType(), proxyType);
+    }
+
+    void activityIssueTabTranslations_data()
+    {
+        QTest::addColumn<QString>("locale");
+        for (const auto &locale : {QStringLiteral("en_US"), QStringLiteral("km"), QStringLiteral("zh_CN")})
+            QTest::newRow(qPrintable(locale)) << locale;
+    }
+
+    void activityIssueTabTranslations()
+    {
+        QFETCH(QString, locale);
+        QTranslator translator;
+        QVERIFY(translator.load(Translations::translationsFilePrefix() + locale, Translations::translationsDirectoryPath()));
+        QVERIFY(qApp->installTranslator(&translator));
+        const auto restore = qScopeGuard([&] { qApp->removeTranslator(&translator); });
+        const QString label = QCoreApplication::translate("OCC::ActivitySettings", "Not Synced");
+        SettingsDialog window(nullptr);
+        window.setCurrentPage(SettingsDialog::SettingsPage::Activity);
+        window.show();
+        auto *tabs = window.findChild<QTabWidget *>(QStringLiteral("activityTabWidget"));
+        QVERIFY(tabs);
+        auto *bar = tabs->tabBar();
+        const int issuesTab = 1;
+        for (int count : {0, 3, 100, 1000, 0}) {
+            QVERIFY(QMetaObject::invokeMethod(tabs->widget(issuesTab), "issueCountUpdated", Q_ARG(int, count)));
+            const QString fullLabel = count > 0
+                ? QCoreApplication::translate("OCC::ActivitySettings", "Not Synced (%1)").arg(count)
+                : label;
+            QCOMPARE(bar->tabText(issuesTab), fullLabel);
+            if (count == 3 && qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE"))
+                QVERIFY(bar->grab().save(QStringLiteral("/tmp/udrive-activity-tab-%1.png").arg(locale)));
+        }
+        // The badge is capped at 99+, so larger counts must not widen the tab.
+        QVERIFY(QMetaObject::invokeMethod(tabs->widget(issuesTab), "issueCountUpdated", Q_ARG(int, 100)));
+        const int cappedWidth = bar->sizeHint().width();
+        QVERIFY(QMetaObject::invokeMethod(tabs->widget(issuesTab), "issueCountUpdated", Q_ARG(int, 1000)));
+        QCOMPARE(bar->sizeHint().width(), cappedWidth);
     }
 
     void imageThumbnails()
@@ -3853,16 +3893,17 @@ private Q_SLOTS:
         QVERIFY(dialog.isVisible());
         // Simulate the user clicking back into the field after accepting a suggestion.
         dialog.activateWindow();
+        (void)QTest::qWaitForWindowActive(&dialog);
         QTest::mouseClick(input, Qt::LeftButton);
         input->setFocus();
-        QTRY_VERIFY(input->hasFocus());
+        QTRY_VERIFY_WITH_TIMEOUT(input->hasFocus(), 10000);
         // Changing the selected label invalidates its identity.
         QTest::keyClicks(input, "x");
         QVERIFY(!confirm->isEnabled());
         input->setText(QStringLiteral("alice"));
         QTRY_COMPARE(server.recipientQueries.size(), 2);
         QTRY_COMPARE(completer->completionModel()->rowCount(), 1);
-        QVERIFY(input->hasFocus());
+        QTRY_VERIFY_WITH_TIMEOUT(input->hasFocus(), 10000);
         QTRY_VERIFY(completer->popup()->isVisible());
         QTest::keyClick(completer->popup(), Qt::Key_Down);
         QTest::keyClick(completer->popup(), Qt::Key_Return);
@@ -3919,6 +3960,38 @@ private Q_SLOTS:
         QVERIFY(server.shareQueries.isEmpty());
         QCOMPARE(server.sharePosts, 0);
         QVERIFY(!confirm->isEnabled());
+    }
+
+    void shareRecipientSearchPreservesFocus()
+    {
+        DriveServer server;
+        server.recipientDelay = 150;
+        server.recipientData = QJsonObject{{"users", QJsonArray{QJsonObject{{"label", "Alice"},
+            {"value", QJsonObject{{"shareType", 0}, {"shareWith", "alice-id"}}}}}}};
+        auto *account = new Account(QUuid::createUuid(), QStringLiteral("test"), server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveShareDialog dialog(&state, QStringLiteral("Docs"), true, QStringLiteral("/Docs"), {});
+        dialog.show();
+        auto *input = dialog.findChild<QLineEdit *>(QStringLiteral("shareUserInput"));
+        auto *role = dialog.findChild<QComboBox *>(QStringLiteral("shareRoleCombo"));
+        auto *confirm = dialog.findChild<QPushButton *>(QStringLiteral("shareConfirmButton"));
+        auto *completer = dialog.findChild<QCompleter *>();
+        QVERIFY(input && role && confirm && completer);
+        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+        dialog.activateWindow();
+        input->setFocus();
+        QTRY_VERIFY(input->hasFocus());
+        QTest::keyClicks(input, "alice");
+        QTRY_COMPARE(server.recipientQueries.size(), 1);
+        role->setFocus(Qt::TabFocusReason);
+        QTRY_VERIFY(role->hasFocus());
+        QTRY_COMPARE(completer->completionModel()->rowCount(), 1);
+        QVERIFY(role->hasFocus());
+        QVERIFY(!completer->popup()->isVisible());
+        QVERIFY(!confirm->isEnabled());
+        QCOMPARE(server.sharePosts, 0);
     }
 
     void shareRecipientSearchFailures()

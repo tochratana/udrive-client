@@ -26,8 +26,13 @@
 
 #include <QActionGroup>
 #include <QClipboard>
-
 #include "ui_localactivitywidget.h"
+#include "activityitemdelegate.h"
+#include "udriveicons.h"
+#include "libsync/configfile.h"
+
+#include <QLabel>
+#include <QStackedWidget>
 
 namespace OCC {
 
@@ -36,6 +41,19 @@ LocalActivityWidget::LocalActivityWidget(QWidget *parent)
     , _ui(new Ui::LocalActivityWidget)
 {
     _ui->setupUi(this);
+
+    _ui->verticalLayout->setContentsMargins(0, 10, 0, 0);
+    _ui->verticalLayout->setSpacing(10);
+    _ui->horizontalLayout->setContentsMargins(0, 0, 0, 0);
+    _ui->horizontalLayout->setSpacing(10);
+
+    _countLabel = new QLabel(this);
+    _countLabel->setObjectName(QStringLiteral("activityItemCount"));
+    _ui->horizontalLayout->insertWidget(0, _countLabel);
+
+    _ui->_filterButton->setObjectName(QStringLiteral("activityFilterButton"));
+    _ui->_filterButton->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Filter));
+    _ui->_filterButton->setCursor(Qt::PointingHandCursor);
 
     connect(ProgressDispatcher::instance(), &ProgressDispatcher::itemCompleted,
         this, &LocalActivityWidget::slotItemCompleted);
@@ -50,6 +68,58 @@ LocalActivityWidget::LocalActivityWidget(QWidget *parent)
     _sortModel->setSourceModel(_model);
     _sortModel->setSortRole(Models::UnderlyingDataRole);
     _ui->_tableView->setModel(_sortModel);
+
+    _ui->_tableView->setObjectName(QStringLiteral("activityTableView"));
+    _ui->_tableView->setItemDelegate(new ActivityItemDelegate(_ui->_tableView));
+    _ui->_tableView->setAlternatingRowColors(false);
+    _ui->_tableView->setShowGrid(false);
+    _ui->_tableView->setFrameShape(QFrame::NoFrame);
+    _ui->_tableView->verticalHeader()->setDefaultSectionSize(40);
+
+    // Stacked widget for table and modern empty state
+    _stack = new QStackedWidget(this);
+    _ui->verticalLayout->replaceWidget(_ui->_tableView, _stack);
+    _stack->addWidget(_ui->_tableView);
+
+    _emptyWidget = new QWidget(this);
+    _emptyWidget->setObjectName(QStringLiteral("activityEmptyState"));
+    auto *emptyLayout = new QVBoxLayout(_emptyWidget);
+    emptyLayout->setAlignment(Qt::AlignCenter);
+    emptyLayout->setSpacing(10);
+    emptyLayout->setContentsMargins(32, 48, 32, 48);
+
+    _emptyIcon = new QLabel(_emptyWidget);
+    _emptyIcon->setObjectName(QStringLiteral("activityEmptyIcon"));
+    _emptyIcon->setAlignment(Qt::AlignCenter);
+    _emptyIcon->setFixedSize(64, 64);
+    emptyLayout->addWidget(_emptyIcon, 0, Qt::AlignHCenter);
+    emptyLayout->addSpacing(4);
+
+    _emptyTitle = new QLabel(_emptyWidget);
+    _emptyTitle->setObjectName(QStringLiteral("activityEmptyTitle"));
+    _emptyTitle->setAlignment(Qt::AlignCenter);
+    QFont titleFont = _emptyTitle->font();
+    titleFont.setPixelSize(17);
+    titleFont.setBold(true);
+    _emptyTitle->setFont(titleFont);
+    emptyLayout->addWidget(_emptyTitle, 0, Qt::AlignHCenter);
+
+    _emptySubtitle = new QLabel(_emptyWidget);
+    _emptySubtitle->setObjectName(QStringLiteral("activityEmptySubtitle"));
+    _emptySubtitle->setAlignment(Qt::AlignCenter);
+    _emptySubtitle->setWordWrap(true);
+    _emptySubtitle->setMaximumWidth(420);
+    QFont subFont = _emptySubtitle->font();
+    subFont.setPixelSize(13);
+    _emptySubtitle->setFont(subFont);
+    emptyLayout->addWidget(_emptySubtitle, 0, Qt::AlignHCenter);
+
+    _stack->addWidget(_emptyWidget);
+
+    connect(_sortModel, &QAbstractItemModel::rowsInserted, this, &LocalActivityWidget::updateEmptyState);
+    connect(_sortModel, &QAbstractItemModel::rowsRemoved, this, &LocalActivityWidget::updateEmptyState);
+    connect(_sortModel, &QAbstractItemModel::modelReset, this, &LocalActivityWidget::updateEmptyState);
+    connect(_sortModel, &QAbstractItemModel::layoutChanged, this, &LocalActivityWidget::updateEmptyState);
 
     auto header = new ExpandingHeaderView(QStringLiteral("ActivityListHeaderV2"), _ui->_tableView);
     _ui->_tableView->setHorizontalHeader(header);
@@ -70,6 +140,8 @@ LocalActivityWidget::LocalActivityWidget(QWidget *parent)
 
     connect(FolderMan::instance(), &FolderMan::folderRemoved, this, &LocalActivityWidget::onFolderRemoved);
     connect(FolderMan::instance(), &FolderMan::folderListChanged, this, &LocalActivityWidget::onFolderListChanged);
+
+    updateEmptyState();
 }
 
 LocalActivityWidget::~LocalActivityWidget()
@@ -215,11 +287,45 @@ void LocalActivityWidget::slotItemCompleted(Folder *folder, const SyncFileItemPt
     if (!item->showInProtocolTab())
         return;
     _model->addProtocolItem(ProtocolItem { folder, item });
+    updateEmptyState();
 }
 
 void LocalActivityWidget::filterDidChange()
 {
-    _ui->_filterButton->setText(CommonStrings::filterButtonText(_sortModel->filterRegularExpression().pattern().isEmpty() ? 0 : 1));
+    const bool active = !_sortModel->filterRegularExpression().pattern().isEmpty();
+    _ui->_filterButton->setText(CommonStrings::filterButtonText(active ? 1 : 0));
+    _ui->_filterButton->setProperty("filterActive", active);
+    _ui->_filterButton->style()->unpolish(_ui->_filterButton);
+    _ui->_filterButton->style()->polish(_ui->_filterButton);
+    updateEmptyState();
+}
+
+void LocalActivityWidget::updateEmptyState()
+{
+    const int count = _sortModel ? _sortModel->rowCount() : 0;
+    if (_countLabel) {
+        _countLabel->setText(count > 0 ? tr("%n item(s)", nullptr, count) : QString());
+    }
+
+    if (count > 0) {
+        _stack->setCurrentWidget(_ui->_tableView);
+    } else {
+        const auto themeMode = ConfigFile().themeMode();
+        const bool dark = themeMode == ConfigFile::ThemeMode::Dark
+            || (themeMode == ConfigFile::ThemeMode::System && qApp->palette().color(QPalette::Window).lightness() < 128);
+
+        const bool filtered = (_model && _model->rowCount() > 0);
+        if (filtered) {
+            _emptyIcon->setPixmap(UDriveIcons::icon(UDriveIcons::Symbol::Search, false, QColor(dark ? "#939D97" : "#7D8781")).pixmap(64, 64));
+            _emptyTitle->setText(tr("No matching activity"));
+            _emptySubtitle->setText(tr("Try selecting a different filter or account."));
+        } else {
+            _emptyIcon->setPixmap(UDriveIcons::icon(UDriveIcons::Symbol::Activity, false, QColor(dark ? "#63E493" : "#00856B")).pixmap(64, 64));
+            _emptyTitle->setText(tr("No activity yet"));
+            _emptySubtitle->setText(tr("Synced files and updates will appear here as activity occurs."));
+        }
+        _stack->setCurrentWidget(_emptyWidget);
+    }
 }
 
 } // OCC namespace

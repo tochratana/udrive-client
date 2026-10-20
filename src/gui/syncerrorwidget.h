@@ -18,6 +18,9 @@
 
 #include "progressdispatcher.h"
 
+class QStackedWidget;
+class QLabel;
+
 namespace OCC {
 
 class SyncFileItemStatusSetSortFilterProxyModel;
@@ -56,6 +59,7 @@ private Q_SLOTS:
     void slotItemContextMenu(const QPoint &pos);
     void onFolderListChanged(const QUuid &accountId, const QList<Folder *> folders);
     void onFolderRemoved(const QUuid &accountId, Folder *f);
+    void updateEmptyState();
 
 private:
     static void addResetFiltersAction(QMenu *menu, const QList<std::function<void()>> &resetFunctions);
@@ -66,5 +70,12 @@ private:
     SyncFileItemStatusSetSortFilterProxyModel *_statusSortModel;
 
     Ui::SyncErrorWidget *_ui;
+
+    QStackedWidget *_stack = nullptr;
+    QWidget *_emptyWidget = nullptr;
+    QLabel *_emptyIcon = nullptr;
+    QLabel *_emptyTitle = nullptr;
+    QLabel *_emptySubtitle = nullptr;
+    QLabel *_countLabel = nullptr;
 };
 }

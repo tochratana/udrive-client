@@ -44,6 +44,7 @@ set(client_SRCS
     protocolitem.cpp
     syncerrorwidget.cpp
     activitysettings.cpp
+    activityitemdelegate.cpp
     selectivesyncwidget.cpp
     settingsdialog.cpp
     udrivefilebrowser.cpp

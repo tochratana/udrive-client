@@ -24,6 +24,8 @@
 
 class QSortFilterProxyModel;
 class QTableView;
+class QStackedWidget;
+class QLabel;
 
 namespace OCC {
 
@@ -57,10 +59,18 @@ private Q_SLOTS:
     void onFolderListChanged(const QUuid &accountId, const QList<Folder *> folders);
 
     void onFolderRemoved(const QUuid &accountId, Folder *f);
+    void updateEmptyState();
 
 private:
     ProtocolItemModel *_model;
     Models::SignalledQSortFilterProxyModel *_sortModel;
     Ui::LocalActivityWidget *_ui;
+
+    QStackedWidget *_stack = nullptr;
+    QWidget *_emptyWidget = nullptr;
+    QLabel *_emptyIcon = nullptr;
+    QLabel *_emptyTitle = nullptr;
+    QLabel *_emptySubtitle = nullptr;
+    QLabel *_countLabel = nullptr;
 };
 }

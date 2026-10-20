@@ -29,8 +29,12 @@
 
 #include <QActionGroup>
 #include <QTimer>
+#include <QLabel>
+#include <QStackedWidget>
 
 #include "ui_syncerrorwidget.h"
+#include "activityitemdelegate.h"
+#include "udriveicons.h"
 
 namespace {
 bool persistsUntilLocalDiscovery(const OCC::ProtocolItem &data)
@@ -191,6 +195,19 @@ SyncErrorWidget::SyncErrorWidget(QWidget *parent)
 {
     _ui->setupUi(this);
 
+    _ui->verticalLayout->setContentsMargins(0, 10, 0, 0);
+    _ui->verticalLayout->setSpacing(10);
+    _ui->horizontalLayout->setContentsMargins(0, 0, 0, 0);
+    _ui->horizontalLayout->setSpacing(10);
+
+    _countLabel = new QLabel(this);
+    _countLabel->setObjectName(QStringLiteral("activityItemCount"));
+    _ui->horizontalLayout->insertWidget(0, _countLabel);
+
+    _ui->_filterButton->setObjectName(QStringLiteral("activityFilterButton"));
+    _ui->_filterButton->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Filter));
+    _ui->_filterButton->setCursor(Qt::PointingHandCursor);
+
     connect(ProgressDispatcher::instance(), &ProgressDispatcher::progressInfo,
         this, &SyncErrorWidget::slotProgressInfo);
     connect(ProgressDispatcher::instance(), &ProgressDispatcher::itemCompleted,
@@ -201,6 +218,7 @@ SyncErrorWidget::SyncErrorWidget(QWidget *parent)
             item->_status = SyncFileItem::NormalError;
             item->_errorString = message;
             _model->addProtocolItem(ProtocolItem { folder, item });
+            updateEmptyState();
         });
 
     connect(ProgressDispatcher::instance(), &ProgressDispatcher::excluded, this, [this](Folder *f, const QString &file) {
@@ -209,6 +227,7 @@ SyncErrorWidget::SyncErrorWidget(QWidget *parent)
         item->_file = file;
         item->_errorString = tr("The file %1 was ignored as its name is reserved by %2").arg(file, Theme::instance()->appNameGUI());
         _model->addProtocolItem(ProtocolItem { f, item });
+        updateEmptyState();
     });
 
     _model = new ProtocolItemModel(20000, true, this);
@@ -218,10 +237,62 @@ SyncErrorWidget::SyncErrorWidget(QWidget *parent)
     _statusSortModel = new SyncFileItemStatusSetSortFilterProxyModel(this); // Note: this will restore a previously set filter, if there was one.
     connect(_statusSortModel, &Models::SignalledQSortFilterProxyModel::filterChanged, this, &SyncErrorWidget::filterChanged);
     _statusSortModel->setSourceModel(_sortModel);
-    _statusSortModel->setSortRole(Qt::DisplayRole); // Sorting should be done based on the text in the column cells, but...
-    _statusSortModel->setFilterRole(Models::UnderlyingDataRole); // ... filtering should be done on the underlying enum value.
+    _statusSortModel->setSortRole(Models::UnderlyingDataRole);
+    _statusSortModel->setFilterRole(Models::UnderlyingDataRole);
     _statusSortModel->setFilterKeyColumn(static_cast<int>(ProtocolItemModel::ProtocolItemRole::Status));
     _ui->_tableView->setModel(_statusSortModel);
+
+    _ui->_tableView->setObjectName(QStringLiteral("activityTableView"));
+    _ui->_tableView->setItemDelegate(new ActivityItemDelegate(_ui->_tableView));
+    _ui->_tableView->setAlternatingRowColors(false);
+    _ui->_tableView->setShowGrid(false);
+    _ui->_tableView->setFrameShape(QFrame::NoFrame);
+    _ui->_tableView->verticalHeader()->setDefaultSectionSize(40);
+
+    // Stacked widget for table and modern empty state
+    _stack = new QStackedWidget(this);
+    _ui->verticalLayout->replaceWidget(_ui->_tableView, _stack);
+    _stack->addWidget(_ui->_tableView);
+
+    _emptyWidget = new QWidget(this);
+    _emptyWidget->setObjectName(QStringLiteral("activityEmptyState"));
+    auto *emptyLayout = new QVBoxLayout(_emptyWidget);
+    emptyLayout->setAlignment(Qt::AlignCenter);
+    emptyLayout->setSpacing(10);
+    emptyLayout->setContentsMargins(32, 48, 32, 48);
+
+    _emptyIcon = new QLabel(_emptyWidget);
+    _emptyIcon->setObjectName(QStringLiteral("activityEmptyIcon"));
+    _emptyIcon->setAlignment(Qt::AlignCenter);
+    _emptyIcon->setFixedSize(64, 64);
+    emptyLayout->addWidget(_emptyIcon, 0, Qt::AlignHCenter);
+    emptyLayout->addSpacing(4);
+
+    _emptyTitle = new QLabel(_emptyWidget);
+    _emptyTitle->setObjectName(QStringLiteral("activityEmptyTitle"));
+    _emptyTitle->setAlignment(Qt::AlignCenter);
+    QFont titleFont = _emptyTitle->font();
+    titleFont.setPixelSize(17);
+    titleFont.setBold(true);
+    _emptyTitle->setFont(titleFont);
+    emptyLayout->addWidget(_emptyTitle, 0, Qt::AlignHCenter);
+
+    _emptySubtitle = new QLabel(_emptyWidget);
+    _emptySubtitle->setObjectName(QStringLiteral("activityEmptySubtitle"));
+    _emptySubtitle->setAlignment(Qt::AlignCenter);
+    _emptySubtitle->setWordWrap(true);
+    _emptySubtitle->setMaximumWidth(420);
+    QFont subFont = _emptySubtitle->font();
+    subFont.setPixelSize(13);
+    _emptySubtitle->setFont(subFont);
+    emptyLayout->addWidget(_emptySubtitle, 0, Qt::AlignHCenter);
+
+    _stack->addWidget(_emptyWidget);
+
+    connect(_statusSortModel, &QAbstractItemModel::rowsInserted, this, &SyncErrorWidget::updateEmptyState);
+    connect(_statusSortModel, &QAbstractItemModel::rowsRemoved, this, &SyncErrorWidget::updateEmptyState);
+    connect(_statusSortModel, &QAbstractItemModel::modelReset, this, &SyncErrorWidget::updateEmptyState);
+    connect(_statusSortModel, &QAbstractItemModel::layoutChanged, this, &SyncErrorWidget::updateEmptyState);
 
     auto header = new ExpandingHeaderView(QStringLiteral("ActivityErrorListHeaderV2"), _ui->_tableView);
     _ui->_tableView->setHorizontalHeader(header);
@@ -245,10 +316,17 @@ SyncErrorWidget::SyncErrorWidget(QWidget *parent)
     connect(_model, &ProtocolItemModel::rowsInserted, this, [this] {
         Q_EMIT issueCountUpdated(_model->rowCount());
         _ui->_tooManyIssuesWarning->setVisible(_model->isModelFull());
+        updateEmptyState();
+    });
+    connect(_model, &ProtocolItemModel::rowsRemoved, this, [this] {
+        Q_EMIT issueCountUpdated(_model->rowCount());
+        _ui->_tooManyIssuesWarning->setVisible(_model->isModelFull());
+        updateEmptyState();
     });
     connect(_model, &ProtocolItemModel::modelReset, this, [this] {
         Q_EMIT issueCountUpdated(_model->rowCount());
         _ui->_tooManyIssuesWarning->setVisible(_model->isModelFull());
+        updateEmptyState();
     });
 
     _ui->_conflictHelp->hide();
@@ -259,6 +337,8 @@ SyncErrorWidget::SyncErrorWidget(QWidget *parent)
     connect(FolderMan::instance(), &FolderMan::folderRemoved, this, &SyncErrorWidget::onFolderRemoved);
 
     connect(FolderMan::instance(), &FolderMan::folderListChanged, this, &SyncErrorWidget::onFolderListChanged);
+
+    updateEmptyState();
 }
 
 SyncErrorWidget::~SyncErrorWidget()
@@ -268,8 +348,9 @@ SyncErrorWidget::~SyncErrorWidget()
 
 void SyncErrorWidget::onFolderListChanged(const QUuid &accountId, const QList<Folder *> folders)
 {
-    Q_UNUSED(accountId);
-    _model->remove_if([folders](const ProtocolItem &item) { return (!folders.contains(item.folder())); });
+    _model->remove_if([accountId, folders](const ProtocolItem &item) {
+        return (item.folder()->accountState()->account()->uuid() == accountId && !folders.contains(item.folder()));
+    });
 }
 
 void SyncErrorWidget::onFolderRemoved(const QUuid &accountId, Folder *f)
@@ -363,6 +444,7 @@ void SyncErrorWidget::slotItemCompleted(Folder *folder, const SyncFileItemPtr &i
     if (!item->showInIssuesTab())
         return;
     _model->addProtocolItem(ProtocolItem { folder, item });
+    updateEmptyState();
 }
 
 void SyncErrorWidget::filterChanged()
@@ -375,6 +457,38 @@ void SyncErrorWidget::filterChanged()
     }
 
     _ui->_filterButton->setText(filterCount > 0 ? CommonStrings::filterButtonText(filterCount) : tr("Filter"));
+    _ui->_filterButton->setProperty("filterActive", filterCount > 0);
+    _ui->_filterButton->style()->unpolish(_ui->_filterButton);
+    _ui->_filterButton->style()->polish(_ui->_filterButton);
+    updateEmptyState();
+}
+
+void SyncErrorWidget::updateEmptyState()
+{
+    const int count = _statusSortModel ? _statusSortModel->rowCount() : 0;
+    if (_countLabel) {
+        _countLabel->setText(count > 0 ? tr("%n issue(s)", nullptr, count) : tr("0 issues"));
+    }
+
+    if (count > 0) {
+        _stack->setCurrentWidget(_ui->_tableView);
+    } else {
+        const auto themeMode = ConfigFile().themeMode();
+        const bool dark = themeMode == ConfigFile::ThemeMode::Dark
+            || (themeMode == ConfigFile::ThemeMode::System && qApp->palette().color(QPalette::Window).lightness() < 128);
+
+        const bool filtered = (_model && _model->rowCount() > 0);
+        if (filtered) {
+            _emptyIcon->setPixmap(UDriveIcons::icon(UDriveIcons::Symbol::Search, false, QColor(dark ? "#939D97" : "#7D8781")).pixmap(64, 64));
+            _emptyTitle->setText(tr("No matching issues"));
+            _emptySubtitle->setText(tr("No sync issues match your active filter settings."));
+        } else {
+            _emptyIcon->setPixmap(UDriveIcons::icon(UDriveIcons::Symbol::Online, false, QColor("#40D979")).pixmap(64, 64));
+            _emptyTitle->setText(tr("All files are in sync"));
+            _emptySubtitle->setText(tr("There are no sync errors or conflicts. Your files are up to date."));
+        }
+        _stack->setCurrentWidget(_emptyWidget);
+    }
 }
 
 void SyncErrorWidget::slotItemContextMenu(const QPoint &pos)

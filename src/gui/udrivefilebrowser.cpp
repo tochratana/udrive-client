@@ -1240,28 +1240,31 @@ public:
             const QString badgeText = (type == 1)
                 ? QCoreApplication::translate("OCC::UDriveShareDialog", "Group · %1").section(QLatin1Char(' '), 0, 0)
                 : QCoreApplication::translate("OCC::UDriveShareDialog", "User · %1").section(QLatin1Char(' '), 0, 0);
+            const QString displayedBadgeText = badgeText.isEmpty()
+                ? (type == 1 ? QStringLiteral("Group") : QStringLiteral("User"))
+                : badgeText;
             QFont badgeFont = painter->font();
             badgeFont.setPixelSize(10);
             badgeFont.setBold(true);
             painter->setFont(badgeFont);
 
-            const int badgeTextWidth = painter->fontMetrics().horizontalAdvance(badgeText.isEmpty() ? (type == 1 ? QStringLiteral("Group") : QStringLiteral("User")) : badgeText);
-            const int badgeWidth = badgeTextWidth + 10;
+            const int badgeTextWidth = painter->fontMetrics().horizontalAdvance(displayedBadgeText);
             const int badgeHeight = 16;
+            const int badgeWidth = badgeTextWidth + 12;
             const QRect badgeRect(textX, itemRect.top() + 27, badgeWidth, badgeHeight);
 
             const QColor badgeBg = (type == 1)
-                ? (dark ? QColor(99, 102, 241, 45) : QColor(99, 102, 241, 30))
-                : (dark ? QColor(34, 197, 94, 40) : QColor(34, 197, 94, 30));
+                ? (dark ? QColor(99, 102, 241, static_cast<int>(255 * 0.18)) : QColor(99, 102, 241, static_cast<int>(255 * 0.12)))
+                : (dark ? QColor(34, 197, 94, static_cast<int>(255 * 0.15)) : QColor(34, 197, 94, static_cast<int>(255 * 0.12)));
             const QColor badgeColor = (type == 1)
                 ? (dark ? QColor(QStringLiteral("#A5B4FC")) : QColor(QStringLiteral("#4F46E5")))
                 : (dark ? QColor(QStringLiteral("#4ADE80")) : QColor(QStringLiteral("#16A34A")));
 
             painter->setPen(Qt::NoPen);
             painter->setBrush(badgeBg);
-            painter->drawRoundedRect(badgeRect, 3, 3);
+            painter->drawRoundedRect(badgeRect, badgeHeight / 2.0, badgeHeight / 2.0);
             painter->setPen(badgeColor);
-            painter->drawText(badgeRect, Qt::AlignCenter, badgeText.isEmpty() ? (type == 1 ? QStringLiteral("Group") : QStringLiteral("User")) : badgeText);
+            painter->drawText(badgeRect, Qt::AlignCenter, displayedBadgeText);
 
             // Detail (e.g. username, email)
             const int detailX = badgeRect.right() + 6;
@@ -1527,12 +1530,12 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
     recipients->setWindowFlag(Qt::FramelessWindowHint);
     recipients->setAttribute(Qt::WA_TranslucentBackground);
     recipients->setFrameShape(QFrame::NoFrame);
+    recipients->setFocusPolicy(Qt::NoFocus);
     recipients->setUniformItemSizes(true);
     recipients->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     recipients->setTextElideMode(Qt::ElideRight);
     recipients->setSpacing(2);
     recipients->setMouseTracking(true);
-    recipients->setItemDelegate(new ShareRecipientDelegate(recipients));
     recipients->setStyleSheet(QStringLiteral(
         "QListView#shareRecipientPopup {"
         "  background: %1;"
@@ -1540,9 +1543,6 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
         "  border-radius: 10px;"
         "  padding: 4px;"
         "  outline: none;"
-        "}"
-        "QListView#shareRecipientPopup::item {"
-        "  border: none;"
         "}"
         "QListView#shareRecipientPopup QScrollBar:vertical {"
         "  border: none;"
@@ -1564,6 +1564,7 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
              dark ? QStringLiteral("#4A4D54") : QStringLiteral("#C4C9D0")));
     _recipientCompleter->setPopup(recipients);
     _recipientCompleter->setWidget(_userInput);
+    recipients->setItemDelegate(new ShareRecipientDelegate(recipients));
     connect(_recipientCompleter, qOverload<const QModelIndex &>(&QCompleter::activated),
         this, &UDriveShareDialog::selectRecipient);
     connect(_userInput, &QLineEdit::textChanged, this, [this] {

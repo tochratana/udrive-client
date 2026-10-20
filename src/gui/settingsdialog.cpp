@@ -235,6 +235,7 @@ QWidget *workspacePage(QWidget *content, const QString &title, const QString &de
     heading->setWordWrap(true);
     layout->addWidget(heading);
     auto *subtitle = new QLabel(description, page);
+    subtitle->setObjectName(QStringLiteral("workspaceDescription"));
     subtitle->setWordWrap(true);
     layout->addWidget(subtitle);
     if (content->layout())
@@ -1441,7 +1442,30 @@ void SettingsDialog::updateUDriveAppearance()
         "QComboBox#driveAdminGroupFilter, QComboBox#driveAdminRoleFilter { background: transparent; color: %2; border: 1px solid %3; border-radius: 8px; padding: 7px 28px 7px 10px; }"
         "QLabel#driveAdminCount { color: %5; font-size: 12px; }"
         "QTreeView#accountFoldersTreeView { border: none; border-radius: 0; background: %1; color: %2; padding: 0; }"
-        "QLabel#syncedFolderCount { padding-top: 8px; font-size: 12px; }")
+        "QLabel#syncedFolderCount { padding-top: 8px; font-size: 12px; }"
+        "QTabWidget#activityTabWidget { background: transparent; border: none; }"
+        "QTabWidget#activityTabWidget::pane { border: none; background: transparent; top: 0; }"
+        "QTabBar#activityTabBar { background: transparent; border: none; border-bottom: 1px solid %3; }"
+        "QTabBar#activityTabBar::tab { background: transparent; color: %5; border: none; border-bottom: 2px solid transparent; padding: 8px 16px; font-size: 13px; font-weight: 500; margin-right: 8px; }"
+        "QTabBar#activityTabBar::tab:hover { color: %2; background: %4; border-radius: 6px 6px 0 0; }"
+        "QTabBar#activityTabBar::tab:selected { color: %2; border-bottom: 2px solid #40D979; font-weight: 600; }"
+        "QTableView#activityTableView { border: 1px solid %3; border-radius: 12px; background: %1; color: %2; alternate-background-color: %12; gridline-color: transparent; outline: none; selection-background-color: %4; selection-color: %2; }"
+        "QTableView#activityTableView::item { padding: 8px 10px; border: none; border-bottom: 1px solid %3; }"
+        "QTableView#activityTableView::item:hover { background: %4; }"
+        "QTableView#activityTableView::item:selected { background: %4; color: %2; }"
+        "QTableView#activityTableView QHeaderView { background: %1; border: none; border-bottom: 1px solid %3; border-top-left-radius: 11px; border-top-right-radius: 11px; }"
+        "QTableView#activityTableView QHeaderView::section { background: %1; color: %5; border: none; border-bottom: 1px solid %3; padding: 10px 12px; font-weight: 600; font-size: 12px; }"
+        "QTableView#activityTableView QHeaderView::section:hover { color: %2; }"
+        "QTableView#activityTableView QCornerButton::section { background: %1; border: none; }"
+        "QPushButton#activityFilterButton { border: 1px solid %3; border-radius: 14px; min-height: 20px; padding: 4px 14px; background: %1; color: %2; font-size: 13px; font-weight: 500; }"
+        "QPushButton#activityFilterButton:hover { background: %4; border-color: %11; }"
+        "QPushButton#activityFilterButton:focus { border-color: %11; }"
+        "QPushButton#activityFilterButton[filterActive=\"true\"] { background: %4; border-color: %11; color: %11; font-weight: 600; }"
+        "QLabel#activityItemCount { color: %5; font-size: 13px; font-weight: 500; padding-left: 2px; }"
+        "QWidget#activityEmptyState { background: %1; border: 1px solid %3; border-radius: 12px; }"
+        "QLabel#activityEmptyTitle { color: %2; font-size: 17px; font-weight: 600; }"
+        "QLabel#activityEmptySubtitle { color: %5; font-size: 13px; }"
+        "QLabel#_tooManyIssuesWarning, QLabel#_conflictHelp { color: #E53E3E; font-size: 12px; padding: 4px 0; }")
         .arg(surface, text, border, hover, disabledText, disabledSurface, arrow, dark ? QStringLiteral("#202020") : QStringLiteral("#F6F7F8"))
         .arg(toolbarSurface, toolbarBorder, toolbarAccent, dark ? QStringLiteral("#383838") : QStringLiteral("#F4F5F4")));
 }

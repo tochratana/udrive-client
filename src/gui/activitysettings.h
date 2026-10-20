@@ -16,9 +16,9 @@
 
 #include <QWidget>
 
-class QTabWidget;
-
 namespace OCC {
+
+class ActivityTabWidget;
 
 /**
  * @brief The ActivitySettings class
@@ -37,7 +37,7 @@ private Q_SLOTS:
     void slotShowIssueItemCount(int cnt);
 
 private:
-    QTabWidget *_tab = nullptr;
+    ActivityTabWidget *_tab = nullptr;
     int _syncErrorTabId = -1;
 };
 }
