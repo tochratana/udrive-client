@@ -48,7 +48,7 @@ Actions tab using **Run workflow**, or with:
 
 ```bash
 gh auth login
-gh workflow run windows-build.yml --repo unity-workspace-org/udrive-desktop
+gh workflow run windows-build.yml --repo tochratana/udrive-client
 ```
 
 GitHub authentication is needed to upload/run the workflow and retrieve its
