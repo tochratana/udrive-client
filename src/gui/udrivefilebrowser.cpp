@@ -4738,11 +4738,11 @@ void UDriveFileBrowser::updateActions()
 #ifdef Q_OS_MACOS
     pdf = !directory && index.data().toString().endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive);
 #endif
-    _openButton->setText(directory ? tr("Open folder") : pdf ? tr("Open PDF") : tr("Open file"));
-    _openButton->setEnabled(valid && !trash && !_download && (directory || local || pdf));
+    _openButton->setText(directory ? tr("Open folder") : pdf ? tr("Open PDF") : local ? tr("Open file") : tr("Download and open"));
+    _openButton->setEnabled(valid && !trash && !_download);
     _openButton->setToolTip(pdf  ? tr("Preview this PDF inside UDrive.")
             : local || directory ? QString()
-                                 : tr("Download this file to open it on your computer."));
+                                 : tr("Choose where to save this file, then open it with your computer's default application. Changes to this downloaded copy are not synced."));
     _downloadButton->setEnabled(valid && !trash && !directory && !_download);
     const bool navigate = canBrowse() && !_root.isEmpty() && _section != Section::Favorites && !overview && !trash && !_operation;
     _breadcrumbs->setEnabled(navigate);
@@ -4842,7 +4842,7 @@ void UDriveFileBrowser::activateSelection()
         else
             setMessage(tr("Could not open this file on your computer."));
     } else {
-        downloadSelection();
+        chooseDownloadDestination(true);
     }
 }
 
@@ -5568,26 +5568,31 @@ void UDriveFileBrowser::cancelDownload()
 
 void UDriveFileBrowser::downloadSelection()
 {
+    chooseDownloadDestination(false);
+}
+
+void UDriveFileBrowser::chooseDownloadDestination(bool openAfterDownload)
+{
     const auto index = selectedItem();
-    if (!index.isValid() || index.data(ShareUnavailableRole).toBool() || index.data(DirectoryRole).toBool() || _listing || _report || _download || !canBrowse()) return;
+    if (!index.isValid() || index.data(ShareUnavailableRole).toBool() || index.data(DirectoryRole).toBool() || _listing || _report || _operation || _download || !canBrowse()) return;
     const QString path = index.data(PathRole).toString();
     const QUrl root = _root;
     const QString currentPath = _path;
     const QUrl entryRoot = selectedRoot();
     const QPointer<UDriveFileBrowser> guard(this);
-    const QString destination = QFileDialog::getSaveFileName(this, tr("Save file"),
+    const QString destination = QFileDialog::getSaveFileName(this, openAfterDownload ? tr("Download and open file") : tr("Save file"),
         QDir(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)).filePath(index.data().toString()));
     if (!guard || destination.isEmpty() || !canBrowse() || _root != root || _path != currentPath || _download
         || selectedRoot() != entryRoot || selectedItem().data(PathRole).toString() != path) return;
-    saveSelectedFile(destination);
+    saveSelectedFile(destination, openAfterDownload);
 }
 
-bool UDriveFileBrowser::saveSelectedFile(const QString &destination)
+bool UDriveFileBrowser::saveSelectedFile(const QString &destination, bool openAfterDownload)
 {
-    return startDownload(destination, false);
+    return startDownload(destination, false, openAfterDownload);
 }
 
-bool UDriveFileBrowser::startDownload(const QString &destination, bool preview)
+bool UDriveFileBrowser::startDownload(const QString &destination, bool preview, bool openAfterDownload)
 {
     const auto index = selectedItem();
     if (destination.isEmpty() || !index.isValid() || index.data(ShareUnavailableRole).toBool() || index.data(DirectoryRole).toBool() || _listing || _report || _operation || _download
@@ -5648,7 +5653,7 @@ bool UDriveFileBrowser::startDownload(const QString &destination, bool preview)
             if (total > 0) _progress->setValue(static_cast<int>(100.0 * received / total));
         });
     });
-    connect(job, &AbstractNetworkJob::finishedSignal, this, [this, job, preview, name, root, path] {
+    connect(job, &AbstractNetworkJob::finishedSignal, this, [this, job, preview, name, root, path, destination, openAfterDownload] {
         if (_download != job) return;
         bool success = job->reply() && job->reply()->error() == QNetworkReply::NoError
             && job->httpStatusCode() == 200 && _writeError.isEmpty() && _downloadFile;
@@ -5679,9 +5684,21 @@ bool UDriveFileBrowser::startDownload(const QString &destination, bool preview)
             _pdfPreview->findChild<QPushButton *>(QStringLiteral("pdfBack"))->setFocus();
         } else if (preview) _previewStorage.reset();
 #endif
-        setMessage(success ? preview ? tr("PDF opened in UDrive.") : tr("Saved to %1").arg(QDir::toNativeSeparators(_destination)) : tr("Download failed: %1").arg(error));
+        QString message = success ? preview ? tr("PDF opened in UDrive.") : tr("Saved to %1").arg(QDir::toNativeSeparators(destination)) : tr("Download failed: %1").arg(error);
+        if (success && openAfterDownload) {
+            const QPointer<UDriveFileBrowser> guard(this);
+            const bool opened = QDesktopServices::openUrl(QUrl::fromLocalFile(destination));
+            if (!guard) return;
+            if (opened) {
+                recordOpened(root, path);
+                message = tr("Opened %1. The downloaded copy is saved to %2.").arg(name, QDir::toNativeSeparators(destination));
+            } else {
+                message = tr("Saved to %1, but no application could open this file. Choose a default application for this file type.").arg(QDir::toNativeSeparators(destination));
+            }
+        }
+        setMessage(message);
         updateActions();
-        Q_EMIT downloadFinished(success, _destination);
+        Q_EMIT downloadFinished(success, destination);
     });
     _progress->setRange(0, 0);
     _progress->setAccessibleName(tr("Download progress"));

@@ -212,6 +212,11 @@ on a Windows machine.
 
 ## Implementation notes and current limits
 
+- Files that are not available in a local sync folder offer **Download and open**.
+  Choose where to save the file; after the download succeeds, UDrive opens it in
+  the computer's default application. Changes to that separate downloaded copy
+  are not automatically uploaded. This works for images and documents on Windows,
+  macOS and Linux. Files in a local sync folder open directly.
 - Global search, bulk selection and full sharing-permission management are not
   implemented in this desktop browser. Use **Open on Web** from an item's menu
   or visit the UDrive website for web-only features.

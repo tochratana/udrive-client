@@ -90,7 +90,8 @@ public:
     bool restoreSelected();
     bool setSelectedFavorite(bool favorite);
     // Save the selected remote file to a destination already chosen by the user.
-    bool saveSelectedFile(const QString &destination);
+    // Opening is requested explicitly and happens only after a successful save.
+    bool saveSelectedFile(const QString &destination, bool openAfterDownload = false);
     bool previewSelectedPdf();
     QLineEdit *takeSearchField();
     bool canCreate() const;
@@ -121,7 +122,7 @@ private:
     QString recentSettingsGroup() const;
     void setViewMode(ViewMode mode, bool save = true);
     QAbstractItemView *activeView() const;
-    bool startDownload(const QString &destination, bool preview);
+    bool startDownload(const QString &destination, bool preview, bool openAfterDownload = false);
     void closePdf();
     void setSection(Section section);
     void refreshFavorites();
@@ -155,6 +156,7 @@ private:
     void refresh();
     void activateSelection();
     void downloadSelection();
+    void chooseDownloadDestination(bool openAfterDownload);
     void updateActions();
     bool rowActionEnabled(const QModelIndex &index, int action) const;
     void cancelListing();

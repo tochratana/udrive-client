@@ -49,6 +49,7 @@
 #include "resources/resources.h"
 #include <QFile>
 #include <QFileInfo>
+#include <QFileDialog>
 #include <QFontDatabase>
 #include <QGlyphRun>
 #include <QTextLayout>
@@ -88,8 +89,14 @@ class FileOpenReceiver : public QObject
     Q_OBJECT
 public:
     QUrl opened;
+    QByteArray openedContents;
 public Q_SLOTS:
-    void record(const QUrl &url) { opened = url; }
+    void record(const QUrl &url)
+    {
+        opened = url;
+        QFile file(url.toLocalFile());
+        if (file.open(QIODevice::ReadOnly)) openedContents = file.readAll();
+    }
 };
 
 namespace {
@@ -2376,6 +2383,104 @@ private Q_SLOTS:
         QVERIFY(server.authenticated);
     }
 
+    void uploadedImageCanBeDownloadedAndOpened()
+    {
+        DriveServer server;
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        QTRY_COMPARE_WITH_TIMEOUT(tree->model()->rowCount(), 7, 5000);
+
+        QTemporaryDir files;
+        QVERIFY(files.isValid());
+        const QString source = files.filePath(QString::fromUtf8("Photo ខ្មែរ & 100%.png"));
+        QImage image(32, 32, QImage::Format_RGB32);
+        image.fill(Qt::green);
+        QVERIFY(image.save(source));
+        const QByteArray payload = contents(source);
+        QSignalSpy uploaded(&browser, &UDriveFileBrowser::operationFinished);
+        QVERIFY(browser.uploadFile(source));
+        QTRY_COMPARE(uploaded.count(), 1);
+        QVERIFY(uploaded.first().at(0).toBool());
+        QTRY_VERIFY(select(tree, QFileInfo(source).fileName()).isValid());
+        auto *open = browser.findChild<QPushButton *>("driveOpen");
+        QVERIFY(open->isEnabled());
+        QCOMPARE(open->text(), QStringLiteral("Download and open"));
+
+        FileOpenReceiver receiver;
+        QDesktopServices::setUrlHandler("file", &receiver, "record");
+        const auto resetHandler = qScopeGuard([] { QDesktopServices::unsetUrlHandler("file"); });
+        const QString destination = files.filePath(QString::fromUtf8("Downloaded ខ្មែរ & 100%.png"));
+        QSignalSpy downloaded(&browser, &UDriveFileBrowser::downloadFinished);
+        const bool previousDialogs = qApp->testAttribute(Qt::AA_DontUseNativeDialogs);
+        qApp->setAttribute(Qt::AA_DontUseNativeDialogs, true);
+        const auto restoreDialogs = qScopeGuard([previousDialogs] { qApp->setAttribute(Qt::AA_DontUseNativeDialogs, previousDialogs); });
+        bool choseDestination = false;
+        QTimer chooser;
+        chooser.setInterval(20);
+        connect(&chooser, &QTimer::timeout, &browser, [&] {
+            if (auto *dialog = browser.findChild<QFileDialog *>(); dialog && dialog->isVisible()) {
+                choseDestination = true;
+                dialog->selectFile(destination);
+                QMetaObject::invokeMethod(dialog, "accept", Qt::QueuedConnection);
+                chooser.stop();
+            }
+        });
+        chooser.start();
+        open->click();
+        QVERIFY(choseDestination);
+        QVERIFY(receiver.opened.isEmpty());
+        QTRY_COMPARE(downloaded.count(), 1);
+        QVERIFY(downloaded.first().at(0).toBool());
+        QCOMPARE(receiver.opened.toLocalFile(), destination);
+        QCOMPARE(receiver.openedContents, payload); // Only open the committed, complete file.
+        QVERIFY(!QImage(destination).isNull());
+        QVERIFY(server.authenticated);
+    }
+
+    void failedOrCancelledDownloadsDoNotOpenFiles()
+    {
+        DriveServer server;
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        QTRY_COMPARE_WITH_TIMEOUT(tree->model()->rowCount(), 7, 5000);
+        QTemporaryDir files;
+        QVERIFY(files.isValid());
+        const QString destination = files.filePath("saved.txt");
+        FileOpenReceiver receiver;
+        QDesktopServices::setUrlHandler("file", &receiver, "record");
+        const auto resetHandler = qScopeGuard([] { QDesktopServices::unsetUrlHandler("file"); });
+        QSignalSpy downloaded(&browser, &UDriveFileBrowser::downloadFinished);
+        for (const auto &name : {"denied.txt", "truncated.txt"}) {
+            QVERIFY(select(tree, name).isValid());
+            QVERIFY(browser.saveSelectedFile(destination, true));
+            QTRY_COMPARE(downloaded.count(), 1);
+            QVERIFY(!downloaded.takeFirst().at(0).toBool());
+            QVERIFY(receiver.opened.isEmpty());
+            QVERIFY(!QFileInfo::exists(destination));
+        }
+        QVERIFY(select(tree, "slow.txt").isValid());
+        QVERIFY(browser.saveSelectedFile(destination, true));
+        QTRY_VERIFY(server.slowStarted);
+        browser.findChild<QPushButton *>("driveCancelDownload")->click();
+        QCOMPARE(downloaded.count(), 1);
+        QVERIFY(!downloaded.takeFirst().at(0).toBool());
+        QVERIFY(receiver.opened.isEmpty());
+        QVERIFY(!QFileInfo::exists(destination));
+        QVERIFY(select(tree, "a&b.txt").isValid());
+        QVERIFY(browser.saveSelectedFile(destination)); // Download alone must not launch an application.
+        QTRY_COMPARE(downloaded.count(), 1);
+        QVERIFY(downloaded.first().at(0).toBool());
+        QVERIFY(receiver.opened.isEmpty());
+    }
+
     void browseAndDownload()
     {
         DriveServer server;
@@ -2487,7 +2592,16 @@ private Q_SLOTS:
         // A symlink to a file outside the sync root must not be opened as synced.
         QVERIFY(QFile::link(destination, synced.path() + "/denied.txt"));
         QVERIFY(select(tree, "denied.txt").isValid());
-        QVERIFY(!browser.findChild<QPushButton *>("driveOpen")->isEnabled());
+        QVERIFY(browser.findChild<QPushButton *>("driveOpen")->isEnabled());
+        QCOMPARE(browser.findChild<QPushButton *>("driveOpen")->text(), QStringLiteral("Download and open"));
+        receiver.opened.clear();
+        QDesktopServices::setUrlHandler("file", &receiver, "record");
+        const auto resetHandler = qScopeGuard([] { QDesktopServices::unsetUrlHandler("file"); });
+        finished.clear();
+        QVERIFY(browser.saveSelectedFile(destination, true));
+        QTRY_COMPARE(finished.count(), 1);
+        QVERIFY(!finished.first().at(0).toBool());
+        QVERIFY(receiver.opened.isEmpty()); // Never use the symlink's external target as a synced file.
         QVERIFY(server.authenticated);
     }
 
@@ -3160,7 +3274,7 @@ private Q_SLOTS:
             labels.append(action->text()); QVERIFY(!action->icon().isNull());
             QVERIFY(!action->isShortcutVisibleInContextMenu());
         }
-        QCOMPARE(labels, QStringList({"Open file", "Share", "Copy permanent link", "Download", "Rename", "Details"}));
+        QCOMPARE(labels, QStringList({"Download and open", "Share", "Copy permanent link", "Download", "Rename", "Details"}));
         menu->close();
         close->click(); QVERIFY(details->isHidden());
         detailsAction->trigger(); QVERIFY(details->isVisible());
