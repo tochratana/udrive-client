@@ -26,6 +26,13 @@ class Package:
         self.defines["company"] = "ownCloud GmbH"
         self.defines["icon"] = self.buildDir() / "src/gui/owncloud.ico"
 '''
+NSIS_TEMPLATE = '''Function .onInit
+    !insertmacro MULTIUSER_INIT
+    !if "@{architecture}" == "x86_64"
+        ; Existing architecture validation remains here.
+    !endif
+FunctionEnd
+'''
 
 
 class TestWindowsRelease(unittest.TestCase):
@@ -50,6 +57,9 @@ class TestWindowsRelease(unittest.TestCase):
         blueprint = work / "blueprints/craft-blueprints-owncloud/owncloud/owncloud-client/owncloud-client.py"
         blueprint.parent.mkdir(parents=True)
         blueprint.write_text(BLUEPRINT)
+        nsis = work / "craft-clone/bin/Packager/Nsis/NullsoftInstaller.nsi"
+        nsis.parent.mkdir(parents=True)
+        nsis.write_text(NSIS_TEMPLATE)
         self.executable(work / windows.TARGET / "bin/udrive.exe", machine)
         return argparse.Namespace(work_root=work, output_dir=self.root / "output", smoke_test=False)
 
@@ -100,6 +110,29 @@ class TestWindowsRelease(unittest.TestCase):
         with self.assertRaises(windows.BuildError):
             windows.brand_blueprint(path)
         self.assertEqual(path.read_text(), content)
+
+    def test_nsis_keeps_requested_folder_across_multiuser_initialization(self):
+        path = self.root / 'installer.nsi'
+        path.write_text(NSIS_TEMPLATE)
+        windows.preserve_nsis_install_directory(path)
+        result = path.read_text()
+        save = result.index('StrCpy $UDriveRequestedInstallDir $INSTDIR')
+        initialize = result.index('!insertmacro MULTIUSER_INIT')
+        restore = result.index('StrCpy $INSTDIR $UDriveRequestedInstallDir')
+        self.assertLess(save, initialize)
+        self.assertLess(initialize, restore)
+        self.assertIn('${If} $UDriveRequestedInstallDir != ""', result)
+        self.assertIn('!if "@{architecture}" == "x86_64"', result)
+        windows.preserve_nsis_install_directory(path)
+        self.assertEqual(path.read_text(), result)
+
+    def test_unknown_nsis_template_is_not_modified(self):
+        path = self.root / 'installer.nsi'
+        source = NSIS_TEMPLATE.replace('MULTIUSER_INIT', 'NEW_INIT')
+        path.write_text(source)
+        with self.assertRaises(windows.BuildError):
+            windows.preserve_nsis_install_directory(path)
+        self.assertEqual(path.read_text(), source)
 
     def test_non_windows_host_stops_before_downloads_or_output(self):
         args = argparse.Namespace(work_root=self.root / "craft", output_dir=self.root / "output", smoke_test=False)

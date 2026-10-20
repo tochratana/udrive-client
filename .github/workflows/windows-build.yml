@@ -40,7 +40,9 @@ jobs:
             C:\udrive-build\downloads
           key: udrive-windows-x64-${{ hashFiles('.craft.ini', '.craft.shelf') }}
       - name: Build, package and test installation
-        run: python admin/windows/build.py --work-root C:\udrive-build --output-dir build-release-artifacts/windows --smoke-test
+        run: |
+          python admin/windows/build.py --work-root C:\udrive-build --output-dir build-release-artifacts/windows --smoke-test 2>&1 | Tee-Object -FilePath windows-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload installer and checksum
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -53,6 +55,10 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: UDrive-Windows-build-diagnostics
-          path: C:\udrive-build\logs
+          path: |
+            windows-build.log
+            C:\udrive-build\logs
+            C:\udrive-build\craft-clone\bin\Packager\Nsis\NullsoftInstaller.nsi
+            C:\udrive-build\windows-cl-msvc2022-x86_64\build\owncloud\owncloud-client\**\*.nsi
           if-no-files-found: ignore
           retention-days: 7

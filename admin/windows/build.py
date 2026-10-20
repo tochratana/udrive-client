@@ -99,6 +99,26 @@ def brand_blueprint(path):
     path.write_text(source)
 
 
+def preserve_nsis_install_directory(path):
+    """Keep /D's destination when the isolated Craft installer's MultiUser starts."""
+    source = path.read_text()
+    original = 'Function .onInit\n    !insertmacro MULTIUSER_INIT'
+    replacement = '''Var UDriveRequestedInstallDir
+
+Function .onInit
+    ; NSIS initializes $INSTDIR from /D before .onInit. MultiUser resets it.
+    StrCpy $UDriveRequestedInstallDir $INSTDIR
+    !insertmacro MULTIUSER_INIT
+    ${If} $UDriveRequestedInstallDir != ""
+        StrCpy $INSTDIR $UDriveRequestedInstallDir
+    ${EndIf}'''
+    if replacement in source:
+        return
+    if source.count(original) != 1:
+        raise BuildError("The Craft NSIS initialization has changed; cannot preserve the requested install folder.")
+    path.write_text(source.replace(original, replacement))
+
+
 def smoke_test(installer, prefix, work_root, expected_version):
     import winreg
 
@@ -116,10 +136,15 @@ def smoke_test(installer, prefix, work_root, expected_version):
     with tempfile.TemporaryDirectory(prefix="udrive-install-", dir=work_root) as temporary:
         installed = Path(temporary) / "app"
         # NSIS requires /D last and unquoted, including when its path contains spaces.
-        command = subprocess.list2cmdline([str(installer), "/S", "/CURRENTUSER"]) + " /D=" + str(installed)
+        command = subprocess.list2cmdline([str(installer), "/S", "/CurrentUser"]) + " /D=" + str(installed)
+        print("+ " + command, flush=True)
         subprocess.run(command, check=True, timeout=180)
         try:
             executable = installed / "bin/udrive.exe"
+            if not executable.is_file():
+                files = sorted(str(path.relative_to(installed)) for path in installed.rglob("*") if path.is_file())
+                raise BuildError(f"Installer exited without creating {executable}. "
+                                 f"Files in the requested install folder: {files[:40]}")
             if pe_machine(executable) != 0x8664:
                 raise BuildError("The installed UDrive application is not x64.")
             for name in ("Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "vcruntime140.dll", "msvcp140.dll"):
@@ -145,7 +170,8 @@ def smoke_test(installer, prefix, work_root, expected_version):
             uninstaller = installed / "uninstall.exe"
             if uninstaller.is_file():
                 # _?= keeps NSIS in this process so cleanup waits for uninstall.
-                command = subprocess.list2cmdline([str(uninstaller), "/S"]) + " _?=" + str(installed)
+                command = subprocess.list2cmdline([str(uninstaller), "/S", "/CurrentUser"]) + " _?=" + str(installed)
+                print("+ " + command, flush=True)
                 subprocess.run(command, check=True, timeout=180)
 
 
@@ -188,6 +214,7 @@ def build(args):
     craft("-c", "--set", "args=-DBUILD_TESTING=OFF -DBUILD_SHELL_INTEGRATION=OFF -DWITH_AUTO_UPDATER=OFF", PACKAGE)
     craft("-c", "dev-utils/nsis")
     craft("-c", "--install-deps", PACKAGE)
+    preserve_nsis_install_directory(work_root / "craft-clone/bin/Packager/Nsis/NullsoftInstaller.nsi")
     brand_blueprint(work_root / "blueprints/craft-blueprints-owncloud/owncloud/owncloud-client/owncloud-client.py")
     craft("-c", "--no-cache", PACKAGE)
     prefix = work_root / TARGET
