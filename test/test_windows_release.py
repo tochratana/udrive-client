@@ -3,13 +3,17 @@
 
 import argparse
 import configparser
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import importlib.util
+import io
 import json
 from pathlib import Path
+import shutil
 import struct
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location("udrive_windows", Path(__file__).resolve().parents[1] / "admin/windows/build.py")
 windows = importlib.util.module_from_spec(spec)
@@ -79,6 +83,86 @@ class TestWindowsRelease(unittest.TestCase):
                     self.executable(output / "stale-installer.exe", 0x014C)
             return ""
         return run
+
+    def smoke_fixture(self, missing_runtime=False, cleanup_fails=False, startup_fails=False):
+        work = self.root / 'smoke work'
+        prefix = work / windows.TARGET
+        prefix.mkdir(parents=True)
+        installer = self.executable(work / 'installer.exe', 0x014C)
+        commands = []
+        stdout, stderr = io.StringIO(), io.StringIO()
+
+        def process(command, **kwargs):
+            commands.append(command)
+            if ' /D=' in command:
+                installed = Path(command.split(' /D=', 1)[1])
+                self.executable(installed / 'bin/udrive.exe')
+                for name in ('Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'vcruntime140.dll', 'msvcp140.dll'):
+                    if missing_runtime and name == 'Qt6Core.dll':
+                        continue
+                    (installed / 'bin' / name).write_bytes(b'runtime')
+                plugin = installed / 'bin/platforms/qwindows.dll'
+                plugin.parent.mkdir()
+                plugin.write_bytes(b'plugin')
+                (installed / 'uninstall.exe').write_bytes(b'uninstaller')
+            else:
+                installed = Path(command.split(' _?=', 1)[1])
+                running = Path(command.split(' /S', 1)[0].strip('"'))
+                self.assertTrue(running.is_file())
+                self.assertFalse(running.is_relative_to(installed), 'Uninstaller must not kill itself inside the app folder')
+                self.assertEqual(running.read_bytes(), b'uninstaller')
+                if cleanup_fails:
+                    raise windows.subprocess.CalledProcessError(4294967295, command)
+                shutil.rmtree(installed)
+
+        def startup(*args, **kwargs):
+            self.assertFalse(prefix.exists(), 'Installed app must run without the Craft prefix available')
+            self.assertTrue(prefix.with_name(prefix.name + '.smoke-isolated').is_dir())
+            if startup_fails:
+                raise windows.subprocess.CalledProcessError(1, args)
+            return 'UDrive 7.1.1\n'
+
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(redirect_stdout(stdout))
+        stack.enter_context(redirect_stderr(stderr))
+        registry = SimpleNamespace(HKEY_CURRENT_USER=1, HKEY_LOCAL_MACHINE=2,
+                                   OpenKey=Mock(side_effect=FileNotFoundError))
+        stack.enter_context(patch.dict(windows.sys.modules, {'winreg': registry}))
+        stack.enter_context(patch.dict(windows.os.environ, {'SystemRoot': 'C:/Windows'}))
+        stack.enter_context(patch.object(windows.subprocess, 'run', side_effect=process))
+        stack.enter_context(patch.object(windows, 'run', side_effect=startup))
+        return (installer, prefix, work, '7.1.1'), commands, stdout, stderr
+
+    def test_install_validation_and_external_uninstaller_complete(self):
+        args, commands, stdout, _ = self.smoke_fixture()
+        windows.smoke_test(*args)
+        self.assertEqual(len(commands), 2)
+        self.assertTrue(args[1].is_dir())
+        self.assertIn('version check passed', stdout.getvalue())
+        files = (args[2] / 'logs/udrive-installed-files.txt').read_text()
+        self.assertIn('Qt6Core.dll', files)
+        self.assertIn('udrive.exe', files)
+
+    def test_uninstall_failure_cannot_hide_missing_runtime_error(self):
+        args, _, _, stderr = self.smoke_fixture(missing_runtime=True, cleanup_fails=True)
+        with self.assertRaisesRegex(windows.BuildError, 'Missing installed runtime dependency: Qt6Core.dll'):
+            windows.smoke_test(*args)
+        self.assertIn('preserving the installation error', stderr.getvalue())
+        self.assertTrue(args[1].is_dir())
+
+    def test_uninstall_failure_after_validation_still_fails_acceptance(self):
+        args, _, _, _ = self.smoke_fixture(cleanup_fails=True)
+        with self.assertRaisesRegex(windows.BuildError, 'Application validation passed, but test uninstall failed'):
+            windows.smoke_test(*args)
+
+    def test_startup_failure_restores_craft_prefix_and_runs_cleanup(self):
+        args, commands, _, _ = self.smoke_fixture(startup_fails=True)
+        with self.assertRaises(windows.subprocess.CalledProcessError):
+            windows.smoke_test(*args)
+        self.assertTrue(args[1].is_dir())
+        self.assertFalse(args[1].with_name(args[1].name + '.smoke-isolated').exists())
+        self.assertEqual(len(commands), 2)
 
     def test_pe_reader_distinguishes_app_and_nsis_stub(self):
         self.assertEqual(windows.pe_machine(self.executable(self.root / "app.exe")), 0x8664)

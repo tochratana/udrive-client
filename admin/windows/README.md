@@ -41,6 +41,11 @@ runner. It builds the installer, checks installation and startup, and uploads
 the installer/checksum as the `UDrive-Windows-x64-testing` artifact. It does not
 publish a release or change the download website.
 
+If a run fails, download `UDrive-Windows-build-diagnostics` from its Artifacts
+section. It contains the build transcript, installed-file list (when installation
+was reached), and installer scripts. An uninstall failure is reported separately
+so it cannot hide the original installation or startup error.
+
 The workflow must first be committed and pushed to the UDrive repository.
 Changes to these Windows build files can run it through a pull request. Once
 the workflow is on the default branch, it is also available under GitHub's

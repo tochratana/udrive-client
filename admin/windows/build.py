@@ -133,13 +133,13 @@ def smoke_test(installer, prefix, work_root, expected_version):
     hidden_prefix = prefix.with_name(prefix.name + ".smoke-isolated")
     if hidden_prefix.exists():
         raise BuildError(f"Restore the interrupted test's Craft prefix first: {hidden_prefix}")
-    with tempfile.TemporaryDirectory(prefix="udrive-install-", dir=work_root) as temporary:
+    with tempfile.TemporaryDirectory(prefix="udrive-install-", dir=work_root, ignore_cleanup_errors=True) as temporary:
         installed = Path(temporary) / "app"
         # NSIS requires /D last and unquoted, including when its path contains spaces.
         command = subprocess.list2cmdline([str(installer), "/S", "/CurrentUser"]) + " /D=" + str(installed)
         print("+ " + command, flush=True)
-        subprocess.run(command, check=True, timeout=180)
         try:
+            subprocess.run(command, check=True, timeout=180)
             executable = installed / "bin/udrive.exe"
             if not executable.is_file():
                 files = sorted(str(path.relative_to(installed)) for path in installed.rglob("*") if path.is_file())
@@ -166,13 +166,37 @@ def smoke_test(installer, prefix, work_root, expected_version):
             if "UDrive" not in output or expected_version not in output:
                 raise BuildError("The installed application reported an unexpected version or brand.")
             print(output, flush=True)
+            print("Installed application, runtime dependencies and version check passed.", flush=True)
+        except Exception as error:
+            print(f"Installation check failed before cleanup: {error}", file=sys.stderr, flush=True)
+            raise
         finally:
+            original_error = sys.exc_info()[1]
+            try:
+                logs = work_root / "logs"
+                logs.mkdir(parents=True, exist_ok=True)
+                files = sorted(str(path.relative_to(installed)) for path in installed.rglob("*") if path.is_file())
+                (logs / "udrive-installed-files.txt").write_text("\n".join(files) + "\n")
+            except OSError as error:
+                print(f"Could not save installation diagnostics: {error}", file=sys.stderr, flush=True)
             uninstaller = installed / "uninstall.exe"
             if uninstaller.is_file():
-                # _?= keeps NSIS in this process so cleanup waits for uninstall.
-                command = subprocess.list2cmdline([str(uninstaller), "/S", "/CurrentUser"]) + " _?=" + str(installed)
-                print("+ " + command, flush=True)
-                subprocess.run(command, check=True, timeout=180)
+                try:
+                    # Craft's process stopper kills every process under $INSTDIR.
+                    # Run a copy outside it, as NSIS normally does, while _?=
+                    # keeps this process synchronous for the installation check.
+                    external_uninstaller = Path(temporary) / "udrive-uninstall-check.exe"
+                    shutil.copy2(uninstaller, external_uninstaller)
+                    command = subprocess.list2cmdline([str(external_uninstaller), "/S", "/CurrentUser"]) + " _?=" + str(installed)
+                    print("+ " + command, flush=True)
+                    subprocess.run(command, check=True, timeout=180)
+                    if (installed / "bin/udrive.exe").exists():
+                        raise BuildError("The test uninstaller left the UDrive application installed.")
+                except (BuildError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                    if original_error is not None:
+                        print(f"Cleanup also failed; preserving the installation error above: {error}", file=sys.stderr, flush=True)
+                    else:
+                        raise BuildError(f"Application validation passed, but test uninstall failed: {error}") from error
 
 
 def build(args):

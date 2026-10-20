@@ -50,15 +50,32 @@ jobs:
           path: build-release-artifacts/windows/*
           if-no-files-found: error
           retention-days: 14
+      - name: Collect build diagnostics on failure
+        if: failure()
+        run: |
+          $diagnostics = Join-Path $env:GITHUB_WORKSPACE 'build-release-artifacts/windows-diagnostics'
+          New-Item -ItemType Directory -Force -Path $diagnostics | Out-Null
+          if (Test-Path 'windows-build.log') {
+            Copy-Item 'windows-build.log' -Destination $diagnostics
+          }
+          if (Test-Path 'C:\udrive-build\logs') {
+            Copy-Item 'C:\udrive-build\logs' -Destination (Join-Path $diagnostics 'craft-logs') -Recurse
+          }
+          $template = 'C:\udrive-build\craft-clone\bin\Packager\Nsis\NullsoftInstaller.nsi'
+          if (Test-Path $template) {
+            Copy-Item $template -Destination $diagnostics
+          }
+          $packageBuild = 'C:\udrive-build\windows-cl-msvc2022-x86_64\build\owncloud\owncloud-client'
+          if (Test-Path $packageBuild) {
+            Get-ChildItem $packageBuild -Recurse -Filter '*.nsi' | ForEach-Object {
+              Copy-Item $_.FullName -Destination $diagnostics
+            }
+          }
       - name: Upload build diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: UDrive-Windows-build-diagnostics
-          path: |
-            windows-build.log
-            C:\udrive-build\logs
-            C:\udrive-build\craft-clone\bin\Packager\Nsis\NullsoftInstaller.nsi
-            C:\udrive-build\windows-cl-msvc2022-x86_64\build\owncloud\owncloud-client\**\*.nsi
+          path: build-release-artifacts/windows-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
