@@ -38,6 +38,18 @@ NSIS_TEMPLATE = '''Function .onInit
     !endif
 FunctionEnd
 '''
+QT_VERSION_INFO = '''[General]
+include = version_upstream.ini
+tarballs = 6.5.2
+branches = 6.8;dev
+defaulttarget = 6.10.1
+'''
+QT_UPSTREAM_INFO = '''[General]
+tarballs = 6.8.3;6.10.1
+tarballUrl = https://download.qt.io/official_releases/qt/${VERSION_MAJOR}.${VERSION_MINOR}/${VERSION}/submodules/${PACKAGE_NAME}-everywhere-src-${VERSION}.tar.xz
+tarballDigestUrl = https://download.qt.io/official_releases/qt/${VERSION_MAJOR}.${VERSION_MINOR}/${VERSION}/submodules/${PACKAGE_NAME}-everywhere-src-${VERSION}.tar.xz.sha256
+tarballInstallSrc = ${PACKAGE_NAME}-everywhere-src-${VERSION}
+'''
 
 
 class TestWindowsRelease(unittest.TestCase):
@@ -65,8 +77,16 @@ class TestWindowsRelease(unittest.TestCase):
         nsis = work / "craft-clone/bin/Packager/Nsis/NullsoftInstaller.nsi"
         nsis.parent.mkdir(parents=True)
         nsis.write_text(NSIS_TEMPLATE)
+        self.qt_fixture(work)
         self.executable(work / windows.TARGET / "bin/udrive.exe", machine)
         return argparse.Namespace(work_root=work, output_dir=self.root / "output", smoke_test=False)
+
+    def qt_fixture(self, work=None):
+        qt_root = (work or self.root) / "blueprints/craft-blueprints-kde/libs/qt6"
+        qt_root.mkdir(parents=True)
+        (qt_root / "version.ini").write_text(QT_VERSION_INFO)
+        (qt_root / "version_upstream.ini").write_text(QT_UPSTREAM_INFO)
+        return qt_root
 
     def fake_build(self, calls, extra_installer=False):
         def run(*args, **kwargs):
@@ -200,6 +220,38 @@ class TestWindowsRelease(unittest.TestCase):
             windows.brand_blueprint(path)
         self.assertEqual(path.read_text(), content)
 
+    def test_pinned_qt_sources_use_archive_and_keep_checksum_verification(self):
+        qt_root = self.qt_fixture()
+        windows.use_archived_qt_sources(qt_root)
+        parent = configparser.ConfigParser(interpolation=None)
+        parent.read(qt_root / "version.ini")
+        self.assertEqual(parent["General"]["include"], "version_udrive_archive.ini")
+        self.assertEqual(parent["General"]["tarballs"], "6.5.2")
+        self.assertEqual(parent["General"]["branches"], "6.8;dev")
+        self.assertEqual((qt_root / "version_upstream.ini").read_text(), QT_UPSTREAM_INFO)
+        overlay = configparser.ConfigParser(interpolation=None)
+        overlay.read(qt_root / parent["General"]["include"])
+        target = overlay["General"]
+        self.assertEqual(target["include"], "version_upstream.ini")
+        self.assertEqual(target["tarballs"], "6.8.3")
+        source_url = target["tarballUrl"]
+        self.assertTrue(source_url.startswith("https://download.qt.io/archive/qt/"))
+        self.assertEqual(target["tarballDigestUrl"], source_url + ".sha256")
+        self.assertEqual(target["tarballInstallSrc"], "${PACKAGE_NAME}-everywhere-src-${VERSION}")
+        # Reusing a build directory must not add another include layer.
+        before = {path.name: path.read_bytes() for path in qt_root.iterdir()}
+        windows.use_archived_qt_sources(qt_root)
+        self.assertEqual({path.name: path.read_bytes() for path in qt_root.iterdir()}, before)
+
+    def test_unknown_qt_metadata_is_unchanged_on_failure(self):
+        qt_root = self.qt_fixture()
+        source = QT_VERSION_INFO.replace("version_upstream.ini", "different.ini")
+        (qt_root / "version.ini").write_text(source)
+        with self.assertRaisesRegex(windows.BuildError, "Qt version metadata has changed"):
+            windows.use_archived_qt_sources(qt_root)
+        self.assertEqual((qt_root / "version.ini").read_text(), source)
+        self.assertFalse((qt_root / "version_udrive_archive.ini").exists())
+
     def test_nsis_keeps_requested_folder_across_multiuser_initialization(self):
         path = self.root / 'installer.nsi'
         path.write_text(NSIS_TEMPLATE)
@@ -263,6 +315,7 @@ class TestWindowsRelease(unittest.TestCase):
         self.assertTrue((args.output_dir / "TESTING-ONLY.txt").is_file())
         self.assertTrue(any("--install-deps" in call for call in calls))
         self.assertTrue(any("--package" in call for call in calls))
+        self.assertTrue((args.work_root / "blueprints/craft-blueprints-kde/libs/qt6/version_udrive_archive.ini").is_file())
 
     def test_wrong_payload_architecture_never_produces_a_download(self):
         args = self.fixture(machine=0x014C)

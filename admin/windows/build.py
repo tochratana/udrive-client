@@ -3,6 +3,7 @@
 """Build a UDrive x64 test installer on Windows with the pinned Craft dependencies."""
 
 import argparse
+import configparser
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -103,6 +104,33 @@ def brand_blueprint(path):
         source = source.replace(old, new)
     compile(source, str(path), "exec")
     path.write_text(source)
+
+
+def use_archived_qt_sources(qt_root):
+    """Override the pinned Qt release's retired URLs in the isolated Craft tree."""
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(ROOT / ".craft.ini")
+    qt_version = config.get("Variables", "QtVersion")
+    if not re.fullmatch(r"\d+\.\d+\.\d+", qt_version):
+        raise BuildError("Expected a pinned Qt release version for archived sources.")
+    version_info = qt_root / "version.ini"
+    source = version_info.read_text()
+    original = "include = version_upstream.ini"
+    replacement = "include = version_udrive_archive.ini"
+    if source.count(replacement) != 1:
+        if source.count(original) != 1:
+            raise BuildError("The pinned Qt version metadata has changed; cannot configure archived sources.")
+        source = source.replace(original, replacement, 1)
+    # Craft loads included metadata first. Override only this release after the
+    # upstream targets, preserving every other version, patch and source folder.
+    archive_url = "https://download.qt.io/archive/qt/${VERSION_MAJOR}.${VERSION_MINOR}/${VERSION}/submodules/${PACKAGE_NAME}-everywhere-src-${VERSION}.tar.xz"
+    overlay = ("[General]\ninclude = version_upstream.ini\n"
+               f"tarballs = {qt_version}\n"
+               f"tarballUrl = {archive_url}\n"
+               f"tarballDigestUrl = {archive_url}.sha256\n"
+               "tarballInstallSrc = ${PACKAGE_NAME}-everywhere-src-${VERSION}\n")
+    (qt_root / "version_udrive_archive.ini").write_text(overlay)
+    version_info.write_text(source)
 
 
 def preserve_nsis_install_directory(path):
@@ -245,6 +273,7 @@ def build(args):
 
     craft("--setup")
     craft("-c", "--unshelve", ROOT / ".craft.shelf")
+    use_archived_qt_sources(work_root / "blueprints/craft-blueprints-kde/libs/qt6")
     craft("-c", "--set", f"srcDir={ROOT}", PACKAGE)
     craft("-c", "--set", "args=-DBUILD_TESTING=OFF -DBUILD_SHELL_INTEGRATION=OFF -DWITH_AUTO_UPDATER=OFF", PACKAGE)
     craft("-c", "dev-utils/nsis")
