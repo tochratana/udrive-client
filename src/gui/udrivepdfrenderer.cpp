@@ -9,16 +9,24 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#ifdef Q_OS_WIN
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
     if (argc != 2) return 2;
+#ifdef Q_OS_WIN
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     QFile input, output;
     if (!input.open(stdin, QIODevice::ReadOnly) || !output.open(stdout, QIODevice::WriteOnly)) return 2;
     QString openError;
     // Keep one immutable snapshot for the entire preview, including page/zoom changes.
-    const auto document = OCC::UDrivePdfDocument::open(QString::fromLocal8Bit(argv[1]), &openError);
+    const auto document = OCC::UDrivePdfDocument::open(app.arguments().at(1), &openError);
     for (;;) {
         const auto line = input.readLine(512);
         if (line.isEmpty()) return 0;

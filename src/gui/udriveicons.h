@@ -52,7 +52,13 @@ enum class Symbol {
     Cloud,
     Disable,
     Help,
-    Bell
+    Bell,
+    Play,
+    Pause,
+    FullScreen,
+    ExitFullScreen,
+    Rewind10,
+    Forward10
 };
 
 // Draw the same rounded, 24-unit stroke icons at any device pixel ratio.
@@ -109,6 +115,61 @@ public:
             painter->drawPoint(QPointF(12, 17));
             line({{9, 9}, {9, 8}, {11, 7}, {14, 7}, {15, 9}, {14, 11}, {12, 12}, {12, 13}});
             break;
+        case Symbol::Play: {
+            QPainterPath tri;
+            tri.moveTo(8.5, 5);
+            tri.lineTo(18.5, 12);
+            tri.lineTo(8.5, 19);
+            tri.closeSubpath();
+            painter->setBrush(color);
+            painter->drawPath(tri);
+            break;
+        }
+        case Symbol::Pause:
+            painter->setBrush(color);
+            painter->drawRoundedRect(QRectF(6.5, 5, 3.5, 14), 1, 1);
+            painter->drawRoundedRect(QRectF(14, 5, 3.5, 14), 1, 1);
+            break;
+        case Symbol::FullScreen:
+            line({{4, 9}, {4, 4}, {9, 4}});
+            line({{15, 4}, {20, 4}, {20, 9}});
+            line({{20, 15}, {20, 20}, {15, 20}});
+            line({{9, 20}, {4, 20}, {4, 15}});
+            break;
+        case Symbol::ExitFullScreen:
+            line({{4, 9}, {9, 9}, {9, 4}});
+            line({{20, 9}, {15, 9}, {15, 4}});
+            line({{20, 15}, {15, 15}, {15, 20}});
+            line({{4, 15}, {9, 15}, {9, 20}});
+            break;
+        case Symbol::Rewind10: {
+            const QRectF ring(4, 4, 16, 16);
+            QPainterPath arc;
+            arc.arcMoveTo(ring, 150);
+            arc.arcTo(ring, 150, 300);
+            painter->drawPath(arc);
+            line({{15, 1}, {12, 4}, {15, 7}});
+            painter->save();
+            painter->setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            line({{8.2, 11}, {9.5, 9.5}, {9.5, 15.5}});
+            painter->drawRoundedRect(QRectF(11.8, 9.5, 4.2, 6), 2, 2);
+            painter->restore();
+            break;
+        }
+        case Symbol::Forward10: {
+            const QRectF ring(4, 4, 16, 16);
+            QPainterPath arc;
+            arc.arcMoveTo(ring, 30);
+            arc.arcTo(ring, 30, -300);
+            painter->drawPath(arc);
+            line({{9, 1}, {12, 4}, {9, 7}});
+            painter->save();
+            painter->setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            line({{8.2, 11}, {9.5, 9.5}, {9.5, 15.5}});
+            painter->drawRoundedRect(QRectF(11.8, 9.5, 4.2, 6), 2, 2);
+            painter->restore();
+            break;
+        }
         case Symbol::Add:
             line({{12, 5}, {12, 19}});
             line({{5, 12}, {19, 12}});

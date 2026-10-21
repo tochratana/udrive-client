@@ -42,6 +42,7 @@
 #include <QPalette>
 #include <QStyleHints>
 #include "gui/translations.h"
+#include "udrivefilebrowser.h"
 
 namespace OCC {
 
@@ -64,6 +65,7 @@ Application::Application(Platform *platform, const QString &displayLanguage, boo
     , _displayLanguage(displayLanguage)
 {
     platform->migrate();
+    UDriveFileBrowser::cleanupOrphanedPreviews();
 
     qCInfo(lcApplication) << "Plugin search paths:" << qApp->libraryPaths();
 

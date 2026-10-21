@@ -25,6 +25,7 @@ class Subinfo:
         self.description = "ownCloud Desktop Client"
         self.displayName = "ownCloud"
         self.webpage = "https://github.com/owncloud/client"
+        self.runtimeDependencies["libs/qt/qtdeclarative"] = None
 class Package:
     def package(self):
         self.defines["company"] = "ownCloud GmbH"

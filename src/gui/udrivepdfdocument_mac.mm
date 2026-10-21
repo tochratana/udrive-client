@@ -3,6 +3,7 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <QFile>
 #include <QObject>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -69,7 +70,8 @@ QSizeF UDrivePdfDocument::pageSize(int page) const
 
 QImage UDrivePdfDocument::render(int page, QSize pixels) const
 {
-    if (pageSize(page).isEmpty() || pixels.isEmpty() || pixels.width() > 4096 || pixels.height() > 4096) return {};
+    const QSizeF logicalSize = pageSize(page);
+    if (logicalSize.isEmpty() || pixels.isEmpty() || pixels.width() > 4096 || pixels.height() > 4096) return {};
     QImage image(pixels, QImage::Format_RGBA8888);
     if (image.isNull()) return {};
     image.fill(Qt::white);
@@ -81,8 +83,15 @@ QImage UDrivePdfDocument::render(int page, QSize pixels) const
     if (!context) return {};
     const auto pdfPage = CGPDFDocumentGetPage(_impl->document, page);
     if (!pdfPage) { CGContextRelease(context); return {}; }
+    // CGPDFPageGetDrawingTransform only scales pages down. Apply the output
+    // scale explicitly so zooming in and Retina rendering enlarge the content
+    // along with the page, while the native transform handles crop/rotation.
+    const qreal scale = std::min(image.width() / logicalSize.width(), image.height() / logicalSize.height());
+    CGContextTranslateCTM(context, (image.width() - logicalSize.width() * scale) / 2,
+        (image.height() - logicalSize.height() * scale) / 2);
+    CGContextScaleCTM(context, scale, scale);
     const auto transform = CGPDFPageGetDrawingTransform(pdfPage, kCGPDFCropBox,
-        CGRectMake(0, 0, image.width(), image.height()), 0, true);
+        CGRectMake(0, 0, logicalSize.width(), logicalSize.height()), 0, true);
     CGContextConcatCTM(context, transform);
     CGContextDrawPDFPage(context, pdfPage);
     CGContextRelease(context);

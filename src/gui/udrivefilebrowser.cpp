@@ -5,6 +5,7 @@
 #include "udrivecombobox.h"
 #include "udrivepopup.h"
 #include "udrivethumbnails.h"
+#include "udrivefilepreview.h"
 #include "creds/localdevelopment.h"
 #include "application.h"
 #include "owncloudgui.h"
@@ -16,11 +17,11 @@
 #include <QListView>
 #include <QActionGroup>
 #include <QStackedWidget>
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
 #include "udrivepdfpreview.h"
-#include <QStackedWidget>
-#include <QTemporaryDir>
 #endif
+#include <QTemporaryDir>
+#include "uploaddevice.h"
 #include "libsync/account.h"
 #include "libsync/creds/abstractcredentials.h"
 #include "libsync/graphapi/spacesmanager.h"
@@ -83,6 +84,7 @@
 #include <QVBoxLayout>
 #include <algorithm>
 #include <functional>
+#include <limits>
 
 namespace OCC {
 namespace {
@@ -2289,24 +2291,28 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     , _state(state)
 {
     setObjectName(QStringLiteral("udriveFileBrowser"));
+    cleanupOrphanedPreviews();
 
-#ifdef Q_OS_MACOS
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     _pages = new QStackedWidget(this);
     outer->addWidget(_pages);
     auto *files = new QWidget(_pages);
     _pages->addWidget(files);
+    _filePreview = new UDriveFilePreview(_pages);
+    _pages->addWidget(_filePreview);
+    connect(_filePreview, &UDriveFilePreview::backRequested, this, [this] { closePdf(); activeView()->setFocus(); });
+    connect(_filePreview, &UDriveFilePreview::downloadRequested, this, &UDriveFileBrowser::downloadSelection);
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     _pdfPreview = new UDrivePdfPreview(_pages);
     _pages->addWidget(_pdfPreview);
+    connect(_pdfPreview, &UDrivePdfPreview::downloadRequested, this, &UDriveFileBrowser::downloadSelection);
     connect(_pdfPreview, &UDrivePdfPreview::backRequested, this, [this] {
         closePdf();
         activeView()->setFocus();
     });
-    auto *layout = new QVBoxLayout(files);
-#else
-    auto *layout = new QVBoxLayout(this);
 #endif
+    auto *layout = new QVBoxLayout(files);
     layout->setContentsMargins(20, 18, 20, 16);
     layout->setSpacing(10);
 
@@ -3240,6 +3246,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
                 cancelListing();
                 cancelDownload();
                 closePdf();
+                _filePreviewCache.clear(); _previewCacheOrder.clear();
                 cancelOperation();
                 _model->removeRows(0, _model->rowCount());
                 _workspacesModel->removeRows(0, _workspacesModel->rowCount());
@@ -3257,6 +3264,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
             cancelListing();
             cancelDownload();
             closePdf();
+            _filePreviewCache.clear(); _previewCacheOrder.clear();
             cancelOperation();
             _model->removeRows(0, _model->rowCount());
             _workspacesModel->removeRows(0, _workspacesModel->rowCount());
@@ -4733,16 +4741,16 @@ void UDriveFileBrowser::updateActions()
     const bool trash = _section == Section::Trash;
     const bool overview = sharedByMeOverview();
     const bool directory = index.data(DirectoryRole).toBool();
-    const bool local = valid && !trash && !directory && !localPath(index.data(PathRole).toString(), selectedRoot()).isEmpty();
     bool pdf = false;
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     pdf = !directory && index.data().toString().endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive);
 #endif
-    _openButton->setText(directory ? tr("Open folder") : pdf ? tr("Open PDF") : local ? tr("Open file") : tr("Download and open"));
+    const bool external = UDriveFilePreview::kindForName(index.data().toString()) == UDriveFilePreview::Kind::External;
+    _openButton->setText(directory ? tr("Open folder") : pdf ? tr("Open PDF") : external ? tr("Open in app") : tr("Preview"));
     _openButton->setEnabled(valid && !trash && !_download);
     _openButton->setToolTip(pdf  ? tr("Preview this PDF inside UDrive.")
-            : local || directory ? QString()
-                                 : tr("Choose where to save this file, then open it with your computer's default application. Changes to this downloaded copy are not synced."));
+            : directory ? QString() : external ? tr("Open this file with its installed application. Files outside a sync folder open as read-only copies.")
+                                 : tr("Preview this file inside UDrive."));
     _downloadButton->setEnabled(valid && !trash && !directory && !_download);
     const bool navigate = canBrowse() && !_root.isEmpty() && _section != Section::Favorites && !overview && !trash && !_operation;
     _breadcrumbs->setEnabled(navigate);
@@ -4836,13 +4844,8 @@ void UDriveFileBrowser::activateSelection()
         refresh();
     } else if (previewSelectedPdf()) {
         return;
-    } else if (const QString local = localPath(path, selectedRoot()); !local.isEmpty()) {
-        const auto root = selectedRoot();
-        if (QDesktopServices::openUrl(QUrl::fromLocalFile(local))) recordOpened(root, path);
-        else
-            setMessage(tr("Could not open this file on your computer."));
     } else {
-        chooseDownloadDestination(true);
+        previewSelectedFile();
     }
 }
 
@@ -5295,7 +5298,10 @@ bool UDriveFileBrowser::runOperation(
         body->setParent(job);
     _operation = job;
     _uploading = verb == "PUT";
-    job->setTimeout(std::chrono::seconds(60));
+    const int timeoutSec = _uploading
+        ? std::max<int>(300, static_cast<int>(body ? body->size() / (50 * 1024) : 300))
+        : 60;
+    job->setTimeout(std::chrono::seconds(timeoutSec));
     if (_uploading) {
         _progress->setAccessibleName(tr("Upload progress"));
         _progress->setRange(0, 100); _progress->setValue(0); _progress->show();
@@ -5342,6 +5348,7 @@ void UDriveFileBrowser::cancelOperation()
     if (job) job->abort();
     if (_uploading) { _progress->hide(); _cancelButton->hide(); }
     _uploading = false;
+    updateActions();
     if (job) Q_EMIT operationFinished(false, tr("Operation canceled. Refresh to check the server."));
 }
 
@@ -5355,13 +5362,199 @@ bool UDriveFileBrowser::uploadFile(const QString &localFile)
 {
     const QFileInfo info(localFile);
     if (!_uploadAction->isEnabled() || !info.isFile() || !validName(info.fileName())) return false;
+    if (!canBrowse() || _operation || _download) return false;
+
+    const QString fileName = info.fileName();
+    const QString remotePath = _path.isEmpty() ? fileName : _path + QLatin1Char('/') + fileName;
+    const qint64 totalSize = info.size();
+
+    const auto &tus = _state->account()->capabilities().tusSupport();
+    if (tus.isValid() && totalSize > 5LL * 1024 * 1024) {
+        return uploadFileTus(localFile, remotePath, totalSize);
+    }
+
     auto *file = new QFile(localFile);
     if (!file->open(QIODevice::ReadOnly)) { setMessage(file->errorString()); delete file; return false; }
     QNetworkRequest request;
     request.setRawHeader("If-None-Match", "*");
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/octet-stream"));
-    request.setHeader(QNetworkRequest::ContentLengthHeader, file->size());
-    return runOperation("PUT", _root, _path.isEmpty() ? info.fileName() : _path + QLatin1Char('/') + info.fileName(), request, tr("File uploaded."), file);
+    request.setHeader(QNetworkRequest::ContentLengthHeader, totalSize);
+    return runOperation("PUT", _root, remotePath, request, tr("File uploaded."), file);
+}
+
+bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &remotePath, qint64 totalSize)
+{
+    const auto &tus = _state->account()->capabilities().tusSupport();
+    const quint64 maxChunk = tus.max_chunk_size;
+    const quint64 chunkSize = (maxChunk > 0 && maxChunk <= 10ULL * 1024 * 1024) ? maxChunk : 10ULL * 1024 * 1024;
+
+    _uploading = true;
+    _progress->setAccessibleName(tr("Upload progress"));
+    _progress->setRange(0, 100);
+    _progress->setValue(0);
+    _progress->show();
+    _cancelButton->setText(tr("Cancel upload"));
+    _cancelButton->show();
+    setMessage(tr("Uploading…"));
+    updateActions();
+
+    const QUrl viewRoot = _root;
+    const QString viewPath = _path;
+    const Section section = _section;
+
+    QNetworkRequest postReq;
+    postReq.setRawHeader("Tus-Resumable", "1.0.0");
+    postReq.setRawHeader("Upload-Length", QByteArray::number(totalSize));
+
+    QByteArrayList meta;
+    auto addMeta = [&meta](const QByteArray &k, const QByteArray &v) {
+        meta << k + ' ' + v.toBase64();
+    };
+    const QString tusPath = remotePath.startsWith(QLatin1Char('/')) ? remotePath : (QLatin1Char('/') + remotePath);
+    addMeta("filename", tusPath.toUtf8());
+    addMeta("mtime", QByteArray::number(static_cast<qint64>(QFileInfo(localFile).lastModified().toSecsSinceEpoch())));
+    postReq.setRawHeader("Upload-Metadata", meta.join(','));
+
+    const bool creationWithUpload = tus.extensions.contains(QStringLiteral("creation-with-upload"));
+    const quint64 firstChunk = creationWithUpload ? std::min<quint64>(chunkSize, totalSize) : 0;
+    UploadDevice *firstDevice = creationWithUpload ? new UploadDevice(localFile, 0, firstChunk) : nullptr;
+    if (firstDevice) {
+        if (!firstDevice->open(QIODevice::ReadOnly)) {
+            setMessage(firstDevice->errorString());
+            delete firstDevice;
+            _uploading = false;
+            _progress->hide();
+            _cancelButton->hide();
+            updateActions();
+            return false;
+        }
+        postReq.setHeader(QNetworkRequest::ContentTypeHeader, QByteArrayLiteral("application/offset+octet-stream"));
+        postReq.setHeader(QNetworkRequest::ContentLengthHeader, QByteArray::number(firstChunk));
+        postReq.setRawHeader("Upload-Offset", "0");
+    }
+
+    auto *postJob = new FileActionJob(_state->account(), _root, QString(), "POST", firstDevice, postReq, this);
+    if (firstDevice) firstDevice->setParent(postJob);
+    _operation = postJob;
+    postJob->setTimeout(std::chrono::seconds(300));
+
+    if (firstDevice) {
+        postJob->addNewReplyHook([this, postJob, totalSize](QNetworkReply *reply) {
+            connect(reply, &QNetworkReply::uploadProgress, this, [this, postJob, totalSize](qint64 sent, qint64) {
+                if (_operation == postJob && totalSize > 0)
+                    _progress->setValue(static_cast<int>(100.0 * sent / totalSize));
+            });
+        });
+    }
+
+    auto sendChunkPtr = std::make_shared<std::function<void(quint64, const QUrl &)>>();
+
+    *sendChunkPtr = [this, localFile, totalSize, chunkSize, viewRoot, viewPath, section, sendChunkPtr](quint64 offset, const QUrl &location) {
+        if (!_uploading || offset >= static_cast<quint64>(totalSize)) {
+            _operation.clear();
+            _uploading = false;
+            _progress->hide();
+            _cancelButton->hide();
+            if (_root == viewRoot && _path == viewPath && _section == section) refresh();
+            setMessage(tr("File uploaded."));
+            updateActions();
+            Q_EMIT operationFinished(true, tr("File uploaded."));
+            return;
+        }
+
+        const quint64 thisChunk = std::min<quint64>(chunkSize, totalSize - offset);
+        auto *device = new UploadDevice(localFile, offset, thisChunk);
+        if (!device->open(QIODevice::ReadOnly)) {
+            const QString err = tr("Upload failed: %1").arg(device->errorString());
+            _operation.clear();
+            _uploading = false;
+            _progress->hide();
+            _cancelButton->hide();
+            setMessage(err);
+            updateActions();
+            delete device;
+            Q_EMIT operationFinished(false, err);
+            return;
+        }
+
+        QNetworkRequest patchReq;
+        patchReq.setHeader(QNetworkRequest::ContentTypeHeader, QByteArrayLiteral("application/offset+octet-stream"));
+        patchReq.setHeader(QNetworkRequest::ContentLengthHeader, QByteArray::number(thisChunk));
+        patchReq.setRawHeader("Upload-Offset", QByteArray::number(offset));
+        patchReq.setRawHeader("Tus-Resumable", "1.0.0");
+
+        auto *patchJob = new FileActionJob(_state->account(), location, QString(), "PATCH", device, patchReq, this);
+        device->setParent(patchJob);
+        _operation = patchJob;
+        patchJob->setTimeout(std::chrono::seconds(300));
+
+        patchJob->addNewReplyHook([this, patchJob, offset, totalSize](QNetworkReply *reply) {
+            connect(reply, &QNetworkReply::uploadProgress, this, [this, patchJob, offset, totalSize](qint64 sent, qint64) {
+                if (_operation == patchJob && totalSize > 0)
+                    _progress->setValue(static_cast<int>(100.0 * (offset + sent) / totalSize));
+            });
+        });
+
+        connect(patchJob, &AbstractNetworkJob::finishedSignal, this, [this, patchJob, sendChunkPtr, offset, thisChunk, location, totalSize] {
+            if (_operation != patchJob) return;
+            if (!patchJob->reply() || patchJob->reply()->error() != QNetworkReply::NoError
+                || patchJob->httpStatusCode() < 200 || patchJob->httpStatusCode() >= 300) {
+                const QString err = tr("Upload failed: %1 (HTTP %2)").arg(patchJob->errorString()).arg(patchJob->httpStatusCode());
+                _operation.clear();
+                _uploading = false;
+                _progress->hide();
+                _cancelButton->hide();
+                setMessage(err);
+                updateActions();
+                Q_EMIT operationFinished(false, err);
+                return;
+            }
+
+            quint64 nextOffset = offset + thisChunk;
+            if (patchJob->reply()->hasRawHeader("Upload-Offset")) {
+                nextOffset = patchJob->reply()->rawHeader("Upload-Offset").toULongLong();
+            }
+            _progress->setValue(static_cast<int>(100.0 * nextOffset / totalSize));
+            (*sendChunkPtr)(nextOffset, location);
+        });
+
+        patchJob->start();
+    };
+
+    connect(postJob, &AbstractNetworkJob::finishedSignal, this, [this, postJob, firstChunk, totalSize, sendChunkPtr] {
+        if (_operation != postJob) return;
+        if (!postJob->reply() || postJob->reply()->error() != QNetworkReply::NoError
+            || postJob->httpStatusCode() < 200 || postJob->httpStatusCode() >= 300) {
+            const QString err = tr("Upload failed: %1 (HTTP %2)").arg(postJob->errorString()).arg(postJob->httpStatusCode());
+            _operation.clear();
+            _uploading = false;
+            _progress->hide();
+            _cancelButton->hide();
+            setMessage(err);
+            updateActions();
+            Q_EMIT operationFinished(false, err);
+            return;
+        }
+
+        QUrl location = postJob->reply()->header(QNetworkRequest::LocationHeader).toUrl();
+        if (location.isEmpty()) {
+            const QString locHeader = QString::fromUtf8(postJob->reply()->rawHeader("Location"));
+            location = QUrl(locHeader);
+        }
+        if (location.isRelative()) {
+            location = _root.resolved(location);
+        }
+
+        quint64 serverOffset = firstChunk;
+        if (postJob->reply()->hasRawHeader("Upload-Offset")) {
+            serverOffset = postJob->reply()->rawHeader("Upload-Offset").toULongLong();
+        }
+        _progress->setValue(static_cast<int>(100.0 * serverOffset / totalSize));
+        (*sendChunkPtr)(serverOffset, location);
+    });
+
+    postJob->start();
+    return true;
 }
 
 bool UDriveFileBrowser::renameSelected(const QString &name)
@@ -5501,7 +5694,7 @@ bool UDriveFileBrowser::setSelectedFavorite(bool favorite)
 
 bool UDriveFileBrowser::previewSelectedPdf()
 {
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     const auto index = selectedItem();
     if (!index.isValid() || index.data(ShareUnavailableRole).toBool() || index.data(DirectoryRole).toBool() || _listing || _report || _operation || _download
         || !canBrowse() || _section == Section::Trash || !index.data().toString().endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)) return false;
@@ -5514,6 +5707,15 @@ bool UDriveFileBrowser::previewSelectedPdf()
         recordOpened(selectedRoot(), index.data(PathRole).toString());
         return true;
     }
+    const QString key = previewCacheKey(index);
+    const auto cached = _filePreviewCache.constFind(key);
+    if (!key.isEmpty() && cached != _filePreviewCache.cend() && QFileInfo::exists(cached->path)) {
+        _pages->setCurrentWidget(_pdfPreview);
+        _pdfPreview->openFile(cached->path, index.data().toString(), cached->storage);
+        recordOpened(selectedRoot(), index.data(PathRole).toString());
+        return true;
+    }
+    _filePreviewKey = key;
     _previewStorage = std::make_shared<QTemporaryDir>(QDir::tempPath() + QStringLiteral("/udrive-pdf-XXXXXX"));
     if (!_previewStorage->isValid()) { _previewStorage.reset(); setMessage(tr("Could not create a temporary PDF preview.")); return true; }
     const QString destination = _previewStorage->filePath(QStringLiteral("preview.pdf"));
@@ -5524,14 +5726,118 @@ bool UDriveFileBrowser::previewSelectedPdf()
 #endif
 }
 
+QString UDriveFileBrowser::previewCacheKey(const QModelIndex &index) const
+{
+    const QString etag = index.data(EtagRole).toString();
+    if (etag.isEmpty()) return {}; // Without a server version, always fetch fresh content.
+    QByteArray identity = selectedRoot().toEncoded();
+    identity.append('\n').append(index.data(PathRole).toString().toUtf8()).append('\n').append(etag.toUtf8());
+    return QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
+}
+
+void UDriveFileBrowser::cleanupOrphanedPreviews()
+{
+    const QDir tempDir(QDir::tempPath());
+    const QStringList filters{QStringLiteral("udrive-preview-*"), QStringLiteral("udrive-pdf-*")};
+    const QFileInfoList orphans = tempDir.entryInfoList(filters, QDir::Dirs | QDir::NoDotAndDotDot);
+    std::function<void(const QString &)> purge = [&purge](const QString &path) {
+        QDir dir(path);
+        const QFileInfoList entries = dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden);
+        for (const auto &entry : entries) {
+            if (entry.isDir()) {
+                purge(entry.absoluteFilePath());
+            } else {
+                QFile::setPermissions(entry.absoluteFilePath(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+                QFile::remove(entry.absoluteFilePath());
+            }
+        }
+        dir.rmdir(path);
+    };
+    for (const auto &info : orphans) {
+        purge(info.absoluteFilePath());
+    }
+}
+
+void UDriveFileBrowser::rememberPreview(const QString &key, const QString &path, const std::shared_ptr<QTemporaryDir> &storage)
+{
+    if (key.isEmpty()) return;
+    _filePreviewCache.insert(key, {path, storage, QFileInfo(path).size()});
+    _previewCacheOrder.removeAll(key); _previewCacheOrder.append(key);
+    auto totalSize = [this] { qint64 size = 0; for (const auto &entry : _filePreviewCache) size += entry.bytes; return size; };
+    while (_previewCacheOrder.size() > 4 || totalSize() > 512LL * 1024 * 1024)
+        _filePreviewCache.remove(_previewCacheOrder.takeFirst());
+}
+
+bool UDriveFileBrowser::previewSelectedFile()
+{
+    const auto index = selectedItem();
+    if (!index.isValid() || index.data(DirectoryRole).toBool() || index.data(ShareUnavailableRole).toBool()
+        || _listing || _report || _operation || _download || !canBrowse() || _section == Section::Trash) return false;
+    closePdf();
+    const QString name = index.data().toString();
+    const QString path = index.data(PathRole).toString();
+    const QUrl root = selectedRoot();
+    _filePreview->showLoading(name);
+    _pages->setCurrentWidget(_filePreview);
+    const auto kind = UDriveFilePreview::kindForName(name);
+    if (kind == UDriveFilePreview::Kind::Unsupported) {
+        _filePreview->showError(tr("Preview is not available for this file type. Use Download to save a copy."));
+        return true;
+    }
+    const QString local = localPath(path, root);
+    if (!local.isEmpty()) { showPreparedFile(local, name, root, path, {}); return true; }
+    const QString key = previewCacheKey(index);
+    const auto cached = _filePreviewCache.constFind(key);
+    if (!key.isEmpty() && cached != _filePreviewCache.cend() && QFileInfo::exists(cached->path)) {
+        const auto file = *cached;
+        _previewCacheOrder.removeAll(key); _previewCacheOrder.append(key);
+        showPreparedFile(file.path, name, root, path, file.storage);
+        return true;
+    }
+    _previewStorage = std::make_shared<QTemporaryDir>(QDir::tempPath() + QStringLiteral("/udrive-preview-XXXXXX"));
+    if (!_previewStorage->isValid()) {
+        _previewStorage.reset(); _filePreview->showError(tr("Could not create a temporary preview.")); return true;
+    }
+    // Keep the real extension for the media decoder and associated Office app.
+    const QString suffix = QFileInfo(name).suffix().toLower();
+    const QString destination = _previewStorage->filePath(QStringLiteral("preview.") + suffix);
+    _filePreviewDownload = true;
+    _filePreviewKey = key;
+    if (!startDownload(destination, false)) { _filePreviewDownload = false; _previewStorage.reset(); }
+    return true;
+}
+
+void UDriveFileBrowser::showPreparedFile(const QString &path, const QString &name, const QUrl &root, const QString &remotePath, std::shared_ptr<QTemporaryDir> storage)
+{
+    if (UDriveFilePreview::kindForName(name) == UDriveFilePreview::Kind::External) {
+        // Synced originals remain editable. Temporary Office copies are read-only.
+        if (storage && !QFile::setPermissions(path, QFileDevice::ReadOwner)) {
+            _filePreview->showError(tr("Could not prepare a read-only copy of this file.")); return;
+        }
+        _previewStorage = storage;
+        const QPointer<UDriveFileBrowser> guard(this);
+        const bool opened = QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        if (!guard) return;
+        _pages->setCurrentIndex(0);
+        if (opened) { recordOpened(root, remotePath); setMessage(storage ? tr("Opened a read-only copy. Sync this folder to edit files and upload changes automatically.") : tr("File opened.")); }
+        else setMessage(tr("No application could open this file. Install an application for this file type, or use Download."));
+    } else {
+        _pages->setCurrentWidget(_filePreview);
+        _filePreview->openFile(path, name, std::move(storage));
+        _filePreview->findChild<QPushButton *>(QStringLiteral("previewBack"))->setFocus();
+        recordOpened(root, remotePath);
+    }
+}
+
 void UDriveFileBrowser::closePdf()
 {
-#ifdef Q_OS_MACOS
-    if (_previewDownload) cancelDownload();
+    if (_previewDownload || _filePreviewDownload) cancelDownload();
+    _filePreview->clear();
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     _pdfPreview->clear();
+#endif
     _previewStorage.reset();
     _pages->setCurrentIndex(0);
-#endif
 }
 
 void UDriveFileBrowser::hideEvent(QHideEvent *event)
@@ -5546,6 +5852,7 @@ void UDriveFileBrowser::hideEvent(QHideEvent *event)
     _thumbnailTimer->stop();
     _thumbnails->cancel();
     closePdf();
+    _filePreviewCache.clear(); _previewCacheOrder.clear();
     QWidget::hideEvent(event);
 }
 
@@ -5556,10 +5863,9 @@ void UDriveFileBrowser::cancelDownload()
     if (job) job->abort();
     if (_downloadFile) _downloadFile->cancelWriting();
     _downloadFile.reset();
-#ifdef Q_OS_MACOS
-    if (_previewDownload) _previewStorage.reset();
-#endif
+    if (_previewDownload || _filePreviewDownload) _previewStorage.reset();
     _previewDownload = false;
+    _filePreviewDownload = false;
     _progress->hide();
     _cancelButton->hide();
     updateActions();
@@ -5600,15 +5906,20 @@ bool UDriveFileBrowser::startDownload(const QString &destination, bool preview, 
     const QString path = index.data(PathRole).toString();
     _destination = destination;
     _previewDownload = preview;
+    const bool filePreview = _filePreviewDownload;
+    const QString cacheKey = _filePreviewKey;
+    const qint64 maximumSize = preview ? 100LL * 1024 * 1024
+        : filePreview ? UDriveFilePreview::maximumBytes(UDriveFilePreview::kindForName(index.data().toString())) : std::numeric_limits<qint64>::max();
+    const QString tooLarge = preview ? tr("This PDF is too large to preview (maximum 100 MiB).") : tr("This file is too large to preview. Use Download to save a copy.");
     _writeError.clear();
     QNetworkRequest request;
-    if (preview && !index.data(EtagRole).toString().isEmpty()) request.setRawHeader("If-Match", index.data(EtagRole).toString().toUtf8());
+    if ((preview || filePreview) && !index.data(EtagRole).toString().isEmpty()) request.setRawHeader("If-Match", index.data(EtagRole).toString().toUtf8());
     const QString name = index.data().toString();
     const QUrl root = selectedRoot();
     auto *job = new SimpleNetworkJob(_state->account(), selectedRoot(), path, "GET", nullptr, request, this);
     _download = job;
     job->setTimeout(std::chrono::seconds(60));
-    job->addNewReplyHook([this, job](QNetworkReply *reply) {
+    job->addNewReplyHook([this, job, maximumSize, tooLarge](QNetworkReply *reply) {
         if (_download != job) return;
         // Start a fresh atomic save on every authentication retry/redirect.
         _downloadFile = std::make_unique<QSaveFile>(_destination);
@@ -5617,31 +5928,27 @@ bool UDriveFileBrowser::startDownload(const QString &destination, bool preview, 
             QTimer::singleShot(0, job, &AbstractNetworkJob::abort);
             return;
         }
-        if (_previewDownload && !_downloadFile->setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
-            _writeError = tr("Could not secure the temporary PDF file.");
+        if ((_previewDownload || _filePreviewDownload) && !_downloadFile->setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+            _writeError = tr("Could not secure the temporary preview file.");
             QTimer::singleShot(0, job, &AbstractNetworkJob::abort);
             return;
         }
-#ifdef Q_OS_MACOS
-        connect(reply, &QNetworkReply::metaDataChanged, this, [this, job, reply] {
-            if (_download != job || job->reply() != reply || !_previewDownload) return;
+        connect(reply, &QNetworkReply::metaDataChanged, this, [this, job, reply, maximumSize, tooLarge] {
+            if (_download != job || job->reply() != reply) return;
             if (reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200
-                && reply->header(QNetworkRequest::ContentLengthHeader).toLongLong() > UDrivePdfDocument::MaximumFileSize) {
-                _writeError = tr("This PDF is too large to preview (maximum 100 MiB).");
+                && reply->header(QNetworkRequest::ContentLengthHeader).toLongLong() > maximumSize) {
+                _writeError = tooLarge;
                 job->abort();
             }
         });
-#endif
-        connect(reply, &QNetworkReply::readyRead, this, [this, job, reply] {
+        connect(reply, &QNetworkReply::readyRead, this, [this, job, reply, maximumSize, tooLarge] {
             if (_download != job || job->reply() != reply || !_downloadFile || !_writeError.isEmpty()) return;
             if (reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() != 200) return;
             const QByteArray chunk = reply->readAll();
-#ifdef Q_OS_MACOS
-            if (_previewDownload && _downloadFile->pos() + chunk.size() > UDrivePdfDocument::MaximumFileSize) {
-                _writeError = tr("This PDF is too large to preview (maximum 100 MiB).");
+            if (_downloadFile->pos() + chunk.size() > maximumSize) {
+                _writeError = tooLarge;
                 job->abort(); return;
             }
-#endif
             if (_downloadFile->write(chunk) != chunk.size()) {
                 _writeError = _downloadFile->errorString();
                 job->abort();
@@ -5653,18 +5960,16 @@ bool UDriveFileBrowser::startDownload(const QString &destination, bool preview, 
             if (total > 0) _progress->setValue(static_cast<int>(100.0 * received / total));
         });
     });
-    connect(job, &AbstractNetworkJob::finishedSignal, this, [this, job, preview, name, root, path, destination, openAfterDownload] {
+    connect(job, &AbstractNetworkJob::finishedSignal, this, [this, job, preview, name, root, path, destination, openAfterDownload, filePreview, cacheKey, maximumSize, tooLarge] {
         if (_download != job) return;
         bool success = job->reply() && job->reply()->error() == QNetworkReply::NoError
             && job->httpStatusCode() == 200 && _writeError.isEmpty() && _downloadFile;
         if (success) {
             const QByteArray remaining = job->reply()->readAll();
-#ifdef Q_OS_MACOS
-            if (preview && _downloadFile->pos() + remaining.size() > UDrivePdfDocument::MaximumFileSize) {
+            if (_downloadFile->pos() + remaining.size() > maximumSize) {
                 success = false;
-                _writeError = tr("This PDF is too large to preview (maximum 100 MiB).");
+                _writeError = tooLarge;
             }
-#endif
             success = success && _downloadFile->write(remaining) == remaining.size() && _downloadFile->commit();
             if (!success && _writeError.isEmpty()) _writeError = _downloadFile->errorString();
         }
@@ -5676,8 +5981,25 @@ bool UDriveFileBrowser::startDownload(const QString &destination, bool preview, 
         _progress->hide();
         _cancelButton->hide();
         _previewDownload = false;
-#ifdef Q_OS_MACOS
+        _filePreviewDownload = false;
+        if (filePreview) {
+            if (success) {
+                const auto storage = _previewStorage;
+                rememberPreview(cacheKey, destination, storage);
+                const QPointer<UDriveFileBrowser> guard(this);
+                showPreparedFile(destination, name, root, path, storage);
+                if (!guard) return;
+            } else {
+                _previewStorage.reset();
+                _filePreview->showError(tr("Preview failed: %1").arg(error));
+            }
+            updateActions();
+            Q_EMIT downloadFinished(success, destination);
+            return;
+        }
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
         if (preview && success) {
+            rememberPreview(cacheKey, destination, _previewStorage);
             recordOpened(root, path);
             _pages->setCurrentWidget(_pdfPreview);
             _pdfPreview->openFile(_destination, name, _previewStorage);

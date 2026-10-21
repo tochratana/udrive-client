@@ -45,6 +45,7 @@ class SimpleNetworkJob;
 class JsonApiJob;
 class JsonJob;
 class UDrivePdfPreview;
+class UDriveFilePreview;
 class UDriveThumbnails;
 class UDriveWorkspaceActions;
 class DeleteConfirmDialog;
@@ -93,6 +94,8 @@ public:
     // Opening is requested explicitly and happens only after a successful save.
     bool saveSelectedFile(const QString &destination, bool openAfterDownload = false);
     bool previewSelectedPdf();
+    bool previewSelectedFile();
+    static void cleanupOrphanedPreviews();
     QLineEdit *takeSearchField();
     bool canCreate() const;
     void showNewMenu(const QPoint &globalPosition, int minimumWidth = 0);
@@ -124,6 +127,9 @@ private:
     QAbstractItemView *activeView() const;
     bool startDownload(const QString &destination, bool preview, bool openAfterDownload = false);
     void closePdf();
+    void showPreparedFile(const QString &path, const QString &name, const QUrl &root, const QString &remotePath, std::shared_ptr<QTemporaryDir> storage);
+    QString previewCacheKey(const QModelIndex &index) const;
+    void rememberPreview(const QString &key, const QString &path, const std::shared_ptr<QTemporaryDir> &storage);
     void setSection(Section section);
     void refreshFavorites();
     void refreshSharedByMe();
@@ -142,6 +148,7 @@ private:
     void updateEmptyState();
     bool runOperation(
         const QByteArray &verb, const QUrl &root, const QString &path, const QNetworkRequest &request, const QString &message, QIODevice *body = nullptr);
+    bool uploadFileTus(const QString &localFile, const QString &remotePath, qint64 totalSize);
     void cancelOperation();
     void confirmDelete(bool permanent);
     void addFileActions(QMenu *menu);
@@ -249,11 +256,17 @@ private:
     QString _destination;
     QString _writeError;
     bool _previewDownload = false;
-#ifdef Q_OS_MACOS
+    bool _filePreviewDownload = false;
+    QString _filePreviewKey;
     QStackedWidget *_pages;
+    UDriveFilePreview *_filePreview;
+    struct CachedPreview { QString path; std::shared_ptr<QTemporaryDir> storage; qint64 bytes = 0; };
+    QMap<QString, CachedPreview> _filePreviewCache;
+    QStringList _previewCacheOrder;
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     UDrivePdfPreview *_pdfPreview;
-    std::shared_ptr<QTemporaryDir> _previewStorage;
 #endif
+    std::shared_ptr<QTemporaryDir> _previewStorage;
     QComboBox *_spaces;
     QPointer<QLineEdit> _search;
     QLabel *_heading;

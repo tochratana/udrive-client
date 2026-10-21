@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gui/udrivefilebrowser.h"
+#include "gui/udrivefilepreview.h"
 #include "gui/udriveworkspaceactions.h"
 #include "gui/udrivecombobox.h"
 #include "gui/settingsdialog.h"
@@ -55,6 +56,13 @@
 #include <QTextLayout>
 #include <QImage>
 #include <QDesktopServices>
+#ifdef UDRIVE_HAS_MULTIMEDIA
+#include <QMediaPlayer>
+#include <QSlider>
+#include <QVideoSink>
+#include <QVideoFrame>
+#include <QVideoWidget>
+#endif
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -165,6 +173,8 @@ public:
     bool rejectFavorite = false;
     bool readOnly = false;
     bool holdUpload = false;
+    QMap<QString, QString> tusSessions;
+    QMap<QString, QByteArray> tusUploaded;
     int thumbnailDelay = 0;
     int activeThumbnails = 0;
     int maximumThumbnails = 0;
@@ -389,6 +399,45 @@ public:
                         if (readOnly) respond(socket, 403, "text/plain", "Forbidden");
                         else if (exists(path)) respond(socket, 412, "text/plain", "Exists");
                         else if (!holdUpload) { removed.remove(path); uploaded.insert(path, requestBodies.value(key)); respond(socket, 201, "text/plain", {}); }
+                    } else if (parts.at(0) == "POST" && headers.contains("tus-resumable")) {
+                        if (holdUpload) {
+                            slowStarted = true;
+                            return;
+                        }
+                        const QByteArray metaHeader = headers.value("upload-metadata");
+                        QString targetPath;
+                        const auto entries = metaHeader.split(',');
+                        for (const auto &entry : entries) {
+                            const auto pair = entry.trimmed().split(' ');
+                            if (pair.size() == 2 && pair[0] == "filename") {
+                                targetPath = QString::fromUtf8(QByteArray::fromBase64(pair[1]));
+                            }
+                        }
+                        if (!targetPath.startsWith('/')) targetPath.prepend('/');
+                        QString base = path;
+                        while (base.endsWith('/')) base.chop(1);
+                        if (!targetPath.startsWith(base)) targetPath = base + targetPath;
+                        const QString sessionId = QStringLiteral("/tus-session-%1").arg(tusSessions.size() + 1);
+                        const QByteArray chunk = data->mid(headerEnd + 4, length);
+                        tusSessions.insert(sessionId, targetPath);
+                        tusUploaded.insert(targetPath, chunk);
+                        if (chunk.size() >= headers.value("upload-length").toLongLong()) {
+                            uploaded.insert(targetPath, chunk);
+                        }
+                        QMap<QByteArray, QByteArray> extraHeaders;
+                        extraHeaders.insert("Location", sessionId.toUtf8());
+                        extraHeaders.insert("Tus-Resumable", "1.0.0");
+                        extraHeaders.insert("Upload-Offset", QByteArray::number(chunk.size()));
+                        respond(socket, 201, "text/plain", {}, extraHeaders);
+                    } else if (parts.at(0) == "PATCH" && headers.contains("tus-resumable")) {
+                        const QString targetPath = tusSessions.value(path);
+                        const QByteArray chunk = data->mid(headerEnd + 4, length);
+                        tusUploaded[targetPath].append(chunk);
+                        uploaded.insert(targetPath, tusUploaded[targetPath]);
+                        QMap<QByteArray, QByteArray> extraHeaders;
+                        extraHeaders.insert("Tus-Resumable", "1.0.0");
+                        extraHeaders.insert("Upload-Offset", QByteArray::number(tusUploaded[targetPath].size()));
+                        respond(socket, 204, "text/plain", {}, extraHeaders);
                     } else if (parts.at(0) == "PROPPATCH") {
                         if (!rejectFavorite) {
                             if (requestBodies.value(key).contains(">true<")) favorites.insert(path);
@@ -512,10 +561,15 @@ public:
                 original.section('/', -1).toHtmlEscaped(), original.mid(QStringLiteral("/dav/personal/").size()).toHtmlEscaped(),
                 QString::number(sizes.value(path, 524288))).toUtf8();
     }
-    void respond(QTcpSocket *socket, int status, const QByteArray &type, const QByteArray &body)
+    void respond(QTcpSocket *socket, int status, const QByteArray &type, const QByteArray &body, const QMap<QByteArray, QByteArray> &extraHeaders = {})
     {
-        socket->write("HTTP/1.1 " + QByteArray::number(status) + " Response\r\nContent-Type: " + type
-            + "\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+        QByteArray resp = "HTTP/1.1 " + QByteArray::number(status) + " Response\r\nContent-Type: " + type
+            + "\r\nContent-Length: " + QByteArray::number(body.size()) + "\r\nConnection: close\r\n";
+        for (auto it = extraHeaders.cbegin(); it != extraHeaders.cend(); ++it) {
+            resp += it.key() + ": " + it.value() + "\r\n";
+        }
+        resp += "\r\n" + body;
+        socket->write(resp);
         socket->disconnectFromHost();
     }
 };
@@ -1136,7 +1190,9 @@ private Q_SLOTS:
             struct ResetHandler { ~ResetHandler() { QDesktopServices::unsetUrlHandler("file"); } } reset;
             for (const auto &file : {files.at(2), files.at(0)}) {
                 select(tree, file); browser.findChild<QPushButton *>("driveOpen")->click();
-                QCOMPARE(receiver.opened.toLocalFile(), QFileInfo(synced.filePath(file)).canonicalFilePath());
+                QCOMPARE(browser.findChild<QPlainTextEdit *>("previewText")->toPlainText(), QStringLiteral("local file"));
+                QVERIFY(receiver.opened.isEmpty());
+                browser.findChild<QPushButton *>("previewBack")->click();
             }
             QCOMPARE(names(), (QStringList{files.at(0), files.at(2), files.at(1)}));
             browser.findChild<QAction *>("driveViewTiles")->trigger(); QVERIFY(tiles->isVisible());
@@ -2096,6 +2152,11 @@ private Q_SLOTS:
         const auto image = document->render(1, QSize(300, 400));
         QCOMPARE(image.pixelColor(25, 25), QColor(Qt::red));
         QCOMPARE(image.pixelColor(25, 375), QColor(Qt::white));
+        const auto enlarged = document->render(1, QSize(600, 800));
+        // Enlarging the page must also enlarge its content, rather than leaving
+        // the original-size artwork centered in a larger white bitmap.
+        QCOMPARE(enlarged.pixelColor(100, 70), QColor(Qt::red));
+        QCOMPARE(enlarged.pixelColor(170, 110), QColor(Qt::white));
         QCOMPARE(document->render(2, QSize(300, 400)).pixelColor(25, 25), QColor(Qt::blue));
         QVERIFY(document->render(0, QSize(300, 400)).isNull());
         QVERIFY(document->render(1, QSize(5000, 5000)).isNull());
@@ -2107,6 +2168,9 @@ private Q_SLOTS:
         const auto rotatedImage = rotated->render(1, QSize(300, 200));
         QCOMPARE(rotatedImage.pixelColor(25, 25), QColor(Qt::red));
         QCOMPARE(rotatedImage.pixelColor(275, 175), QColor(Qt::white));
+        const auto enlargedRotated = rotated->render(1, QSize(600, 400));
+        QCOMPARE(enlargedRotated.pixelColor(50, 50), QColor(Qt::red));
+        QCOMPARE(enlargedRotated.pixelColor(550, 350), QColor(Qt::white));
         QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
         file.write("invalid PDF"); file.close();
         QVERIFY(!UDrivePdfDocument::open(path, &error));
@@ -2142,6 +2206,12 @@ private Q_SLOTS:
         Q_EMIT tree->activated(tree->currentIndex());
         QTRY_VERIFY_WITH_TIMEOUT(!rendered.isEmpty(), 5000);
         QVERIFY(preview->isVisible()); QVERIFY(!tree->isVisible());
+        QCOMPARE(preview->findChild<QComboBox *>("pdfZoom")->currentData().toInt(), -1); // Fit width
+        auto *canvas = preview->findChild<QAbstractScrollArea *>("pdfCanvas");
+        auto *pageImage = preview->findChild<QLabel *>("pdfPageImage");
+        QVERIFY(canvas && pageImage);
+        QTRY_VERIFY(pageImage->width() >= canvas->viewport()->width() * 0.9
+            && pageImage->width() <= canvas->viewport()->width());
         QVERIFY(preview->findChild<QLabel *>("pdfPageImage")->pixmap().height() > 200);
         QCOMPARE(failed.count(), 0);
         QCOMPARE(downloaded.count(), 1);
@@ -2157,6 +2227,10 @@ private Q_SLOTS:
         preview->findChild<QPushButton *>("pdfNext")->click();
         QTRY_COMPARE(rendered.last().at(0).toInt(), 2);
         QVERIFY(!preview->findChild<QPushButton *>("pdfNext")->isEnabled());
+        // Compare explicit zoom levels; the default fit-width scale depends on
+        // the viewport and can already exceed 200% in a wide window.
+        preview->findChild<QComboBox *>("pdfZoom")->setCurrentIndex(4); // 100%
+        QTRY_COMPARE(preview->findChild<QLabel *>("pdfPageImage")->size(), QSize(300, 400));
         const auto before = preview->findChild<QLabel *>("pdfPageImage")->pixmap().size();
         preview->findChild<QComboBox *>("pdfZoom")->setCurrentIndex(7); // 200%
         QTRY_VERIFY(preview->findChild<QLabel *>("pdfPageImage")->pixmap().height() > before.height());
@@ -2164,9 +2238,19 @@ private Q_SLOTS:
         QTRY_COMPARE(rendered.last().at(0).toInt(), 1);
         if (qEnvironmentVariableIsSet("UDRIVE_PDF_TEST_CAPTURE")) browser.grab().save("/tmp/udrive-pdf-preview.png");
         preview->findChild<QPushButton *>("pdfBack")->click();
-        QTRY_VERIFY(!QFileInfo::exists(cache));
+        QVERIFY(QFileInfo::exists(cache));
         QVERIFY(tree->isVisible());
         QCOMPARE(receiver.opened, QUrl());
+
+        // Reopening the unchanged PDF uses the same temporary version.
+        rendered.clear();
+        QVERIFY(browser.previewSelectedPdf());
+        QTRY_VERIFY(!rendered.isEmpty());
+        QCOMPARE(downloaded.count(), 1);
+        preview->findChild<QPushButton *>("pdfBack")->click();
+        browser.hide();
+        QTRY_VERIFY(!QFileInfo::exists(cache));
+        browser.show();
 
         // Server failures must stay in the file browser and leave no preview copy.
         downloaded.clear(); rendered.clear(); server.pdfResponse = 403;
@@ -2261,6 +2345,76 @@ private Q_SLOTS:
         QCOMPARE(preview->findChild<QSpinBox *>("pdfPage")->maximum(), 2);
         preview->findChild<QPushButton *>("pdfBack")->click();
         QVERIFY(QFileInfo::exists(file.fileName()));
+    }
+
+    void pdfContinuousScrolling()
+    {
+        QTemporaryDir files;
+        const QString path = files.filePath("continuous.pdf");
+        {
+            QPdfWriter writer(path);
+            writer.setResolution(72);
+            writer.setPageSize(QPageSize(QSizeF(300, 400), QPageSize::Point));
+            writer.setPageMargins(QMarginsF());
+            QPainter painter(&writer);
+            painter.fillRect(QRect(0, 0, 300, 400), Qt::red);
+            for (int page = 2; page <= 24; ++page) {
+                const QSize size = page == 2 ? QSize(500, 250) : QSize(300, 400);
+                writer.setPageSize(QPageSize(size, QPageSize::Point));
+                QVERIFY(writer.newPage());
+                painter.fillRect(QRect(QPoint(), size), page == 2 ? Qt::blue : Qt::green);
+            }
+        }
+        UDrivePdfPreview preview;
+        preview.resize(700, 650); preview.show();
+        preview.findChild<QComboBox *>("pdfZoom")->setCurrentIndex(4); // 100%
+        QSignalSpy rendered(&preview, &UDrivePdfPreview::pageRendered);
+        QSignalSpy failed(&preview, &UDrivePdfPreview::previewFailed);
+        preview.openFile(path, "Continuous document");
+        auto *worker = preview.findChild<QProcess *>("pdfRendererProcess");
+        QVERIFY(worker);
+        QSignalSpy requests(worker, &QIODevice::bytesWritten);
+        auto *canvas = preview.findChild<QAbstractScrollArea *>("pdfCanvas");
+        auto *page = preview.findChild<QSpinBox *>("pdfPage");
+        auto *image = preview.findChild<QLabel *>("pdfPageImage");
+        QVERIFY(canvas && page && image);
+        QTRY_VERIFY(!rendered.isEmpty());
+        QCOMPARE(page->maximum(), 24);
+        QCOMPARE(page->value(), 1);
+        // Both pages occupy the same scrollable viewport, including the second
+        // page's different dimensions; it is not a single-page replacement.
+        const auto lowerPageColor = [&] {
+            const auto view = canvas->viewport()->grab().toImage();
+            return view.pixelColor(view.width() / 2, qRound(500 * view.devicePixelRatio()));
+        };
+        QTRY_VERIFY(lowerPageColor().blue() > 200 && lowerPageColor().red() < 30);
+        QCOMPARE(page->value(), 1);
+        QVERIFY(!requests.isEmpty() && requests.size() <= 4); // Only visible pages, not all 24.
+        QVERIFY(canvas->verticalScrollBar()->maximum() > 8000);
+        canvas->verticalScrollBar()->setValue(300);
+        QTRY_COMPARE(page->value(), 2);
+        QTRY_COMPARE(image->size(), QSize(500, 250));
+        QTRY_COMPARE(rendered.last().at(0).toInt(), 2);
+        // Scrolling back reuses the first page and synchronizes the toolbar.
+        canvas->verticalScrollBar()->setValue(0);
+        QTRY_COMPARE(page->value(), 1);
+        QTRY_COMPARE(rendered.last().at(0).toInt(), 1);
+        QVERIFY(image->pixmap().toImage().pixelColor(50, 50).red() > 200);
+        // Page controls jump within the document; zoom retains the selected page.
+        page->setValue(24);
+        QTRY_COMPARE(rendered.last().at(0).toInt(), 24);
+        preview.findChild<QPushButton *>("pdfPrevious")->click();
+        QTRY_COMPARE(rendered.last().at(0).toInt(), 23);
+        preview.findChild<QComboBox *>("pdfZoom")->setCurrentIndex(7); // 200%
+        QTRY_COMPARE(image->size(), QSize(600, 800));
+        QCOMPARE(page->value(), 23);
+        canvas->verticalScrollBar()->setValue(canvas->verticalScrollBar()->maximum());
+        QTRY_COMPARE(page->value(), 24);
+        QTRY_COMPARE(rendered.last().at(0).toInt(), 24);
+        QCOMPARE(failed.count(), 0);
+        preview.clear();
+        QCOMPARE(canvas->verticalScrollBar()->maximum(), 0);
+        QVERIFY(image->pixmap().isNull());
     }
 
     void pdfPreviewLocalAndStaleWork()
@@ -2383,7 +2537,7 @@ private Q_SLOTS:
         QVERIFY(server.authenticated);
     }
 
-    void uploadedImageCanBeDownloadedAndOpened()
+    void uploadedImagePreviewsWithoutSaveDialogAndReusesCache()
     {
         DriveServer server;
         auto *account = new Account(QUuid::createUuid(), "test", server.url());
@@ -2408,38 +2562,356 @@ private Q_SLOTS:
         QTRY_VERIFY(select(tree, QFileInfo(source).fileName()).isValid());
         auto *open = browser.findChild<QPushButton *>("driveOpen");
         QVERIFY(open->isEnabled());
-        QCOMPARE(open->text(), QStringLiteral("Download and open"));
+        QCOMPARE(open->text(), QStringLiteral("Preview"));
 
         FileOpenReceiver receiver;
         QDesktopServices::setUrlHandler("file", &receiver, "record");
         const auto resetHandler = qScopeGuard([] { QDesktopServices::unsetUrlHandler("file"); });
-        const QString destination = files.filePath(QString::fromUtf8("Downloaded ខ្មែរ & 100%.png"));
+        auto *preview = browser.findChild<UDriveFilePreview *>();
+        QSignalSpy ready(preview, &UDriveFilePreview::ready);
         QSignalSpy downloaded(&browser, &UDriveFileBrowser::downloadFinished);
-        const bool previousDialogs = qApp->testAttribute(Qt::AA_DontUseNativeDialogs);
-        qApp->setAttribute(Qt::AA_DontUseNativeDialogs, true);
-        const auto restoreDialogs = qScopeGuard([previousDialogs] { qApp->setAttribute(Qt::AA_DontUseNativeDialogs, previousDialogs); });
-        bool choseDestination = false;
-        QTimer chooser;
-        chooser.setInterval(20);
-        connect(&chooser, &QTimer::timeout, &browser, [&] {
-            if (auto *dialog = browser.findChild<QFileDialog *>(); dialog && dialog->isVisible()) {
-                choseDestination = true;
-                dialog->selectFile(destination);
-                QMetaObject::invokeMethod(dialog, "accept", Qt::QueuedConnection);
-                chooser.stop();
-            }
-        });
-        chooser.start();
-        open->click();
-        QVERIFY(choseDestination);
+        Q_EMIT tree->activated(tree->currentIndex());
+        QVERIFY(!browser.findChild<QFileDialog *>());
         QVERIFY(receiver.opened.isEmpty());
         QTRY_COMPARE(downloaded.count(), 1);
         QVERIFY(downloaded.first().at(0).toBool());
-        QCOMPARE(receiver.opened.toLocalFile(), destination);
-        QCOMPARE(receiver.openedContents, payload); // Only open the committed, complete file.
-        QVERIFY(!QImage(destination).isNull());
+        QTRY_COMPARE(ready.count(), 1);
+        const QString destination = downloaded.first().at(1).toString();
+        QCOMPARE(contents(destination), payload);
+        QVERIFY(!preview->findChild<QLabel *>("previewImage")->pixmap().isNull());
+        QCOMPARE(receiver.opened, QUrl());
+        preview->findChild<QPushButton *>("previewBack")->click();
+        QVERIFY(QFileInfo::exists(destination));
+        open->click();
+        QTRY_COMPARE(ready.count(), 2);
+        QCOMPARE(downloaded.count(), 1); // Same server version: no second transfer.
+        preview->findChild<QPushButton *>("previewBack")->click();
+        QVERIFY(tree->model()->setData(tree->currentIndex(), QStringLiteral("\"version2\""), Qt::UserRole + 9));
+        open->click();
+        QTRY_COMPARE(downloaded.count(), 2);
+        QTRY_COMPARE(ready.count(), 3);
+        state.signOutByUi();
+        QTRY_VERIFY(!QFileInfo::exists(destination));
+        QVERIFY(preview->findChild<QLabel *>("previewImage")->pixmap().isNull());
         QVERIFY(server.authenticated);
     }
+
+    void officeFilesOpenAutomaticallyAsTemporaryReadOnlyCopies()
+    {
+        DriveServer server;
+        server.uploaded.insert("/dav/personal/Report.docx", "office document fixture");
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        QTRY_VERIFY(select(tree, "Report.docx").isValid());
+        FileOpenReceiver receiver;
+        QDesktopServices::setUrlHandler("file", &receiver, "record");
+        const auto resetHandler = qScopeGuard([] { QDesktopServices::unsetUrlHandler("file"); });
+        QSignalSpy downloaded(&browser, &UDriveFileBrowser::downloadFinished);
+        auto *open = browser.findChild<QPushButton *>("driveOpen");
+        QCOMPARE(open->text(), QStringLiteral("Open in app"));
+        open->click();
+        QTRY_VERIFY(!receiver.opened.isEmpty());
+        QCOMPARE(receiver.openedContents, QByteArray("office document fixture"));
+        const QString copy = receiver.opened.toLocalFile();
+        QVERIFY(copy.endsWith(".docx"));
+        QVERIFY(!(QFileInfo(copy).permissions() & QFileDevice::WriteOwner));
+        QCOMPARE(downloaded.count(), 1);
+        QVERIFY(!browser.findChild<QFileDialog *>());
+        receiver.opened.clear();
+        open->click();
+        QTRY_VERIFY(!receiver.opened.isEmpty());
+        QCOMPARE(downloaded.count(), 1);
+        state.signOutByUi();
+        QTRY_VERIFY(!QFileInfo::exists(copy));
+    }
+
+    void mediaPreviewRejectsInvalidImagesAndDoesNotRunUnknownFiles()
+    {
+        DriveServer server;
+        server.uploaded.insert("/dav/personal/broken.png", "<html>This is not an image</html>");
+        server.uploaded.insert("/dav/personal/program.exe", "not an executable");
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        QTRY_VERIFY(select(tree, "broken.png").isValid());
+        auto *preview = browser.findChild<UDriveFilePreview *>();
+        QSignalSpy ready(preview, &UDriveFilePreview::ready);
+        QSignalSpy fetched(&browser, &UDriveFileBrowser::downloadFinished);
+        QVERIFY(browser.previewSelectedFile());
+        QTRY_COMPARE(fetched.count(), 1);
+        QTRY_VERIFY(preview->findChild<QLabel *>("previewStatus")->text().contains("could not be previewed"));
+        QCOMPARE(ready.count(), 0);
+        preview->findChild<QPushButton *>("previewBack")->click();
+        QVERIFY(select(tree, "program.exe").isValid());
+        const int requests = server.requests.count();
+        QVERIFY(browser.previewSelectedFile());
+        QVERIFY(preview->findChild<QLabel *>("previewStatus")->text().contains("not available"));
+        QCOMPARE(server.requests.count(), requests);
+        QVERIFY(!browser.findChild<QFileDialog *>());
+    }
+
+    void developerCodeAndConfigPreview()
+    {
+        for (const auto &name : {"main.py", "script.js", "types.ts", "component.tsx", "native.c", "engine.cpp", "header.h", "run.sh", "config.ini", "server.conf"}) {
+            QCOMPARE(UDriveFilePreview::kindForName(name), UDriveFilePreview::Kind::Text);
+        }
+        DriveServer server;
+        server.uploaded.insert("/dav/personal/main.py", "def hello():\n    return 'UDrive'\n");
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        QTRY_VERIFY(select(tree, "main.py").isValid());
+        auto *preview = browser.findChild<UDriveFilePreview *>();
+        QSignalSpy ready(preview, &UDriveFilePreview::ready);
+        QVERIFY(browser.previewSelectedFile());
+        QTRY_COMPARE(ready.count(), 1);
+        QCOMPARE(browser.findChild<QPlainTextEdit *>("previewText")->toPlainText(), QStringLiteral("def hello():\n    return 'UDrive'\n"));
+        QVERIFY(preview->findChild<QLabel *>("previewStatus")->text().contains("text preview"));
+    }
+
+    void audioExtensionsPreview()
+    {
+        for (const auto &name : {"track.mp3", "audio.wav", "voice.m4a", "lossless.flac", "sound.ogg"}) {
+            QCOMPARE(UDriveFilePreview::kindForName(name), UDriveFilePreview::Kind::Audio);
+            QCOMPARE(UDriveFilePreview::maximumBytes(UDriveFilePreview::Kind::Audio), 100LL * 1024 * 1024);
+        }
+        UDriveFilePreview preview;
+        preview.showLoading("track.mp3");
+        QCOMPARE(preview.findChild<QLabel *>("previewStatus")->text(), QStringLiteral("Loading preview…"));
+    }
+
+    void orphanPreviewSweepRemovesStaleAndReadOnlyDirectories()
+    {
+        const QString tempRoot = QDir::tempPath();
+        const QString previewDirName = QStringLiteral("udrive-preview-test-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+        const QString pdfDirName = QStringLiteral("udrive-pdf-test-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+        QDir temp(tempRoot);
+        QVERIFY(temp.mkdir(previewDirName));
+        QVERIFY(temp.mkdir(pdfDirName));
+        const QString previewPath = temp.filePath(previewDirName);
+        const QString pdfPath = temp.filePath(pdfDirName);
+        QFile previewFile(previewPath + "/locked-doc.docx");
+        QVERIFY(previewFile.open(QIODevice::WriteOnly));
+        previewFile.write("locked content");
+        previewFile.close();
+        QVERIFY(previewFile.setPermissions(QFileDevice::ReadOwner));
+        QFile pdfFile(pdfPath + "/test.pdf");
+        QVERIFY(pdfFile.open(QIODevice::WriteOnly));
+        pdfFile.write("pdf content");
+        pdfFile.close();
+        QVERIFY(pdfFile.setPermissions(QFileDevice::ReadOwner));
+        QVERIFY(QFileInfo::exists(previewPath));
+        QVERIFY(QFileInfo::exists(pdfPath));
+        UDriveFileBrowser::cleanupOrphanedPreviews();
+        QVERIFY(!QFileInfo::exists(previewPath));
+        QVERIFY(!QFileInfo::exists(pdfPath));
+    }
+
+    void previewCachesArePrivateToEachAccount()
+    {
+        DriveServer server;
+        QImage image(16, 16, QImage::Format_RGB32); image.fill(Qt::green);
+        QByteArray png; QBuffer buffer(&png); buffer.open(QIODevice::WriteOnly); QVERIFY(image.save(&buffer, "PNG"));
+        server.uploaded.insert("/dav/personal/private.png", png);
+        auto accountFor = [&] {
+            auto *account = new Account(QUuid::createUuid(), "test", server.url());
+            account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+            account->credentials()->fetchFromKeychain(); return account;
+        };
+        AccountState first(accountFor()), second(accountFor());
+        UDriveFileBrowser firstBrowser(&first), secondBrowser(&second);
+        QSignalSpy firstFetched(&firstBrowser, &UDriveFileBrowser::downloadFinished), secondFetched(&secondBrowser, &UDriveFileBrowser::downloadFinished);
+        for (auto *browser : {&firstBrowser, &secondBrowser}) {
+            auto *tree = browser->findChild<QTreeView *>("driveFiles");
+            QTRY_VERIFY(select(tree, "private.png").isValid());
+            QVERIFY(browser->previewSelectedFile());
+        }
+        QTRY_COMPARE(firstFetched.count(), 1); QTRY_COMPARE(secondFetched.count(), 1);
+        const QString firstPath = firstFetched.first().at(1).toString();
+        const QString secondPath = secondFetched.first().at(1).toString();
+        QVERIFY(firstPath != secondPath);
+        first.signOutByUi();
+        QTRY_VERIFY(!QFileInfo::exists(firstPath));
+        QVERIFY(QFileInfo::exists(secondPath));
+        second.signOutByUi();
+        QTRY_VERIFY(!QFileInfo::exists(secondPath));
+    }
+
+#ifdef UDRIVE_HAS_MULTIMEDIA
+    void videoControlsStayAtBottom()
+    {
+        QStackedWidget host;
+        host.setObjectName(QStringLiteral("stack"));
+        host.setStyleSheet(QStringLiteral("QStackedWidget#stack QPushButton { min-height: 20px; padding: 6px 10px; border: 1px solid #444; }"));
+        auto *preview = new UDriveFilePreview(&host);
+        QSignalSpy ready(preview, &UDriveFilePreview::ready);
+        host.addWidget(preview);
+        host.resize(1250, 850);
+        host.show();
+        preview->openFile(QFINDTESTDATA("testfiles/udrive-preview.mp4"), QStringLiteral("Clip.mov"));
+        auto *screen = preview->findChild<QVideoWidget *>("previewVideo");
+        auto *controls = preview->findChild<QWidget *>("previewControlBar");
+        auto *container = preview->findChild<QWidget *>("previewVideoContainer");
+        auto *seek = preview->findChild<QSlider *>("previewSeek");
+        auto *button = preview->findChild<QPushButton *>("previewFullScreen");
+        auto *player = preview->findChild<QMediaPlayer *>("previewPlayer");
+        QVERIFY(screen && controls && container && seek && button && player);
+        QTRY_VERIFY_WITH_TIMEOUT(screen->videoSink()->videoFrame().isValid(), 10000);
+        player->pause();
+        QTRY_COMPARE(preview->findChild<QLabel *>("previewStatus")->text(), QStringLiteral("Video preview"));
+        QCOMPARE(ready.count(), 1);
+        QTRY_VERIFY(screen->height() > 100);
+        QVERIFY(controls->height() <= 80);
+        QCOMPARE(controls->geometry().bottom(), container->contentsRect().bottom());
+        QVERIFY(screen->height() > controls->height());
+        QVERIFY(button->mapTo(controls, QPoint()).y() - seek->mapTo(controls, QPoint()).y() < 40);
+        host.resize(840, 640);
+        QTRY_VERIFY(controls->height() <= 80);
+        QCOMPARE(controls->geometry().bottom(), container->contentsRect().bottom());
+        button->click();
+        auto *window = preview->findChild<QWidget *>("previewFullScreenWindow");
+        QTRY_VERIFY(window->isVisible());
+        QVERIFY(controls->height() <= 80);
+        button->click();
+        QTRY_VERIFY(!window->isVisible());
+        QCOMPARE(screen->parentWidget(), container);
+        QCOMPARE(controls->parentWidget(), container);
+        QVERIFY(screen->height() > controls->height());
+        QCOMPARE(controls->geometry().bottom(), container->contentsRect().bottom());
+        QCOMPARE(ready.count(), 1);
+    }
+
+    void videoFullScreenControls_data()
+    {
+        QTest::addColumn<QString>("exitMethod");
+        for (const auto &method : {"button", "escape-video", "escape-controls", "f", "double-click", "close", "clear", "destroy"})
+            QTest::newRow(method) << QString::fromLatin1(method);
+    }
+
+    void videoFullScreenControls()
+    {
+        QFETCH(QString, exitMethod);
+        auto preview = std::make_unique<UDriveFilePreview>();
+        preview->resize(840, 640);
+        preview->show();
+        preview->openFile(QFINDTESTDATA("testfiles/udrive-preview.mp4"), QStringLiteral("Clip.mp4"));
+        auto *screen = preview->findChild<QVideoWidget *>("previewVideo");
+        auto *player = preview->findChild<QMediaPlayer *>("previewPlayer");
+        auto *controls = preview->findChild<QWidget *>("previewControlBar");
+        auto *button = preview->findChild<QPushButton *>("previewFullScreen");
+        auto *window = preview->findChild<QWidget *>("previewFullScreenWindow");
+        QVERIFY(screen && player && controls && button && window);
+        const auto source = player->source();
+        QVERIFY(!source.isEmpty());
+        button->click();
+        QTRY_VERIFY(window->isVisible() && window->isFullScreen());
+        QVERIFY(controls->isVisible());
+        QVERIFY(button->isVisible());
+        QCOMPARE(screen->window(), window);
+        QCOMPARE(button->window(), window);
+        QCOMPARE(button->accessibleName(), QStringLiteral("Exit full screen"));
+        if (exitMethod.startsWith(QStringLiteral("escape")) || exitMethod == QStringLiteral("f")) {
+            // Programmatic clicks don't activate the macOS application.
+            // Establish Qt's active window for the synthetic shortcut events.
+            QApplication::setActiveWindow(window);
+        }
+
+        if (exitMethod == QStringLiteral("button")) button->click();
+        else if (exitMethod == QStringLiteral("escape-video")) {
+            screen->setFocus();
+            QTest::keyClick(screen, Qt::Key_Escape);
+        } else if (exitMethod == QStringLiteral("escape-controls")) {
+            button->setFocus();
+            QTest::keyClick(button, Qt::Key_Escape);
+        } else if (exitMethod == QStringLiteral("f")) {
+            button->setFocus();
+            QTest::keyClick(button, Qt::Key_F);
+        } else if (exitMethod == QStringLiteral("double-click")) QTest::mouseDClick(screen, Qt::LeftButton);
+        else if (exitMethod == QStringLiteral("close")) window->close();
+        else if (exitMethod == QStringLiteral("clear")) preview->clear();
+        else if (exitMethod == QStringLiteral("destroy")) {
+            const QPointer<QWidget> guard(window);
+            preview.reset();
+            QVERIFY(!guard);
+            return;
+        }
+
+        QTRY_VERIFY(!window->isVisible());
+        QCOMPARE(screen->window(), preview.get());
+        QCOMPARE(button->window(), preview.get());
+        QCOMPARE(button->accessibleName(), QStringLiteral("Full screen"));
+        if (exitMethod == QStringLiteral("clear")) QVERIFY(player->source().isEmpty());
+        else {
+            QVERIFY(controls->isVisible());
+            QCOMPARE(player->source(), source);
+        }
+    }
+
+    void uploadedVideoPlaysInsideUDrive()
+    {
+        // Original 32x32 solid-color H.264 fixture generated with AVAssetWriter.
+        DriveServer server;
+        const QByteArray video = contents(QFINDTESTDATA("testfiles/udrive-preview.mp4"));
+        QVERIFY(!video.isEmpty());
+        server.uploaded.insert("/dav/personal/Clip.mp4", video);
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state); browser.resize(840, 640); browser.show();
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        QTRY_VERIFY(select(tree, "Clip.mp4").isValid());
+        auto *preview = browser.findChild<UDriveFilePreview *>();
+        auto *player = preview->findChild<QMediaPlayer *>("previewPlayer");
+        auto *screen = preview->findChild<QVideoWidget *>("previewVideo");
+        QVERIFY(player && screen);
+        QSignalSpy frames(screen->videoSink(), &QVideoSink::videoFrameChanged);
+        QSignalSpy fetched(&browser, &UDriveFileBrowser::downloadFinished);
+        QVERIFY(browser.previewSelectedFile());
+        QTRY_COMPARE(fetched.count(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(player->duration() > 0, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!frames.isEmpty(), 10000);
+        QVERIFY(player->source().isLocalFile());
+        auto *timeLabel = preview->findChild<QLabel *>("previewTime");
+        auto *forward10 = preview->findChild<QPushButton *>("previewForward10");
+        auto *rewind10 = preview->findChild<QPushButton *>("previewRewind10");
+        auto *fullScreenBtn = preview->findChild<QPushButton *>("previewFullScreen");
+        QVERIFY(timeLabel && forward10 && rewind10 && fullScreenBtn);
+        QVERIFY(timeLabel->text().contains('/'));
+        forward10->click();
+        rewind10->click();
+        QVERIFY(!browser.findChild<QFileDialog *>());
+        preview->findChild<QPushButton *>("previewBack")->click();
+        QVERIFY(player->source().isEmpty());
+        QVERIFY(browser.previewSelectedFile());
+        QTRY_VERIFY(player->duration() > 0);
+        QCOMPARE(fetched.count(), 1);
+        fullScreenBtn->click();
+        auto *fullScreenWindow = preview->findChild<QWidget *>("previewFullScreenWindow");
+        QTRY_VERIFY(fullScreenWindow->isVisible());
+        fullScreenBtn->click();
+        QTRY_VERIFY(!fullScreenWindow->isVisible());
+        frames.clear();
+        player->setPosition(0);
+        player->play();
+        QTRY_VERIFY_WITH_TIMEOUT(!frames.isEmpty(), 10000);
+        fullScreenBtn->click();
+        QTRY_VERIFY(fullScreenWindow->isVisible());
+        browser.hide();
+        QVERIFY(!fullScreenWindow->isVisible());
+        QVERIFY(player->source().isEmpty());
+    }
+#endif
 
     void failedOrCancelledDownloadsDoNotOpenFiles()
     {
@@ -2588,12 +3060,14 @@ private Q_SLOTS:
         QDesktopServices::setUrlHandler("file", &receiver, "record");
         browser.findChild<QPushButton *>("driveOpen")->click();
         QDesktopServices::unsetUrlHandler("file");
-        QCOMPARE(receiver.opened.toLocalFile(), QFileInfo(syncedFile).canonicalFilePath());
+        QTRY_COMPARE(browser.findChild<QPlainTextEdit *>("previewText")->toPlainText(), QStringLiteral("local synced file"));
+        QVERIFY(receiver.opened.isEmpty());
+        browser.findChild<QPushButton *>("previewBack")->click();
         // A symlink to a file outside the sync root must not be opened as synced.
         QVERIFY(QFile::link(destination, synced.path() + "/denied.txt"));
         QVERIFY(select(tree, "denied.txt").isValid());
         QVERIFY(browser.findChild<QPushButton *>("driveOpen")->isEnabled());
-        QCOMPARE(browser.findChild<QPushButton *>("driveOpen")->text(), QStringLiteral("Download and open"));
+        QCOMPARE(browser.findChild<QPushButton *>("driveOpen")->text(), QStringLiteral("Preview"));
         receiver.opened.clear();
         QDesktopServices::setUrlHandler("file", &receiver, "record");
         const auto resetHandler = qScopeGuard([] { QDesktopServices::unsetUrlHandler("file"); });
@@ -2807,6 +3281,113 @@ private Q_SLOTS:
         QTRY_COMPARE(tree->model()->rowCount(), 1);
         QCOMPARE(tree->model()->index(0, 0).data().toString(), QStringLiteral("Shared document.pdf"));
         QVERIFY(server.authenticated);
+    }
+
+    void uploadLargeFileViaTus()
+    {
+        DriveServer server(true);
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+
+        QVariantMap capMap;
+        QVariantMap spacesMap;
+        spacesMap[QStringLiteral("enabled")] = true;
+        spacesMap[QStringLiteral("version")] = QStringLiteral("1.0.0");
+        capMap[QStringLiteral("spaces")] = spacesMap;
+
+        QVariantMap filesMap;
+        QVariantMap tusMap;
+        tusMap[QStringLiteral("version")] = QStringLiteral("1.0.0");
+        tusMap[QStringLiteral("resumable")] = QStringLiteral("1.0.0");
+        tusMap[QStringLiteral("extension")] = QStringLiteral("creation,creation-with-upload");
+        tusMap[QStringLiteral("max_chunk_size")] = 5ULL * 1024 * 1024;
+        filesMap[QStringLiteral("tus_support")] = tusMap;
+        capMap[QStringLiteral("files")] = filesMap;
+        account->setCapabilities(Capabilities(server.url(), capMap));
+
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        QTRY_COMPARE_WITH_TIMEOUT(tree->model()->rowCount(), 7, 5000);
+        QSignalSpy operations(&browser, &UDriveFileBrowser::operationFinished);
+        auto finish = [&](bool success) {
+            QElapsedTimer timer; timer.start();
+            while (operations.isEmpty() && timer.elapsed() < 10000) QTest::qWait(10);
+            return operations.count() == 1 && operations.takeFirst().at(0).toBool() == success;
+        };
+
+        QTemporaryDir local;
+        const QString localFile = local.filePath("presentation.pptx");
+        const QByteArray payload(12 * 1024 * 1024, 'U');
+        {
+            QFile file(localFile);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            QCOMPARE(file.write(payload), payload.size());
+        }
+
+        QVERIFY(browser.uploadFile(localFile));
+        QVERIFY(finish(true));
+        QCOMPARE(server.uploaded.value("/dav/personal/presentation.pptx").size(), payload.size());
+        QCOMPARE(server.uploaded.value("/dav/personal/presentation.pptx"), payload);
+    }
+
+    void cancelTusUploadStopsTransferAndReenablesActions()
+    {
+        DriveServer server(true);
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+
+        QVariantMap capMap;
+        QVariantMap spacesMap;
+        spacesMap[QStringLiteral("enabled")] = true;
+        spacesMap[QStringLiteral("version")] = QStringLiteral("1.0.0");
+        capMap[QStringLiteral("spaces")] = spacesMap;
+
+        QVariantMap filesMap;
+        QVariantMap tusMap;
+        tusMap[QStringLiteral("version")] = QStringLiteral("1.0.0");
+        tusMap[QStringLiteral("resumable")] = QStringLiteral("1.0.0");
+        tusMap[QStringLiteral("extension")] = QStringLiteral("creation,creation-with-upload");
+        tusMap[QStringLiteral("max_chunk_size")] = 5ULL * 1024 * 1024;
+        filesMap[QStringLiteral("tus_support")] = tusMap;
+        capMap[QStringLiteral("files")] = filesMap;
+        account->setCapabilities(Capabilities(server.url(), capMap));
+
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        QTRY_COMPARE_WITH_TIMEOUT(tree->model()->rowCount(), 7, 5000);
+        QSignalSpy operations(&browser, &UDriveFileBrowser::operationFinished);
+        auto finish = [&](bool success) {
+            QElapsedTimer timer; timer.start();
+            while (operations.isEmpty() && timer.elapsed() < 5000) QTest::qWait(10);
+            return operations.count() == 1 && operations.takeFirst().at(0).toBool() == success;
+        };
+
+        QTemporaryDir local;
+        const QString localFile = local.filePath("cancelled.pptx");
+        const QByteArray payload(12 * 1024 * 1024, 'X');
+        {
+            QFile file(localFile);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            QCOMPARE(file.write(payload), payload.size());
+        }
+
+        server.holdUpload = true;
+        QVERIFY(browser.uploadFile(localFile));
+        QTRY_VERIFY(server.requests.contains({"POST", "/dav/personal"}));
+        auto *cancelBtn = browser.findChild<QPushButton *>("driveCancelDownload");
+        QVERIFY(cancelBtn);
+        cancelBtn->click();
+        QVERIFY(finish(false));
+        QVERIFY(!server.uploaded.contains("/dav/personal/cancelled.pptx"));
+        server.holdUpload = false;
+        browser.showShares();
+        browser.findChild<QAction *>(QStringLiteral("driveSharedWithMe"))->trigger();
+        QTRY_COMPARE(tree->model()->rowCount(), 1);
+        QCOMPARE(tree->model()->index(0, 0).data().toString(), QStringLiteral("Shared document.pdf"));
     }
 
     void mutationMultistatus_data()
@@ -3274,7 +3855,7 @@ private Q_SLOTS:
             labels.append(action->text()); QVERIFY(!action->icon().isNull());
             QVERIFY(!action->isShortcutVisibleInContextMenu());
         }
-        QCOMPARE(labels, QStringList({"Download and open", "Share", "Copy permanent link", "Download", "Rename", "Details"}));
+        QCOMPARE(labels, QStringList({"Preview", "Share", "Copy permanent link", "Download", "Rename", "Details"}));
         menu->close();
         close->click(); QVERIFY(details->isHidden());
         detailsAction->trigger(); QVERIFY(details->isVisible());

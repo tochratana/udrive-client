@@ -13,6 +13,7 @@
  */
 #pragma once
 
+#include "owncloudlib.h"
 #include <QFile>
 
 namespace OCC {
@@ -21,7 +22,7 @@ namespace OCC {
  * @brief The UploadDevice class
  * @ingroup libsync
  */
-class UploadDevice : public QIODevice
+class OWNCLOUDSYNC_EXPORT UploadDevice : public QIODevice
 {
     Q_OBJECT
 public:

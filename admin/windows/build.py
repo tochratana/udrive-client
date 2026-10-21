@@ -31,6 +31,11 @@ CodeSigning/MacDeveloperId =
 CodeSigning/MacKeychainPath =
 ContinuousIntegration/UpdateRepository = False
 Compile/BuildType = RelWithDebInfo
+
+[BlueprintSettings]
+libs/qt6/qtmultimedia.version = ${Variables:QtVersion}
+libs/ffmpeg.ignored = True
+libs/pulseaudio.ignored = True
 """
 
 
@@ -88,9 +93,10 @@ def brand_blueprint(path):
         'self.webpage = "https://github.com/owncloud/client"': 'self.webpage = "https://drive.unity-workspace.com"',
         'self.defines["company"] = "ownCloud GmbH"': 'self.defines["company"] = "Unity Workspace"\n        self.defines["license"] = self.sourceDir() / "COPYING"',
         'self.buildDir() / "src/gui/owncloud.ico"': 'self.buildDir() / "src/gui/udrive.ico"',
+        'self.runtimeDependencies["libs/qt/qtdeclarative"] = None': 'self.runtimeDependencies["libs/qt/qtdeclarative"] = None\n        self.runtimeDependencies["libs/qt6/qtmultimedia"] = None',
     }
     for old, new in changes.items():
-        if old not in source and new in source:
+        if source.count(new) == 1 and old not in source.replace(new, "", 1):
             continue
         if source.count(old) != 1:
             raise BuildError("The pinned Craft blueprint has changed; stopped before packaging another product.")
@@ -242,9 +248,10 @@ def build(args):
     craft("-c", "--set", f"srcDir={ROOT}", PACKAGE)
     craft("-c", "--set", "args=-DBUILD_TESTING=OFF -DBUILD_SHELL_INTEGRATION=OFF -DWITH_AUTO_UPDATER=OFF", PACKAGE)
     craft("-c", "dev-utils/nsis")
+    brand_blueprint(work_root / "blueprints/craft-blueprints-owncloud/owncloud/owncloud-client/owncloud-client.py")
+    craft("-c", "--set", "args=-DQT_FEATURE_ffmpeg=OFF -DQT_FEATURE_wmf=ON -DQT_DEFAULT_MEDIA_BACKEND=windows", "libs/qt6/qtmultimedia")
     craft("-c", "--install-deps", PACKAGE)
     preserve_nsis_install_directory(work_root / "craft-clone/bin/Packager/Nsis/NullsoftInstaller.nsi")
-    brand_blueprint(work_root / "blueprints/craft-blueprints-owncloud/owncloud/owncloud-client/owncloud-client.py")
     craft("-c", "--no-cache", PACKAGE)
     prefix = work_root / TARGET
     if pe_machine(prefix / "bin/udrive.exe") != 0x8664:

@@ -52,6 +52,7 @@ set(client_SRCS
     udriveadminapi.cpp
     udriveadminwidget.cpp
     udrivethumbnails.cpp
+    udrivefilepreview.cpp
     udriveicons.qrc
     tlserrordialog.cpp
     syncrunfilelog.cpp
@@ -102,6 +103,14 @@ target_link_libraries(owncloudGui
 )
 
 apply_common_target_settings(owncloudGui)
+option(UDRIVE_REQUIRE_MULTIMEDIA "Require the in-app video player" ${WIN32})
+find_package(Qt6 COMPONENTS Multimedia MultimediaWidgets QUIET)
+if(TARGET Qt6::Multimedia AND TARGET Qt6::MultimediaWidgets)
+    target_link_libraries(owncloudGui PUBLIC Qt6::Multimedia Qt6::MultimediaWidgets)
+    target_compile_definitions(owncloudGui PUBLIC UDRIVE_HAS_MULTIMEDIA)
+elseif(UDRIVE_REQUIRE_MULTIMEDIA)
+    message(FATAL_ERROR "UDrive video preview requires Qt Multimedia and MultimediaWidgets. Install the qtmultimedia Craft dependency.")
+endif()
 ecm_add_qml_module(owncloudGui
         URI org.ownCloud.gui
         VERSION 1.0
@@ -145,6 +154,7 @@ IF( APPLE )
     set_source_files_properties(guiutility_mac.mm PROPERTIES COMPILE_DEFINITIONS SOCKETAPI_TEAM_IDENTIFIER_PREFIX="${SOCKETAPI_TEAM_IDENTIFIER_PREFIX}")
 elseif( WIN32 )
     target_sources(owncloudGui PRIVATE
+            udrivepdfpreview.cpp
             guiutility_win.cpp
             folderwatcher_win.cpp)
 elseif(UNIX AND NOT APPLE)
@@ -157,6 +167,14 @@ elseif(UNIX AND NOT APPLE)
             guiutility_unix.cpp)
 endif()
 
+if(WIN32)
+    add_executable(udrivePdfRenderer udrivepdfrenderer.cpp udrivepdfdocument_win.cpp)
+    set_target_properties(udrivePdfRenderer PROPERTIES OUTPUT_NAME "udrive-pdf-renderer")
+    apply_common_target_settings(udrivePdfRenderer)
+    target_link_libraries(udrivePdfRenderer PRIVATE Qt::Core Qt::Gui windowsapp)
+    install(TARGETS udrivePdfRenderer RUNTIME DESTINATION "${KDE_INSTALL_BINDIR}")
+endif()
+
 if(WITH_AUTO_UPDATER)
     add_subdirectory(updater)
     target_compile_definitions(owncloudGui PUBLIC $<BUILD_INTERFACE:WITH_AUTO_UPDATER>)
@@ -165,6 +183,9 @@ endif()
 find_package(Qt6 REQUIRED COMPONENTS Core)
 
 add_executable(owncloud main.cpp)
+if(WIN32)
+    add_dependencies(owncloud udrivePdfRenderer)
+endif()
 
 set_target_properties(owncloud PROPERTIES
     OUTPUT_NAME "${APPLICATION_EXECUTABLE}"
