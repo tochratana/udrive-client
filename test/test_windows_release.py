@@ -7,7 +7,7 @@ from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import importlib.util
 import io
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import struct
 import tempfile
@@ -299,6 +299,18 @@ class TestWindowsRelease(unittest.TestCase):
         self.assertEqual(settings['CodeSigning/Enabled'], 'False')
         self.assertEqual(settings['Paths/Python'], 'C:/Python312/python.exe')
         self.assertEqual(settings['Packager/Destination'], 'C:/udrive-build/packages')
+        # CraftMaster maps GeneralSettings section/key entries into the actual
+        # CraftSettings.ini sections. Qt's source recipe requires this value
+        # even when every other Qt dependency was restored from binary cache.
+        craft_settings = configparser.ConfigParser(interpolation=None)
+        for name, value in settings.items():
+            section, key = name.split('/', 1)
+            if not craft_settings.has_section(section):
+                craft_settings.add_section(section)
+            craft_settings[section][key] = value
+        drive = PureWindowsPath(craft_settings['ShortPath']['DriveLetter'])
+        self.assertEqual(drive.drive, 'Z:')
+        self.assertTrue(drive.is_absolute())
 
     def test_test_installer_metadata_does_not_claim_signing_or_install_validation(self):
         args = self.fixture()

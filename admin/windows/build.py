@@ -32,6 +32,8 @@ CodeSigning/MacDeveloperId =
 CodeSigning/MacKeychainPath =
 ContinuousIntegration/UpdateRepository = False
 Compile/BuildType = RelWithDebInfo
+# Qt source builds use a substituted drive to avoid Windows path-length limits.
+ShortPath/DriveLetter = Z:/
 
 [BlueprintSettings]
 libs/qt6/qtmultimedia.version = ${Variables:QtVersion}
