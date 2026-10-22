@@ -43,19 +43,29 @@
 #include <QFile>
 #include <QInputDialog>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QPlainTextEdit>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QImageReader>
 #include <QTextBoundaryFinder>
 #include <QMessageBox>
 #include <QXmlStreamReader>
 #include <QDateTime>
+#include <QDateEdit>
+#include <QCalendarWidget>
+#include <QTableView>
+#include <QHeaderView>
+#include <QTextCharFormat>
+#include <QSpinBox>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHeaderView>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QFrame>
 #include <QHelpEvent>
 #include <QLabel>
@@ -71,6 +81,7 @@
 #include <QSaveFile>
 #include <QSignalBlocker>
 #include <QStyle>
+#include <QStylePainter>
 #include <QSortFilterProxyModel>
 #include <QStandardItemModel>
 #include <QStandardPaths>
@@ -90,9 +101,45 @@ namespace OCC {
 namespace {
 enum Roles { PathRole = Qt::UserRole + 1, DirectoryRole, SortRole, RootRole, SpaceRole,
     PermissionsRole, FavoriteRole, FavoriteKnownRole, EtagRole, LinkRole, RestorePathRole, ThumbnailRole, OpenedRole, TrashedRole,
-    ShareHiddenRole, ShareSharersRole, ShareUnavailableRole, LocationRole, SharePeopleRole, SharePermissionsLoadedRole };
+    ShareHiddenRole, ShareSharersRole, ShareUnavailableRole, LocationRole, SharePeopleRole, SharePermissionsLoadedRole, SharePublicLinksRole };
+
+QString fileSharingSummary(const QStringList &people, int publicLinks)
+{
+    QStringList parts;
+    if (!people.isEmpty()) parts.append(UDriveFileBrowser::tr("Shared with %1").arg(people.join(QStringLiteral(", "))));
+    if (publicLinks > 0) parts.append(UDriveFileBrowser::tr("%n public link(s)", nullptr, publicLinks));
+    return parts.isEmpty() ? UDriveFileBrowser::tr("Private (only you)") : parts.join(QStringLiteral(" · "));
+}
 
 enum RowAction { RowFavorite, RowShare, RowLink, RowMore };
+
+class FileDetailsActionButton : public QPushButton
+{
+public:
+    using QPushButton::QPushButton;
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QStyleOptionButton option;
+        initStyleOption(&option);
+        const QString label = option.text;
+        const QIcon image = option.icon;
+        option.text.clear();
+        option.icon = QIcon();
+        QStylePainter painter(this);
+        painter.drawControl(QStyle::CE_PushButton, option);
+        // Use fixed icon and text columns on every platform.
+        const QRect iconRect(12, (height() - 20) / 2, 20, 20);
+        const QRect textRect(44, 0, qMax(0, width() - 56), height());
+        const auto mode = isEnabled() ? QIcon::Normal : QIcon::Disabled;
+        painter.drawItemPixmap(QStyle::visualRect(layoutDirection(), rect(), iconRect), Qt::AlignCenter,
+            image.pixmap(QSize(20, 20), devicePixelRatioF(), mode));
+        painter.drawItemText(QStyle::visualRect(layoutDirection(), rect(), textRect),
+            Qt::AlignVCenter | Qt::AlignLeading | Qt::TextShowMnemonic, option.palette, isEnabled(),
+            fontMetrics().elidedText(label, Qt::ElideRight, textRect.width()), QPalette::ButtonText);
+    }
+};
 
 QMenu *createFileMenu(QWidget *parent)
 {
@@ -954,11 +1001,11 @@ private:
 };
 }
 
-DeleteConfirmDialog::DeleteConfirmDialog(const QString &fileName, bool isFolder, QWidget *parent, bool permanent)
+DeleteConfirmDialog::DeleteConfirmDialog(const QString &fileName, bool isFolder, QWidget *parent, bool permanent, int trashCount)
     : QDialog(parent)
 {
     setObjectName(QStringLiteral("deleteConfirmDialog"));
-    setWindowTitle(permanent ? tr("Delete permanently") : tr("Move to Deleted files"));
+    setWindowTitle(trashCount > 0 ? tr("Empty trash") : permanent ? tr("Delete permanently") : tr("Move to Deleted files"));
     setModal(true);
     setWindowFlags((windowFlags() | Qt::Dialog) & ~Qt::WindowContextHelpButtonHint);
     setMinimumWidth(440);
@@ -992,13 +1039,15 @@ DeleteConfirmDialog::DeleteConfirmDialog(const QString &fileName, bool isFolder,
     textLayout->setSpacing(5);
     textLayout->setAlignment(Qt::AlignVCenter);
 
-    auto *titleLabel = new QLabel((permanent ? tr("Permanently delete “%1”?") : tr("Move “%1” to Deleted files?")).arg(fileName), this);
+    auto *titleLabel = new QLabel((trashCount > 0 ? tr("Empty Deleted files in “%1”?") : permanent ? tr("Permanently delete “%1”?") : tr("Move “%1” to Deleted files?")).arg(fileName), this);
     titleLabel->setObjectName(QStringLiteral("confirmTitle"));
     titleLabel->setTextFormat(Qt::PlainText);
     titleLabel->setWordWrap(true);
     textLayout->addWidget(titleLabel);
 
-    const QString descText = permanent
+    const QString descText = trashCount > 0
+        ? tr("All %n item(s) in this space’s Deleted files will be permanently deleted, including items hidden by search and the contents of deleted folders. This action cannot be undone.", nullptr, trashCount)
+        : permanent
         ? (isFolder ? tr("This folder and all of its contents will be permanently deleted. This action cannot be undone.")
                     : tr("This item will be permanently deleted. This action cannot be undone."))
         : (isFolder ? tr("All contents inside this folder will also be moved to Deleted files. You can restore them anytime.")
@@ -1021,7 +1070,7 @@ DeleteConfirmDialog::DeleteConfirmDialog(const QString &fileName, bool isFolder,
     connect(cancelButton, &QPushButton::clicked, this, &QDialog::reject);
     buttonsLayout->addWidget(cancelButton);
 
-    auto *deleteButton = new QPushButton(permanent ? tr("Delete permanently") : tr("Delete"), this);
+    auto *deleteButton = new QPushButton(trashCount > 0 ? tr("Empty trash") : permanent ? tr("Delete permanently") : tr("Delete"), this);
     deleteButton->setObjectName(QStringLiteral("confirmDeleteButton"));
     deleteButton->setCursor(Qt::PointingHandCursor);
     connect(deleteButton, &QPushButton::clicked, this, &QDialog::accept);
@@ -1151,6 +1200,639 @@ QString UDriveInputDialog::getText(QWidget *parent, const QString &title, const 
     return (result == QDialog::Accepted) ? dialog.text() : QString();
 }
 
+UDriveMoveDialog::UDriveMoveDialog(AccountState *accountState, const QUrl &rootUrl, const QString &spaceName,
+                                   const QString &sourcePath, const QString &sourceName, bool isFolder,
+                                   const QList<QPair<QString, QString>> &initialFolders,
+                                   QWidget *parent)
+    : QDialog(parent)
+    , _accountState(accountState)
+    , _rootUrl(rootUrl)
+    , _spaceName(spaceName)
+    , _sourcePath(sourcePath)
+    , _sourceName(sourceName.isEmpty() ? sourcePath.section(QLatin1Char('/'), -1) : sourceName)
+    , _isFolder(isFolder)
+{
+    const int lastSlash = _sourcePath.lastIndexOf(QLatin1Char('/'));
+    _currentParentFolder = (lastSlash >= 0) ? _sourcePath.left(lastSlash) : QString();
+
+    setObjectName(QStringLiteral("udriveMoveDialog"));
+    setWindowTitle(tr("Move item"));
+    setModal(true);
+    setWindowFlags((windowFlags() | Qt::Dialog) & ~Qt::WindowContextHelpButtonHint);
+    resize(480, 420);
+    setMinimumSize(420, 360);
+
+    const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+    const QString bg = dark ? QStringLiteral("#242528") : QStringLiteral("#FFFFFF");
+    const QString text = dark ? QStringLiteral("#EDEDED") : QStringLiteral("#1F2328");
+    const QString subtext = dark ? QStringLiteral("#9BA3AF") : QStringLiteral("#59636E");
+    const QString border = dark ? QStringLiteral("#3E4146") : QStringLiteral("#D0D7DE");
+    const QString inputBg = dark ? QStringLiteral("#1B1C1E") : QStringLiteral("#FAFCFB");
+    const QString cancelBg = dark ? QStringLiteral("#2E3135") : QStringLiteral("#F3F4F6");
+    const QString cancelHover = dark ? QStringLiteral("#383B40") : QStringLiteral("#E5E7EB");
+    const QString primaryDisabled = dark ? QStringLiteral("#2A4733") : QStringLiteral("#A3E4B8");
+    const QString primaryDisabledText = dark ? QStringLiteral("#587864") : QStringLiteral("#FFFFFF");
+    const QString treeItemSelected = dark ? QStringLiteral("#2A3E31") : QStringLiteral("#DCFCE7");
+    const QString treeItemTextSelected = dark ? QStringLiteral("#4ADE80") : QStringLiteral("#15803D");
+
+    setStyleSheet(QStringLiteral(
+        "QDialog#udriveMoveDialog { background-color: %1; }"
+        "QLabel#moveDialogTitle { color: %3; font-size: 15px; font-weight: 600; }"
+        "QLabel#moveDialogSubtitle { color: %4; font-size: 13px; }"
+        "QLabel#moveDialogDestination { color: %4; font-size: 12px; }"
+        "QTreeWidget#moveDialogTree { background-color: %5; border: 1px solid %2; border-radius: 8px; color: %3; font-size: 13px; outline: none; padding: 4px; selection-background-color: transparent; show-decoration-selected: 1; }"
+        "QTreeWidget#moveDialogTree:focus { outline: none; }"
+        "QTreeWidget#moveDialogTree::item { padding: 5px 4px; border-radius: 6px; min-height: 22px; outline: none; border: none; }"
+        "QTreeWidget#moveDialogTree::item:hover { background-color: %7; }"
+        "QTreeWidget#moveDialogTree::item:selected { background-color: %10; color: %11; }"
+        "QPushButton#moveNewFolderButton { background-color: transparent; color: #22C55E; border: 1px solid #22C55E; border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 500; min-height: 20px; }"
+        "QPushButton#moveNewFolderButton:hover { background-color: rgba(34, 197, 94, 0.1); }"
+        "QPushButton#moveNewFolderButton:pressed { background-color: rgba(34, 197, 94, 0.2); }"
+        "QPushButton#moveCancelButton { background-color: %6; color: %3; border: 1px solid %2; border-radius: 8px; padding: 7px 16px; font-size: 13px; font-weight: 500; min-width: 80px; min-height: 20px; }"
+        "QPushButton#moveCancelButton:hover { background-color: %7; }"
+        "QPushButton#moveCancelButton:focus { border: 1px solid #22C55E; }"
+        "QPushButton#moveConfirmButton { background-color: #22C55E; color: #FFFFFF; border: none; border-radius: 8px; padding: 7px 18px; font-size: 13px; font-weight: 600; min-width: 80px; min-height: 20px; }"
+        "QPushButton#moveConfirmButton:hover { background-color: #2AD564; }"
+        "QPushButton#moveConfirmButton:pressed { background-color: #16A34A; }"
+        "QPushButton#moveConfirmButton:disabled { background-color: %8; color: %9; }"
+        "QPushButton#moveConfirmButton:focus { border: 2px solid #86EFAC; }"
+    ).arg(bg, border, text, subtext, inputBg, cancelBg, cancelHover, primaryDisabled, primaryDisabledText, treeItemSelected, treeItemTextSelected));
+
+    auto *mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(20, 20, 20, 16);
+    mainLayout->setSpacing(12);
+
+    auto *headerLayout = new QVBoxLayout;
+    headerLayout->setSpacing(4);
+
+    auto *titleLabel = new QLabel(tr("Move \"%1\"").arg(_sourceName), this);
+    titleLabel->setObjectName(QStringLiteral("moveDialogTitle"));
+    titleLabel->setTextFormat(Qt::PlainText);
+    headerLayout->addWidget(titleLabel);
+
+    auto *subLabel = new QLabel(tr("Select destination in %1").arg(_spaceName.isEmpty() ? tr("Personal") : _spaceName), this);
+    subLabel->setObjectName(QStringLiteral("moveDialogSubtitle"));
+    subLabel->setTextFormat(Qt::PlainText);
+    headerLayout->addWidget(subLabel);
+
+    mainLayout->addLayout(headerLayout);
+
+    _tree = new QTreeWidget(this);
+    _tree->setObjectName(QStringLiteral("moveDialogTree"));
+    _tree->setAttribute(Qt::WA_MacShowFocusRect, false);
+    _tree->setHeaderHidden(true);
+    _tree->setAnimated(true);
+    _tree->setIndentation(20);
+    _tree->setSelectionMode(QAbstractItemView::SingleSelection);
+    _tree->setSelectionBehavior(QAbstractItemView::SelectRows);
+    mainLayout->addWidget(_tree, 1);
+
+    _destinationLabel = new QLabel(this);
+    _destinationLabel->setObjectName(QStringLiteral("moveDialogDestination"));
+    _destinationLabel->setTextFormat(Qt::PlainText);
+    mainLayout->addWidget(_destinationLabel);
+
+    auto *buttonsLayout = new QHBoxLayout;
+    buttonsLayout->setSpacing(10);
+
+    _newFolderButton = new QPushButton(tr("+ New folder"), this);
+    _newFolderButton->setObjectName(QStringLiteral("moveNewFolderButton"));
+    _newFolderButton->setCursor(Qt::PointingHandCursor);
+    connect(_newFolderButton, &QPushButton::clicked, this, &UDriveMoveDialog::createNewFolder);
+    buttonsLayout->addWidget(_newFolderButton);
+
+    buttonsLayout->addStretch(1);
+
+    _cancelButton = new QPushButton(tr("Cancel"), this);
+    _cancelButton->setObjectName(QStringLiteral("moveCancelButton"));
+    _cancelButton->setCursor(Qt::PointingHandCursor);
+    connect(_cancelButton, &QPushButton::clicked, this, &QDialog::reject);
+    buttonsLayout->addWidget(_cancelButton);
+
+    _moveButton = new QPushButton(tr("Move"), this);
+    _moveButton->setObjectName(QStringLiteral("moveConfirmButton"));
+    _moveButton->setCursor(Qt::PointingHandCursor);
+    _moveButton->setDefault(true);
+    connect(_moveButton, &QPushButton::clicked, this, &QDialog::accept);
+    buttonsLayout->addWidget(_moveButton);
+
+    mainLayout->addLayout(buttonsLayout);
+
+    _rootItem = new QTreeWidgetItem(_tree);
+    _rootItem->setIcon(0, UDriveIcons::fileIcon(QString(), true));
+    QString rootText = _spaceName.isEmpty() ? tr("Personal") : _spaceName;
+    if (_currentParentFolder.isEmpty()) {
+        rootText += tr(" (current location)");
+    }
+    _rootItem->setText(0, rootText);
+    _rootItem->setData(0, Qt::UserRole, QStringLiteral(""));
+    _rootItem->setExpanded(true);
+
+    populateInitialFolders(initialFolders);
+
+    connect(_tree, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *, QTreeWidgetItem *) {
+        updateMoveButtonState();
+    });
+
+    connect(_tree, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *, int) {
+        if (_moveButton->isEnabled()) {
+            accept();
+        }
+    });
+
+    connect(_tree, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem *item) {
+        if (!item->data(0, Qt::UserRole + 1).toBool()) {
+            for (int i = item->childCount() - 1; i >= 0; --i) {
+                if (item->child(i)->data(0, Qt::UserRole + 2).toBool()) {
+                    delete item->takeChild(i);
+                }
+            }
+            auto *loadingItem = new QTreeWidgetItem(item);
+            loadingItem->setText(0, tr("Loading…"));
+            loadingItem->setData(0, Qt::UserRole + 2, true);
+            loadFolderChildren(item, item->data(0, Qt::UserRole).toString());
+        }
+    });
+
+    _tree->setCurrentItem(_rootItem);
+    updateMoveButtonState();
+
+    loadFolderChildren(_rootItem, QStringLiteral(""));
+}
+
+UDriveMoveDialog::~UDriveMoveDialog() = default;
+
+void UDriveMoveDialog::populateInitialFolders(const QList<QPair<QString, QString>> &initialFolders)
+{
+    for (const auto &pair : initialFolders) {
+        const QString path = pair.first;
+        const QString name = pair.second;
+        if (path.isEmpty() || name.isEmpty() || path.contains(QLatin1Char('/'))) continue;
+        if (_isFolder && (path == _sourcePath || path.startsWith(_sourcePath + QLatin1Char('/')))) continue;
+
+        QString itemText = name;
+        if (path == _currentParentFolder) {
+            itemText += tr(" (current location)");
+        }
+        auto *item = new QTreeWidgetItem(_rootItem);
+        item->setText(0, itemText);
+        item->setIcon(0, UDriveIcons::fileIcon(QString(), true));
+        item->setData(0, Qt::UserRole, path);
+        item->setData(0, Qt::UserRole + 1, false);
+        auto *dummy = new QTreeWidgetItem(item);
+        dummy->setText(0, tr("Loading…"));
+        dummy->setData(0, Qt::UserRole + 2, true);
+    }
+}
+
+void UDriveMoveDialog::loadFolderChildren(QTreeWidgetItem *parentItem, const QString &folderPath)
+{
+    if (!parentItem || parentItem->treeWidget() != _tree || !_accountState || !_accountState->account() || _rootUrl.isEmpty()) {
+        if (parentItem && parentItem->treeWidget() == _tree) {
+            for (int i = parentItem->childCount() - 1; i >= 0; --i) {
+                if (parentItem->child(i)->data(0, Qt::UserRole + 2).toBool()) {
+                    delete parentItem->takeChild(i);
+                }
+            }
+            parentItem->setData(0, Qt::UserRole + 1, true);
+        }
+        return;
+    }
+
+    auto *job = new PropfindJob(_accountState->account(), _rootUrl, folderPath, PropfindJob::Depth::One, this);
+    job->setTimeout(std::chrono::seconds(20));
+    job->setProperties({"resourcetype"});
+
+    connect(job, &PropfindJob::directoryListingIterated, this, [this, parentItem, folderPath](const QString &href, const QMap<QString, QString> &properties) {
+        if (!parentItem || parentItem->treeWidget() != _tree) return;
+        const QString prefix = withoutTrailingSlash(_rootUrl.path()) + QLatin1Char('/');
+        if (!href.startsWith(prefix)) return;
+        const QString relative = withoutTrailingSlash(href.mid(prefix.size()));
+        if (!validPath(relative)) return;
+        if (relative == folderPath || withoutTrailingSlash(href) == withoutTrailingSlash(_rootUrl.path())) return;
+
+        const QString dirPrefix = folderPath.isEmpty() ? QString() : folderPath + QLatin1Char('/');
+        if (!relative.startsWith(dirPrefix)) return;
+        const QString childName = relative.mid(dirPrefix.size());
+        if (childName.isEmpty() || childName.contains(QLatin1Char('/'))) return;
+
+        const bool isDir = properties.value(QStringLiteral("resourcetype")).contains(QStringLiteral("collection"));
+        if (!isDir) return;
+
+        if (_isFolder && (relative == _sourcePath || relative.startsWith(_sourcePath + QLatin1Char('/')))) return;
+
+        for (int i = 0; i < parentItem->childCount(); ++i) {
+            auto *child = parentItem->child(i);
+            if (!child->data(0, Qt::UserRole + 2).toBool() && child->data(0, Qt::UserRole).toString() == relative) {
+                return;
+            }
+        }
+
+        QString itemText = childName;
+        if (relative == _currentParentFolder) {
+            itemText += tr(" (current location)");
+        }
+        auto *childItem = new QTreeWidgetItem(parentItem);
+        childItem->setText(0, itemText);
+        childItem->setIcon(0, UDriveIcons::fileIcon(QString(), true));
+        childItem->setData(0, Qt::UserRole, relative);
+        childItem->setData(0, Qt::UserRole + 1, false);
+
+        auto *dummy = new QTreeWidgetItem(childItem);
+        dummy->setText(0, tr("Loading…"));
+        dummy->setData(0, Qt::UserRole + 2, true);
+    });
+
+    auto cleanup = [this, parentItem] {
+        if (!parentItem || parentItem->treeWidget() != _tree) return;
+        for (int i = parentItem->childCount() - 1; i >= 0; --i) {
+            if (parentItem->child(i)->data(0, Qt::UserRole + 2).toBool()) {
+                delete parentItem->takeChild(i);
+            }
+        }
+        parentItem->setData(0, Qt::UserRole + 1, true);
+    };
+
+    connect(job, &PropfindJob::finishedWithoutError, this, cleanup);
+    connect(job, &PropfindJob::finishedWithError, this, cleanup);
+    job->start();
+}
+
+void UDriveMoveDialog::createNewFolder()
+{
+    auto *parentItem = _tree ? _tree->currentItem() : nullptr;
+    if (!parentItem) {
+        parentItem = _rootItem;
+    }
+    const QString parentPath = parentItem ? parentItem->data(0, Qt::UserRole).toString() : QString();
+
+    bool ok = false;
+    const QString name = UDriveInputDialog::getText(
+        this,
+        tr("New folder"),
+        tr("Folder name"),
+        {},
+        tr("Create"),
+        &ok);
+    if (!ok) return;
+
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty() || !validPath(trimmed) || trimmed.contains(QLatin1Char('/')) || trimmed.contains(QLatin1Char('\\'))) {
+        return;
+    }
+
+    const QString newPath = parentPath.isEmpty() ? trimmed : parentPath + QLatin1Char('/') + trimmed;
+
+    auto addFolderItem = [this, parentItem, trimmed, newPath] {
+        if (!parentItem || parentItem->treeWidget() != _tree) return;
+        auto *newItem = new QTreeWidgetItem(parentItem);
+        newItem->setText(0, trimmed);
+        newItem->setIcon(0, UDriveIcons::fileIcon(QString(), true));
+        newItem->setData(0, Qt::UserRole, newPath);
+        newItem->setData(0, Qt::UserRole + 1, true);
+        parentItem->setExpanded(true);
+        _tree->setCurrentItem(newItem);
+        updateMoveButtonState();
+    };
+
+    if (_accountState && _accountState->account() && !_rootUrl.isEmpty()) {
+        auto *job = new FileActionJob(_accountState->account(), _rootUrl, newPath, "MKCOL", nullptr, {}, this);
+        connect(job, &AbstractNetworkJob::finishedSignal, this, [job, addFolderItem] {
+            const int status = job->httpStatusCode();
+            if (status >= 200 && status < 300) {
+                addFolderItem();
+            }
+        });
+        job->start();
+    } else {
+        addFolderItem();
+    }
+}
+
+void UDriveMoveDialog::updateMoveButtonState()
+{
+    const auto *item = _tree ? _tree->currentItem() : nullptr;
+    if (!item) {
+        _destinationLabel->setText(tr("Select a folder"));
+        _moveButton->setEnabled(false);
+        return;
+    }
+
+    const QString destPath = item->data(0, Qt::UserRole).toString();
+    const bool isCurrentFolder = (destPath == _currentParentFolder);
+    const bool isInvalidNesting = _isFolder && (destPath == _sourcePath || destPath.startsWith(_sourcePath + QLatin1Char('/')));
+
+    if (isCurrentFolder) {
+        const QString displayName = destPath.isEmpty() ? (_spaceName.isEmpty() ? tr("Personal") : _spaceName) : item->text(0);
+        _destinationLabel->setText(tr("Current location: %1").arg(displayName));
+        _moveButton->setEnabled(false);
+    } else if (isInvalidNesting) {
+        _destinationLabel->setText(tr("Cannot move a folder into itself"));
+        _moveButton->setEnabled(false);
+    } else {
+        const QString displayName = destPath.isEmpty() ? (_spaceName.isEmpty() ? tr("Personal") : _spaceName) : item->text(0);
+        _destinationLabel->setText(tr("Destination: %1").arg(displayName));
+        _moveButton->setEnabled(true);
+    }
+}
+
+QString UDriveMoveDialog::selectedDestination() const
+{
+    const auto *item = _tree ? _tree->currentItem() : nullptr;
+    return item ? item->data(0, Qt::UserRole).toString() : QString();
+}
+
+QString initialsForName(const QString &name)
+{
+    const QStringList parts = name.trimmed().split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+    if (parts.isEmpty()) return QStringLiteral("?");
+    if (parts.size() == 1) return parts.first().left(2).toUpper();
+    return (parts.first().left(1) + parts.last().left(1)).toUpper();
+}
+
+QColor avatarColorForName(const QString &name)
+{
+    static const QVector<QColor> colors{
+        QColor(QStringLiteral("#475569")), // Slate (SP in mock)
+        QColor(QStringLiteral("#B45309")), // Amber (TV in mock)
+        QColor(QStringLiteral("#0D9488")), // Teal
+        QColor(QStringLiteral("#1D4ED8")), // Blue
+        QColor(QStringLiteral("#6D28D9")), // Purple
+        QColor(QStringLiteral("#BE185D")), // Pink
+        QColor(QStringLiteral("#047857")), // Emerald
+        QColor(QStringLiteral("#C2410C")), // Orange
+    };
+    return colors.at(qHash(name) % colors.size());
+}
+
+QPixmap createAvatarPixmap(const QString &name, int size, qreal dpr)
+{
+    QPixmap pixmap(QSize(size, size) * dpr);
+    pixmap.setDevicePixelRatio(dpr);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setBrush(avatarColorForName(name));
+    painter.setPen(Qt::NoPen);
+    painter.drawEllipse(QRectF(0, 0, size, size));
+    painter.setPen(Qt::white);
+    QFont font = painter.font();
+    font.setPixelSize(qRound(size * 0.38));
+    font.setBold(true);
+    painter.setFont(font);
+    painter.drawText(QRectF(0, 0, size, size), Qt::AlignCenter, initialsForName(name));
+    return pixmap;
+}
+
+class ShareRoleItemDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        Q_UNUSED(option);
+        Q_UNUSED(index);
+        return QSize(236, 46);
+    }
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+
+        const bool selected = (option.state & QStyle::State_Selected) || (option.state & QStyle::State_HasFocus);
+        const bool hovered = (option.state & QStyle::State_MouseOver);
+
+        const QRect r = option.rect.adjusted(2, 2, -2, -2);
+        if (selected) {
+            painter->setBrush(QColor(QStringLiteral("#22C55E")));
+            painter->setPen(Qt::NoPen);
+            painter->drawRoundedRect(r, 8, 8);
+        } else if (hovered) {
+            const bool dark = option.palette.color(QPalette::Window).lightness() < 128;
+            painter->setBrush(QColor(dark ? QStringLiteral("#32353A") : QStringLiteral("#F3F4F6")));
+            painter->setPen(Qt::NoPen);
+            painter->drawRoundedRect(r, 8, 8);
+        }
+
+        const bool isEdit = index.data(Qt::UserRole).toInt() == 15 || index.row() == 1;
+        const UDriveIcons::Symbol iconSym = isEdit ? UDriveIcons::Symbol::Rename : UDriveIcons::Symbol::Eye;
+        const bool dark = option.palette.color(QPalette::Window).lightness() < 128;
+        const QColor defaultText = dark ? QColor(QStringLiteral("#EDEDED")) : QColor(QStringLiteral("#1F2328"));
+        const QColor iconColor = selected ? Qt::white : defaultText;
+
+        const QRect iconRect(r.left() + 10, r.top() + (r.height() - 20) / 2, 20, 20);
+        painter->drawPixmap(iconRect, UDriveIcons::icon(iconSym, false, iconColor).pixmap(20, 20));
+
+        const QString title = isEdit ? UDriveFileBrowser::tr("Can edit") : UDriveFileBrowser::tr("Can view");
+        const QString subtitle = isEdit
+            ? UDriveFileBrowser::tr("View, download, upload and edit.")
+            : UDriveFileBrowser::tr("View and download.");
+
+        const QColor titleColor = selected ? Qt::white : defaultText;
+        const QColor subtitleColor = selected ? QColor(QStringLiteral("#E6F9EE")) : (dark ? QColor(QStringLiteral("#9BA3AF")) : QColor(QStringLiteral("#6B7280")));
+
+        const int textLeft = iconRect.right() + 12;
+        const int textWidth = r.right() - textLeft - (selected ? 28 : 8);
+
+        QFont titleFont = option.font;
+        titleFont.setBold(true);
+        titleFont.setPixelSize(13);
+        painter->setFont(titleFont);
+        painter->setPen(titleColor);
+        painter->drawText(QRect(textLeft, r.top() + 4, textWidth, 18), Qt::AlignLeft | Qt::AlignVCenter, title);
+
+        QFont subFont = option.font;
+        subFont.setBold(false);
+        subFont.setPixelSize(11);
+        painter->setFont(subFont);
+        painter->setPen(subtitleColor);
+        painter->drawText(QRect(textLeft, r.top() + 22, textWidth, 16), Qt::AlignLeft | Qt::AlignVCenter, subtitle);
+
+        if (selected) {
+            const QRect checkRect(r.right() - 24, r.top() + (r.height() - 16) / 2, 16, 16);
+            painter->drawPixmap(checkRect, UDriveIcons::icon(UDriveIcons::Symbol::Check, false, Qt::white).pixmap(16, 16));
+        }
+
+        painter->restore();
+    }
+};
+
+class SharePopupListView : public QListView
+{
+public:
+    SharePopupListView(QWidget *parent, const QColor &background)
+        : QListView(parent), _background(background)
+    {
+        setWindowFlag(Qt::FramelessWindowHint);
+        setAttribute(Qt::WA_TranslucentBackground, false);
+        auto colors = palette();
+        colors.setColor(QPalette::Base, background);
+        colors.setColor(QPalette::Window, background);
+        setPalette(colors);
+        viewport()->setPalette(colors);
+        viewport()->setAutoFillBackground(true);
+    }
+
+    QSize sizeHint() const override
+    {
+        const int count = model() ? qMin(2, model()->rowCount()) : 2;
+        return QSize(236, count * 46 + 10);
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        return sizeHint();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        // Embedded sharing forms use transparent styles. Popup surfaces must
+        // still cover the form, including inside a scroll area's viewport.
+        QPainter painter(viewport());
+        painter.fillRect(viewport()->rect(), _background);
+        painter.end();
+        QListView::paintEvent(event);
+    }
+
+private:
+    QColor _background;
+};
+
+void configureShareRolePopup(QComboBox *combo)
+{
+    const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+    const QString background = dark ? QStringLiteral("#1F2023") : QStringLiteral("#FFFFFF");
+    auto *view = new SharePopupListView(combo, QColor(background));
+    view->setObjectName(QStringLiteral("shareRolePopup"));
+    view->setFrameShape(QFrame::NoFrame);
+    view->setUniformItemSizes(true);
+    view->setSpacing(0);
+    view->setMouseTracking(true);
+    view->setTextElideMode(Qt::ElideNone);
+    view->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    view->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    view->setMinimumWidth(236);
+    view->setStyleSheet(QStringLiteral(
+        "QListView#shareRolePopup { background: %1; border: 1px solid %2; border-radius: 10px; padding: 4px; outline: none; }")
+        .arg(background, dark ? QStringLiteral("#3E4146") : QStringLiteral("#D0D7DE")));
+    combo->setProperty("udriveOpaquePopup", true);
+    combo->setCursor(Qt::PointingHandCursor);
+    combo->setView(view);
+    combo->setItemDelegate(new ShareRoleItemDelegate(combo));
+    combo->setMaxVisibleItems(2);
+}
+
+QStringList publicLinkPasswordRequirements(const QString &message)
+{
+    // Summarize only requirements actually reported by the server. Policies
+    // differ between installations; do not invent a local password policy.
+    const QRegularExpression rule(QStringLiteral(
+        "at least\\s+(\\d+)\\s+(uppercase letters?|lowercase letters?|numbers?|digits?|special characters?|characters?)\\s+(?:are|is)\\s+required"),
+        QRegularExpression::CaseInsensitiveOption);
+    QStringList requirements;
+    auto matches = rule.globalMatch(message);
+    while (matches.hasNext()) {
+        const auto match = matches.next();
+        const int count = match.captured(1).toInt();
+        const QString kind = match.captured(2).toLower();
+        QString text;
+        if (kind.startsWith(QLatin1String("uppercase"))) text = (count == 1 ? UDriveShareDialog::tr("At least %1 uppercase letter") : UDriveShareDialog::tr("At least %1 uppercase letters")).arg(count);
+        else if (kind.startsWith(QLatin1String("lowercase"))) text = (count == 1 ? UDriveShareDialog::tr("At least %1 lowercase letter") : UDriveShareDialog::tr("At least %1 lowercase letters")).arg(count);
+        else if (kind.startsWith(QLatin1String("number")) || kind.startsWith(QLatin1String("digit"))) text = (count == 1 ? UDriveShareDialog::tr("At least %1 number") : UDriveShareDialog::tr("At least %1 numbers")).arg(count);
+        else if (kind.startsWith(QLatin1String("special"))) text = (count == 1 ? UDriveShareDialog::tr("At least %1 special character") : UDriveShareDialog::tr("At least %1 special characters")).arg(count);
+        else text = (count == 1 ? UDriveShareDialog::tr("At least %1 character") : UDriveShareDialog::tr("At least %1 characters")).arg(count);
+        if (!requirements.contains(text)) requirements.append(text);
+    }
+    if (!requirements.isEmpty()) {
+        const QRegularExpression words(QStringLiteral("[\\p{L}]{3,}"));
+        for (const auto &line : message.split(QLatin1Char('\n'))) {
+            if (!rule.match(line).hasMatch() && words.match(line).hasMatch())
+                requirements.append(line.simplified().left(180));
+        }
+    }
+    return requirements;
+}
+
+QString publicLinkUpdateError(JsonApiJob *job)
+{
+    if (!job->ocsMessage().isEmpty()) return job->ocsMessage();
+    // JsonJob leaves HTTP error bodies unread. These can contain the same OCS
+    // validation details as a successful HTTP response with a failed OCS status.
+    if (job->reply()) {
+        const auto data = QJsonDocument::fromJson(job->reply()->read(64 * 1024)).object();
+        const auto message = data.value(QStringLiteral("ocs")).toObject().value(QStringLiteral("meta")).toObject().value(QStringLiteral("message")).toString();
+        if (!message.isEmpty()) return message;
+    }
+    switch (job->httpStatusCode()) {
+    case 401: return UDriveShareDialog::tr("Your session has expired. Sign in again and retry.");
+    case 403: return UDriveShareDialog::tr("You don't have permission to change this link.");
+    case 404: return UDriveShareDialog::tr("This link is no longer available. Close this dialog and refresh the shares.");
+    case 429: return UDriveShareDialog::tr("Too many requests. Wait a moment and try again.");
+    default: return job->httpStatusCode() >= 500
+        ? UDriveShareDialog::tr("The server couldn't save this change. Try again in a moment.")
+        : UDriveShareDialog::tr("Couldn't save this change. Check your connection and try again.");
+    }
+}
+
+class ShareRecipientPopup : public SharePopupListView
+{
+public:
+    ShareRecipientPopup(QLineEdit *input, const QColor &background)
+        : SharePopupListView(nullptr, background), _input(input)
+    {
+    }
+
+    QSize sizeHint() const override
+    {
+        const int count = model() ? qMin(6, model()->rowCount()) : 0;
+        return QSize(_input ? _input->width() : 236, count > 0 ? (count * 52 + 10) : 0);
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        return QSize(0, 0);
+    }
+
+protected:
+    void showEvent(QShowEvent *event) override
+    {
+        QListView::showEvent(event);
+        positionPopup();
+        QTimer::singleShot(0, this, [this] { positionPopup(); });
+    }
+    void moveEvent(QMoveEvent *event) override
+    {
+        QListView::moveEvent(event);
+        positionPopup();
+    }
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QListView::resizeEvent(event);
+        positionPopup();
+    }
+
+private:
+    void positionPopup()
+    {
+        if (_positioning || !isVisible() || !_input) return;
+        const QScopedValueRollback<bool> guard(_positioning, true);
+        const QRect available = udrivePopupBounds(_input);
+        resize(qMin(_input->width(), available.width()), qMin(height(), available.height()));
+        const QPoint below = _input->mapToGlobal(QPoint(0, _input->height() + 4));
+        const int left = layoutDirection() == Qt::RightToLeft
+            ? _input->mapToGlobal(QPoint(_input->width(), 0)).x() - width() : below.x();
+        const int top = below.y() + height() <= available.bottom() + 1
+            ? below.y() : _input->mapToGlobal(QPoint(0, -height() - 4)).y();
+        move(qBound(available.left(), left, available.right() - width() + 1),
+            qBound(available.top(), top, available.bottom() - height() + 1));
+    }
+    QPointer<QLineEdit> _input;
+    bool _positioning = false;
+};
+
 class ShareRecipientDelegate : public QStyledItemDelegate
 {
 public:
@@ -1198,7 +1880,7 @@ public:
             initials = personInitials(label.isEmpty() ? detail : label);
 
         const int avatarSize = 32;
-        const int avatarX = itemRect.left() + (selected ? 12 : 8);
+        const int avatarX = itemRect.left() + 12;
         const int avatarY = itemRect.top() + (itemRect.height() - avatarSize) / 2;
         const QRect avatarRect(avatarX, avatarY, avatarSize, avatarSize);
 
@@ -1289,10 +1971,11 @@ public:
 
 UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &fileName, bool isFolder,
                                      const QString &remotePath, const QUrl &linkUrl, const QString &spaceId,
-                                     QWidget *parent, Target target)
+                                     QWidget *parent, Target target, Presentation presentation)
     : QDialog(parent)
     , _accountState(accountState)
     , _target(target)
+    , _sidebar(presentation == Presentation::Sidebar)
     , _fileName(fileName)
     , _isFolder(isFolder)
     , _remotePath(remotePath.startsWith(QLatin1Char('/')) ? remotePath.mid(1) : remotePath)
@@ -1301,9 +1984,9 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
 {
     setObjectName(QStringLiteral("udriveShareDialog"));
     setWindowTitle(_target == Target::Workspace ? tr("Workspace members — %1").arg(fileName) : tr("Share “%1”").arg(fileName));
-    setModal(true);
-    setWindowFlags((windowFlags() | Qt::Dialog) & ~Qt::WindowContextHelpButtonHint);
-    setMinimumWidth(480);
+    setModal(!_sidebar);
+    setWindowFlags(_sidebar ? Qt::Widget : (windowFlags() | Qt::Dialog) & ~Qt::WindowContextHelpButtonHint);
+    setMinimumWidth(_sidebar ? 0 : 480);
 
     const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
     const QString bg = dark ? QStringLiteral("#242528") : QStringLiteral("#FFFFFF");
@@ -1327,10 +2010,10 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
         "QLabel#shareSectionTitle { color: %3; font-size: 13px; font-weight: 600; margin-top: 6px; }"
         "QLineEdit#shareUserInput { min-height: 22px; padding: 7px 12px; border: 1px solid %2; border-radius: 8px; background: %5; color: %3; font-size: 13px; selection-background-color: #2E4436; }"
         "QLineEdit#shareUserInput:focus { border: 1px solid #22C55E; }"
-        "QComboBox#shareRoleCombo { min-height: 22px; padding: 7px 30px 7px 10px; border: 1px solid %2; border-radius: 8px; background: %5; color: %3; font-size: 13px; combobox-popup: 0; }"
+        "QComboBox#shareRoleCombo { min-height: 22px; padding: 7px 22px 7px 10px; border: 1px solid %2; border-radius: 8px; background: %5; color: %3; font-size: 13px; combobox-popup: 0; }"
         "QComboBox#shareRoleCombo:hover, QComboBox#shareRoleCombo:focus { border-color: %12; }"
-        "QComboBox#shareRoleCombo::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 28px; border: none; }"
-        "QComboBox#shareRoleCombo::down-arrow { image: url(:/udrive/icons/%10.svg); width: 12px; height: 12px; }"
+        "QComboBox#shareRoleCombo::drop-down { subcontrol-origin: border; subcontrol-position: center right; width: 22px; border: none; }"
+        "QComboBox#shareRoleCombo::down-arrow { image: url(:/udrive/icons/%10.svg); width: 10px; height: 10px; }"
         "QComboBox#shareRoleCombo QListView#shareRolePopup { background: %5; color: %3; border: 1px solid %2; border-radius: 8px; padding: 4px; outline: none; }"
         "QComboBox#shareRoleCombo QListView#shareRolePopup::item { min-height: 24px; padding: 4px 8px; border: none; border-radius: 5px; }"
         "QComboBox#shareRoleCombo QListView#shareRolePopup::item:hover { background: %7; }"
@@ -1350,76 +2033,121 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
         "QScrollArea#sharesScrollArea, QScrollArea#publicLinksScrollArea { border: 1px solid %2; border-radius: 8px; background: %5; }"
         "QComboBox#publicLinkRoleCombo { min-height: 20px; padding: 3px 24px 3px 8px; border: 1px solid %2; border-radius: 6px; background: %5; color: %3; font-size: 12px; combobox-popup: 0; }"
         "QComboBox#publicLinkRoleCombo:hover, QComboBox#publicLinkRoleCombo:focus { border-color: %12; }"
-        "QComboBox#publicLinkRoleCombo::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 20px; border: none; }"
+        "QComboBox#publicLinkRoleCombo::drop-down { subcontrol-origin: border; subcontrol-position: center right; width: 20px; border: none; }"
         "QComboBox#publicLinkRoleCombo::down-arrow { image: url(:/udrive/icons/%10.svg); width: 10px; height: 10px; }"
         "QToolButton#publicLinkActionButton { border: none; background: transparent; border-radius: 4px; padding: 4px; }"
-        "QToolButton#publicLinkActionButton:hover { background: %7; }"
+        "QToolButton#publicLinkActionButton:hover, QToolButton#publicLinkActionButton:pressed { background: transparent; }"
+        "QComboBox#sharePersonRoleCombo { min-width: 0; min-height: 20px; padding: 4px 26px 4px 8px; border: 1px solid %2; border-radius: 6px; background: %5; color: %3; font-size: 12px; combobox-popup: 0; }"
+        "QComboBox#sharePersonRoleCombo::drop-down { subcontrol-origin: border; subcontrol-position: center right; width: 22px; border: none; }"
+        "QComboBox#sharePersonRoleCombo::down-arrow { image: url(:/udrive/icons/%10.svg); width: 10px; height: 10px; }"
     ).arg(bg, border, text, subtext, inputBg, cancelBg, cancelHover, primaryDisabled, primaryDisabledText).arg(arrow, selectedBg, accent));
 
     auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(20, 20, 20, 16);
-    mainLayout->setSpacing(14);
+    mainLayout->setContentsMargins(_sidebar ? 0 : 20, _sidebar ? 0 : 20, _sidebar ? 0 : 20, _sidebar ? 0 : 16);
+    mainLayout->setSpacing(_sidebar ? 20 : 14);
 
-    auto *headerLayout = new QHBoxLayout;
-    headerLayout->setSpacing(12);
+    if (!_sidebar) {
+        auto *headerLayout = new QHBoxLayout;
+        headerLayout->setSpacing(12);
 
-    auto *iconLabel = new QLabel(this);
-    iconLabel->setPixmap(UDriveIcons::icon(isFolder ? UDriveIcons::Symbol::Folder : UDriveIcons::Symbol::File).pixmap(32, 32));
-    headerLayout->addWidget(iconLabel);
+        auto *iconLabel = new QLabel(this);
+        iconLabel->setPixmap(UDriveIcons::icon(isFolder ? UDriveIcons::Symbol::Folder : UDriveIcons::Symbol::File).pixmap(32, 32));
+        headerLayout->addWidget(iconLabel);
 
-    auto *titleLayout = new QVBoxLayout;
-    titleLayout->setSpacing(2);
-    auto *titleLabel = new QLabel(fileName, this);
-    titleLabel->setObjectName(QStringLiteral("shareDialogTitle"));
-    titleLabel->setTextFormat(Qt::PlainText);
-    titleLayout->addWidget(titleLabel);
+        auto *titleLayout = new QVBoxLayout;
+        titleLayout->setSpacing(2);
+        auto *titleLabel = new QLabel(fileName, this);
+        titleLabel->setObjectName(QStringLiteral("shareDialogTitle"));
+        titleLabel->setTextFormat(Qt::PlainText);
+        titleLayout->addWidget(titleLabel);
 
-    auto *subtextLabel = new QLabel(_target == Target::Workspace ? tr("Manage workspace membership")
-        : isFolder ? tr("Share folder with other users") : tr("Share file with other users"), this);
-    subtextLabel->setObjectName(QStringLiteral("shareDialogSubtext"));
-    subtextLabel->setTextFormat(Qt::PlainText);
-    titleLayout->addWidget(subtextLabel);
+        auto *subtextLabel = new QLabel(_target == Target::Workspace ? tr("Manage workspace membership")
+            : isFolder ? tr("Share folder with other users") : tr("Share file with other users"), this);
+        subtextLabel->setObjectName(QStringLiteral("shareDialogSubtext"));
+        subtextLabel->setTextFormat(Qt::PlainText);
+        titleLayout->addWidget(subtextLabel);
 
-    headerLayout->addLayout(titleLayout, 1);
-    mainLayout->addLayout(headerLayout);
+        headerLayout->addLayout(titleLayout, 1);
+        mainLayout->addLayout(headerLayout);
 
-    auto *inviteSectionLabel = new QLabel(tr("Invite user or group"), this);
+    }
+
+    QVBoxLayout *peopleLayout = mainLayout;
+    if (_sidebar) {
+        auto *card = new QWidget(this);
+        card->setObjectName(QStringLiteral("sharePeopleCard"));
+        peopleLayout = new QVBoxLayout(card);
+        peopleLayout->setContentsMargins(0, 8, 0, 0);
+        peopleLayout->setSpacing(12);
+        mainLayout->addWidget(card);
+    }
+    auto *inviteSectionLabel = new QLabel(_sidebar ? tr("Share with people") : tr("Invite user or group"), this);
     inviteSectionLabel->setObjectName(QStringLiteral("shareSectionTitle"));
-    mainLayout->addWidget(inviteSectionLabel);
+    auto *inviteHeader = new QHBoxLayout;
+    inviteHeader->setSpacing(6);
+    inviteHeader->addWidget(inviteSectionLabel);
+    if (_sidebar) {
+        auto *helpLabel = new QLabel(this);
+        helpLabel->setObjectName(QStringLiteral("shareHelpIcon"));
+        helpLabel->setPixmap(UDriveIcons::icon(UDriveIcons::Symbol::Help, false, QColor(dark ? "#9BA3AF" : "#59636E")).pixmap(14, 14));
+        helpLabel->setToolTip(tr("Share directly with people or groups in your organization."));
+        inviteHeader->addWidget(helpLabel);
+    }
+    inviteHeader->addStretch(1);
+    peopleLayout->addLayout(inviteHeader);
+    if (_sidebar && _linkUrl.isValid() && !_linkUrl.isEmpty()) {
+        _copyLinkButton = new QPushButton(UDriveIcons::icon(UDriveIcons::Symbol::Link), tr("Permanent link"), this);
+        _copyLinkButton->setObjectName(QStringLiteral("shareCopyLinkButton"));
+        _copyLinkButton->setToolTip(tr("Requires sign-in and existing access to this file. This does not grant access."));
+        _copyLinkButton->setCursor(Qt::PointingHandCursor);
+        connect(_copyLinkButton, &QPushButton::clicked, this, &UDriveShareDialog::copyLink);
+        inviteHeader->addWidget(_copyLinkButton);
+    }
+
+    if (_sidebar) {
+        auto *searchLabel = new QLabel(tr("Search"), this);
+        searchLabel->setObjectName(QStringLiteral("shareSearchLabel"));
+        searchLabel->setStyleSheet(QStringLiteral("color: %1; font-size: 12px; font-weight: 500;").arg(subtext));
+        peopleLayout->addWidget(searchLabel);
+    }
 
     auto *inputRow = new QHBoxLayout;
     inputRow->setSpacing(8);
 
     _userInput = new QLineEdit(this);
     _userInput->setObjectName(QStringLiteral("shareUserInput"));
-    _userInput->setPlaceholderText(tr("Search users or groups…"));
+    _userInput->setPlaceholderText(_sidebar ? QString() : tr("Search users or groups…"));
     _userInput->setMaxLength(256);
     _userInput->setClearButtonEnabled(true);
-    inputRow->addWidget(_userInput, 1);
+    _userInput->setMinimumWidth(0);
+    if (_sidebar) peopleLayout->addWidget(_userInput);
+    else inputRow->addWidget(_userInput, 1);
 
     _roleCombo = new UDriveComboBox(this);
     _roleCombo->setObjectName(QStringLiteral("shareRoleCombo"));
     _roleCombo->setProperty("udriveCombo", true);
     _roleCombo->setCursor(Qt::PointingHandCursor);
-    auto *roles = new QListView(_roleCombo);
-    roles->setObjectName(QStringLiteral("shareRolePopup"));
-    roles->setFrameShape(QFrame::NoFrame);
-    roles->setUniformItemSizes(true);
-    roles->setSpacing(2);
-    roles->setMouseTracking(true);
-    roles->setTextElideMode(Qt::ElideNone);
-    roles->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    _roleCombo->setView(roles);
-    _roleCombo->setItemDelegate(new QStyledItemDelegate(_roleCombo));
-    _roleCombo->setMaxVisibleItems(2);
-    _roleCombo->addItem(tr("Viewer"), 1);
-    _roleCombo->addItem(tr("Editor"), 15);
+    configureShareRolePopup(_roleCombo);
+    _roleCombo->addItem(_sidebar ? tr("Can view") : tr("Viewer"), 1);
+    _roleCombo->addItem(_sidebar ? tr("Can edit") : tr("Editor"), 15);
+    QFont roleFont = _roleCombo->font();
+    roleFont.setPixelSize(13);
+    _roleCombo->setFont(roleFont);
     _roleCombo->ensurePolished();
-    const int roleWidth = qMax(_roleCombo->fontMetrics().horizontalAdvance(_roleCombo->itemText(0)),
-        _roleCombo->fontMetrics().horizontalAdvance(_roleCombo->itemText(1)));
-    _roleCombo->setFixedWidth(qMax(112, roleWidth + 44));
+    auto updateSearchRoleWidth = [this] {
+        const int roleWidth = qMax(_roleCombo->fontMetrics().horizontalAdvance(_roleCombo->itemText(0)),
+            _roleCombo->fontMetrics().horizontalAdvance(_roleCombo->itemText(1)));
+        _roleCombo->setFixedWidth(_sidebar ? qMax(124, roleWidth + 54) : qMax(120, roleWidth + 48));
+    };
+    updateSearchRoleWidth();
+    connect(_roleCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [updateSearchRoleWidth](int) {
+        updateSearchRoleWidth();
+    });
     _roleCombo->setFixedHeight(38);
     inputRow->addWidget(_roleCombo);
+    if (_sidebar) {
+        inputRow->addStretch(1);
+    }
 
     _shareButton = new QPushButton(_target == Target::Workspace ? tr("Add member") : tr("Share"), this);
     _shareButton->setObjectName(QStringLiteral("shareConfirmButton"));
@@ -1428,37 +2156,43 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
     _shareButton->setEnabled(false);
     inputRow->addWidget(_shareButton);
 
-    mainLayout->addLayout(inputRow);
+    peopleLayout->addLayout(inputRow);
 
     _statusLabel = new QLabel(this);
     _statusLabel->setObjectName(QStringLiteral("shareStatusLabel"));
     _statusLabel->setTextFormat(Qt::PlainText);
     _statusLabel->setWordWrap(true);
     _statusLabel->setStyleSheet(QStringLiteral("font-size: 12px; min-height: 16px;"));
-    mainLayout->addWidget(_statusLabel);
+    peopleLayout->addWidget(_statusLabel);
 
-    auto *accessSectionLabel = new QLabel(_target == Target::Workspace ? tr("Workspace members") : tr("People with access"), this);
+    auto *accessSectionLabel = new QLabel(_target == Target::Workspace ? tr("Workspace members") : _sidebar ? tr("Shared with") : tr("People with access"), this);
     accessSectionLabel->setObjectName(QStringLiteral("shareSectionTitle"));
-    mainLayout->addWidget(accessSectionLabel);
+    peopleLayout->addWidget(accessSectionLabel);
 
     auto *scrollArea = new QScrollArea(this);
     scrollArea->setObjectName(QStringLiteral("sharesScrollArea"));
     scrollArea->setWidgetResizable(true);
     scrollArea->setMinimumHeight(110);
     scrollArea->setMaximumHeight(160);
+    if (_sidebar) {
+        scrollArea->setFrameShape(QFrame::NoFrame);
+        scrollArea->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
+        scrollArea->viewport()->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
+    }
 
     _sharesContainer = new QWidget(scrollArea);
     _sharesLayout = new QVBoxLayout(_sharesContainer);
-    _sharesLayout->setContentsMargins(10, 8, 10, 8);
+    _sharesLayout->setContentsMargins(_sidebar ? 0 : 10, 8, _sidebar ? 0 : 10, 8);
     _sharesLayout->setSpacing(6);
     _sharesLayout->addStretch(1);
     scrollArea->setWidget(_sharesContainer);
-    mainLayout->addWidget(scrollArea);
+    peopleLayout->addWidget(scrollArea);
 
     _publicLinksSection = new QWidget(this);
+    _publicLinksSection->setObjectName(QStringLiteral("sharePublicLinksCard"));
     auto *publicLinksSectionLayout = new QVBoxLayout(_publicLinksSection);
-    publicLinksSectionLayout->setContentsMargins(0, 0, 0, 0);
-    publicLinksSectionLayout->setSpacing(6);
+    publicLinksSectionLayout->setContentsMargins(0, _sidebar ? 18 : 0, 0, 0);
+    publicLinksSectionLayout->setSpacing(_sidebar ? 12 : 6);
 
     auto *publicLinksHeaderLayout = new QHBoxLayout;
     auto *publicLinksTitle = new QLabel(tr("Public links"), _publicLinksSection);
@@ -1479,10 +2213,15 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
     _publicLinksScrollArea->setWidgetResizable(true);
     _publicLinksScrollArea->setMinimumHeight(60);
     _publicLinksScrollArea->setMaximumHeight(120);
+    if (_sidebar) {
+        _publicLinksScrollArea->setFrameShape(QFrame::NoFrame);
+        _publicLinksScrollArea->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
+        _publicLinksScrollArea->viewport()->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
+    }
 
     _publicLinksContainer = new QWidget(_publicLinksScrollArea);
     _publicLinksLayout = new QVBoxLayout(_publicLinksContainer);
-    _publicLinksLayout->setContentsMargins(10, 8, 10, 8);
+    _publicLinksLayout->setContentsMargins(_sidebar ? 0 : 10, 8, _sidebar ? 0 : 10, 8);
     _publicLinksLayout->setSpacing(6);
     _publicLinksLayout->addStretch(1);
     _publicLinksScrollArea->setWidget(_publicLinksContainer);
@@ -1494,27 +2233,60 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
         _publicLinksSection->hide();
     }
 
-    auto *bottomRow = new QHBoxLayout;
-    bottomRow->setSpacing(10);
+    if (!_sidebar) {
+        auto *bottomRow = new QHBoxLayout;
+        bottomRow->setSpacing(10);
 
-    if (_linkUrl.isValid() && !_linkUrl.isEmpty()) {
-        _copyLinkButton = new QPushButton(UDriveIcons::icon(UDriveIcons::Symbol::Link), tr("Copy sign-in link"), this);
-        _copyLinkButton->setObjectName(QStringLiteral("shareCopyLinkButton"));
-        _copyLinkButton->setCursor(Qt::PointingHandCursor);
-        connect(_copyLinkButton, &QPushButton::clicked, this, &UDriveShareDialog::copyLink);
-        bottomRow->addWidget(_copyLinkButton);
+        if (_linkUrl.isValid() && !_linkUrl.isEmpty()) {
+            _copyLinkButton = new QPushButton(UDriveIcons::icon(UDriveIcons::Symbol::Link), tr("Copy sign-in link"), this);
+            _copyLinkButton->setObjectName(QStringLiteral("shareCopyLinkButton"));
+            _copyLinkButton->setCursor(Qt::PointingHandCursor);
+            connect(_copyLinkButton, &QPushButton::clicked, this, &UDriveShareDialog::copyLink);
+            bottomRow->addWidget(_copyLinkButton);
+        }
+
+        bottomRow->addStretch(1);
+
+        auto *doneButton = new QPushButton(tr("Done"), this);
+        doneButton->setObjectName(QStringLiteral("shareDoneButton"));
+        doneButton->setCursor(Qt::PointingHandCursor);
+        doneButton->setAutoDefault(false);
+        connect(doneButton, &QPushButton::clicked, this, &QDialog::accept);
+        bottomRow->addWidget(doneButton);
+
+        mainLayout->addLayout(bottomRow);
+
+    } else {
+        mainLayout->addStretch(1);
     }
 
-    bottomRow->addStretch(1);
-
-    auto *doneButton = new QPushButton(tr("Done"), this);
-    doneButton->setObjectName(QStringLiteral("shareDoneButton"));
-    doneButton->setCursor(Qt::PointingHandCursor);
-    doneButton->setAutoDefault(false);
-    connect(doneButton, &QPushButton::clicked, this, &QDialog::accept);
-    bottomRow->addWidget(doneButton);
-
-    mainLayout->addLayout(bottomRow);
+    if (_sidebar) {
+        const QString sidebarBorder = dark ? QStringLiteral("rgba(255, 255, 255, 0.12)") : QStringLiteral("rgba(0, 0, 0, 0.14)");
+        const QString sidebarHover = dark ? QStringLiteral("rgba(255, 255, 255, 0.05)") : QStringLiteral("rgba(0, 0, 0, 0.04)");
+        setStyleSheet(styleSheet() + QStringLiteral(
+            "QDialog#udriveShareDialog { background: transparent; }"
+            "QWidget#sharePeopleCard, QWidget#sharePublicLinksCard { background: transparent; border: none; border-radius: 0; }"
+            "QWidget#sharePublicLinksCard { border-top: 1px solid %2; }"
+            "QLabel { color: %3; background: transparent; }"
+            "QLabel#shareSectionTitle { margin: 0; }"
+            "QLabel#shareStatusLabel { color: %5; font-weight: 400; }"
+            "QLineEdit#shareUserInput { min-width: 0; background: transparent; border-color: %2; }"
+            "QLineEdit#shareUserInput:focus { border-color: %4; }"
+            "QComboBox#shareRoleCombo, QComboBox#sharePersonRoleCombo, QComboBox#publicLinkRoleCombo { background: transparent; border-color: %2; }"
+            "QScrollArea#sharesScrollArea, QScrollArea#publicLinksScrollArea { border: none; background: transparent; }"
+            "QScrollArea#sharesScrollArea > QWidget > QWidget, QScrollArea#publicLinksScrollArea > QWidget > QWidget { background: transparent; }"
+            "QScrollArea QScrollBar:vertical { width: 6px; background: transparent; margin: 0; border: none; }"
+            "QScrollArea QScrollBar::handle:vertical { background: %2; border-radius: 3px; min-height: 20px; }"
+            "QScrollArea QScrollBar::add-line:vertical, QScrollArea QScrollBar::sub-line:vertical { height: 0; background: transparent; border: none; }"
+            "QPushButton#shareCopyLinkButton { min-width: 0; min-height: 20px; padding: 4px 6px; background: transparent; border: none; color: %5; font-size: 12px; font-weight: 400; }"
+            "QPushButton#shareCopyLinkButton:hover { background: %1; color: %3; }"
+            "QPushButton#shareAddLinkButton { min-height: 24px; padding: 2px 6px; background: transparent; border: 1px solid transparent; color: %4; }"
+            "QPushButton#shareAddLinkButton:hover { background: %1; }"
+            "QPushButton#shareAddLinkButton:disabled { color: %5; background: transparent; }"
+            "QPushButton#shareConfirmButton { min-width: 0; padding: 6px 14px; background: #40D979; color: #12351D; }"
+            "QPushButton#shareConfirmButton:hover { background: #63E493; }"
+            "QPushButton#shareConfirmButton:disabled { background: %1; color: %5; }").arg(sidebarHover, sidebarBorder, text, accent, subtext));
+    }
 
     // Search only this account's directory. No typed text is used as a recipient ID.
     _recipientTimer = new QTimer(this);
@@ -1526,11 +2298,9 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
     _recipientCompleter->setCompletionMode(QCompleter::UnfilteredPopupCompletion);
     _recipientCompleter->setCompletionRole(Qt::UserRole + 2);
     _recipientCompleter->setMaxVisibleItems(6);
-    auto *recipients = new QListView;
+    auto *recipients = new ShareRecipientPopup(_userInput, QColor(dark ? QStringLiteral("#1F2023") : QStringLiteral("#FFFFFF")));
     recipients->setObjectName(QStringLiteral("shareRecipientPopup"));
     recipients->setAccessibleName(tr("Matching users and groups"));
-    recipients->setWindowFlag(Qt::FramelessWindowHint);
-    recipients->setAttribute(Qt::WA_TranslucentBackground);
     recipients->setFrameShape(QFrame::NoFrame);
     recipients->setFocusPolicy(Qt::NoFocus);
     recipients->setUniformItemSizes(true);
@@ -1576,7 +2346,7 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
         _recipientType = -1;
         _shareButton->setEnabled(false);
         _statusLabel->setStyleSheet(QStringLiteral("font-size: 12px; min-height: 16px;"));
-        _statusLabel->setText(tr("Type at least 2 characters to find a user or group."));
+        _statusLabel->setText(_sidebar ? tr("Enter at least 2 characters.") : tr("Type at least 2 characters to find a user or group."));
         if (canShare() && _userInput->text().trimmed().size() >= 2)
             _recipientTimer->start();
     });
@@ -1589,6 +2359,7 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
         cancelRecipientSearch();
         cancelWorkspaceRequest();
         cancelPublicLinkRequest();
+        for (auto *job : findChildren<JsonApiJob *>()) job->abort();
         _shareButton->setEnabled(false);
     });
     if (_accountState) {
@@ -1597,7 +2368,7 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
         });
         connect(_accountState, &QObject::destroyed, this, [this] { reject(); });
     }
-    _statusLabel->setText(tr("Type at least 2 characters to find a user or group."));
+    _statusLabel->setText(_sidebar ? tr("Search by name or email.") : tr("Type at least 2 characters to find a user or group."));
 
     if (_target == Target::Workspace) {
         _roleCombo->clear();
@@ -1610,9 +2381,11 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
 
 UDriveShareDialog::~UDriveShareDialog()
 {
+    _closed = true;
     cancelRecipientSearch();
     cancelWorkspaceRequest();
     cancelPublicLinkRequest();
+    for (auto *job : findChildren<JsonApiJob *>()) job->abort();
 }
 
 bool UDriveShareDialog::canShare() const
@@ -1778,6 +2551,7 @@ void UDriveShareDialog::sendShare()
             _statusLabel->setText(tr("Failed to share: %1").arg(err));
             _statusLabel->setStyleSheet(QStringLiteral("color: #EF4444; font-size: 12px;"));
         } else {
+            _modified = true;
             _userInput->clear();
             _statusLabel->setText(tr("Successfully shared with %1").arg(user));
             _statusLabel->setStyleSheet(QStringLiteral("color: #22C55E; font-size: 12px;"));
@@ -1837,6 +2611,15 @@ void UDriveShareDialog::fetchShares()
         const auto &data = job->data().value(QStringLiteral("ocs")).toObject().value(QStringLiteral("data")).toArray();
         int userShareCount = 0;
         int publicLinkCount = 0;
+        QStringList people;
+
+        const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+        const QString bg = dark ? QStringLiteral("#242528") : QStringLiteral("#FFFFFF");
+        const QString text = dark ? QStringLiteral("#EDEDED") : QStringLiteral("#1F2328");
+        const QString subtext = dark ? QStringLiteral("#9BA3AF") : QStringLiteral("#59636E");
+        const QString border = dark ? QStringLiteral("#3E4146") : QStringLiteral("#D0D7DE");
+        const QString cancelHover = dark ? QStringLiteral("#383B40") : QStringLiteral("#E5E7EB");
+        const QString arrow = dark ? QStringLiteral("chevron-dark") : QStringLiteral("chevron-light");
 
         for (const auto &element : data) {
             const auto map = element.toObject();
@@ -1859,113 +2642,411 @@ void UDriveShareDialog::fetchShares()
                 const QString linkUrl = map[QStringLiteral("url")].toString();
 
                 auto *rowWidget = new QWidget(_publicLinksContainer);
-                auto *rowLayout = new QHBoxLayout(rowWidget);
-                rowLayout->setContentsMargins(4, 2, 4, 2);
-                rowLayout->setSpacing(8);
-
-                auto *iconLabel = new QLabel(rowWidget);
-                iconLabel->setPixmap(UDriveIcons::icon(UDriveIcons::Symbol::Link).pixmap(16, 16));
-                rowLayout->addWidget(iconLabel);
-
-                auto *nameLabel = new QLabel(linkName, rowWidget);
-                nameLabel->setTextFormat(Qt::PlainText);
-                nameLabel->setStyleSheet(QStringLiteral("font-weight: 500; font-size: 13px;"));
-                rowLayout->addWidget(nameLabel, 1);
-
-                auto *permCombo = new UDriveComboBox(rowWidget);
-                permCombo->setObjectName(QStringLiteral("publicLinkRoleCombo"));
-                permCombo->setProperty("udriveCombo", true);
-                permCombo->setCursor(Qt::PointingHandCursor);
-                auto *popup = new QListView(permCombo);
-                popup->setObjectName(QStringLiteral("shareRolePopup"));
-                popup->setFrameShape(QFrame::NoFrame);
-                popup->setUniformItemSizes(true);
-                popup->setSpacing(2);
-                permCombo->setView(popup);
-                permCombo->setItemDelegate(new QStyledItemDelegate(permCombo));
-                permCombo->addItem(tr("Can view"), 1);
-                permCombo->addItem(tr("Can edit"), 15);
+                auto *rowLayout = new QHBoxLayout;
+                const QDate expiration = QDate::fromString(map.value(QStringLiteral("expiration")).toString().left(10), Qt::ISODate);
+                const auto password = map.value(QStringLiteral("share_with"));
+                const bool passwordProtected = map.value(QStringLiteral("password_protected")).toBool()
+                    || (password.isString() && !password.toString().isEmpty()) || password.toBool();
                 const bool isEdit = (perms == 15 || (perms & 2) || (perms & 4) || (perms & 8) || (perms & 16));
-                permCombo->setCurrentIndex(isEdit ? 1 : 0);
-                connect(permCombo, qOverload<int>(&QComboBox::activated), this, [this, shareId, permCombo](int index) {
-                    const int newPerms = permCombo->itemData(index).toInt();
-                    updatePublicLinkPermissions(shareId, newPerms);
-                });
-                rowLayout->addWidget(permCombo);
 
-                auto *copyBtn = new QToolButton(rowWidget);
-                copyBtn->setObjectName(QStringLiteral("publicLinkActionButton"));
-                copyBtn->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Copy));
-                copyBtn->setIconSize(QSize(16, 16));
-                copyBtn->setToolTip(tr("Copy link"));
-                copyBtn->setCursor(Qt::PointingHandCursor);
-                connect(copyBtn, &QToolButton::clicked, this, [this, linkUrl] {
-                    copyPublicLink(linkUrl);
-                });
-                rowLayout->addWidget(copyBtn);
+                if (_sidebar) {
+                    rowWidget->setLayout(rowLayout);
+                    rowLayout->setContentsMargins(0, 6, 0, 6);
+                    rowLayout->setSpacing(10);
 
-                auto *deleteBtn = new QToolButton(rowWidget);
-                deleteBtn->setObjectName(QStringLiteral("publicLinkActionButton"));
-                deleteBtn->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Trash));
-                deleteBtn->setIconSize(QSize(16, 16));
-                deleteBtn->setToolTip(tr("Delete link"));
-                deleteBtn->setCursor(Qt::PointingHandCursor);
-                connect(deleteBtn, &QToolButton::clicked, this, [this, shareId] {
-                    deletePublicLink(shareId);
-                });
-                rowLayout->addWidget(deleteBtn);
+                    auto *iconLabel = new QLabel(rowWidget);
+                    iconLabel->setFixedSize(36, 36);
+                    iconLabel->setStyleSheet(QStringLiteral("background: %1; border-radius: 18px;").arg(dark ? QStringLiteral("#2E3135") : QStringLiteral("#F3F4F6")));
+                    iconLabel->setAlignment(Qt::AlignCenter);
+                    iconLabel->setPixmap(UDriveIcons::icon(UDriveIcons::Symbol::Link, false, QColor(text)).pixmap(18, 18));
+                    rowLayout->addWidget(iconLabel, 0, Qt::AlignVCenter);
+
+                    auto *infoLayout = new QVBoxLayout;
+                    infoLayout->setContentsMargins(0, 0, 0, 0);
+                    infoLayout->setSpacing(1);
+
+                    auto *nameLabel = new QLabel(linkName, rowWidget);
+                    nameLabel->setObjectName(QStringLiteral("publicLinkName"));
+                    nameLabel->setTextFormat(Qt::PlainText);
+                    nameLabel->setWordWrap(false);
+                    nameLabel->setStyleSheet(QStringLiteral("font-weight: 600; font-size: 13px; color: %1;").arg(text));
+                    infoLayout->addWidget(nameLabel);
+
+                    QStringList linkStatus;
+                    if (passwordProtected) linkStatus.append(tr("Password protected"));
+                    if (expiration.isValid()) linkStatus.append(tr("Expires %1").arg(QLocale().toString(expiration, QLocale::ShortFormat)));
+                    if (!linkStatus.isEmpty()) {
+                        auto *status = new QLabel(linkStatus.join(QStringLiteral(" · ")), rowWidget);
+                        status->setObjectName(QStringLiteral("publicLinkStatus"));
+                        status->setTextFormat(Qt::PlainText);
+                        status->setStyleSheet(QStringLiteral("font-size: 12px; color: %1;").arg(subtext));
+                        infoLayout->addWidget(status);
+                    }
+
+                    auto *permCombo = new UDriveComboBox(rowWidget);
+                    permCombo->setObjectName(QStringLiteral("publicLinkRoleCombo"));
+                    permCombo->setProperty("udriveCombo", true);
+                    permCombo->setCursor(Qt::PointingHandCursor);
+                    configureShareRolePopup(permCombo);
+                    permCombo->addItem(tr("Can view"), 1);
+                    permCombo->addItem(tr("Can edit"), 15);
+                    permCombo->setCurrentIndex(isEdit ? 1 : 0);
+                    connect(permCombo, qOverload<int>(&QComboBox::activated), this, [this, shareId, permCombo](int index) {
+                        const int newPerms = permCombo->itemData(index).toInt();
+                        updatePublicLinkPermissions(shareId, newPerms);
+                    });
+                    QFont permFont = permCombo->font();
+                    permFont.setPixelSize(12);
+                    permCombo->setFont(permFont);
+                    permCombo->setStyleSheet(QStringLiteral(
+                        "QComboBox#publicLinkRoleCombo {"
+                        "    border: none; background: transparent; padding: 0 14px 0 0;"
+                        "    color: %1; font-size: 12px; font-weight: 400; combobox-popup: 0;"
+                        "}"
+                        "QComboBox#publicLinkRoleCombo:hover { color: %2; }"
+                        "QComboBox#publicLinkRoleCombo::drop-down { subcontrol-origin: border; subcontrol-position: center right; width: 12px; border: none; }"
+                        "QComboBox#publicLinkRoleCombo::down-arrow { image: url(:/udrive/icons/%3.svg); width: 8px; height: 8px; }"
+                    ).arg(subtext, text, arrow));
+                    permCombo->setFixedHeight(18);
+                    auto updatePermWidth = [permCombo] {
+                        permCombo->setFixedWidth(permCombo->fontMetrics().horizontalAdvance(permCombo->currentText()) + 26);
+                    };
+                    updatePermWidth();
+                    connect(permCombo, qOverload<int>(&QComboBox::currentIndexChanged), permCombo, [updatePermWidth](int) {
+                        updatePermWidth();
+                    });
+                    infoLayout->addWidget(permCombo, 0, Qt::AlignLeft);
+
+                    rowLayout->addLayout(infoLayout, 1);
+
+                    auto *copyBtn = new QToolButton(rowWidget);
+                    copyBtn->setObjectName(QStringLiteral("publicLinkActionButton"));
+                    copyBtn->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Copy));
+                    copyBtn->setIconSize(QSize(16, 16));
+                    copyBtn->setToolTip(tr("Copy link"));
+                    copyBtn->setCursor(Qt::PointingHandCursor);
+                    connect(copyBtn, &QToolButton::clicked, this, [this, linkUrl] {
+                        copyPublicLink(linkUrl);
+                    });
+                    rowLayout->addWidget(copyBtn, 0, Qt::AlignVCenter);
+
+                    auto *more = new QToolButton(rowWidget);
+                    more->setObjectName(QStringLiteral("publicLinkMoreButton"));
+                    more->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::MoreVertical));
+                    more->setIconSize(QSize(16, 16));
+                    more->setToolTip(tr("Link settings"));
+                    more->setAccessibleName(tr("Settings for %1").arg(linkName));
+                    more->setCursor(Qt::PointingHandCursor);
+                    more->setPopupMode(QToolButton::InstantPopup);
+                    more->setStyleSheet(QStringLiteral("QToolButton { border: none; border-radius: 4px; background: transparent; padding: 4px; } QToolButton:hover, QToolButton:pressed, QToolButton:open { background: transparent; } QToolButton::menu-indicator { image: none; }"));
+                    auto *menu = new UDriveMenu(more);
+                    menu->setObjectName(QStringLiteral("publicLinkMenu"));
+                    menu->setStyleSheet(QStringLiteral(
+                        "QMenu { background: %1; color: %2; border: 1px solid %3; border-radius: 8px; padding: 4px; }"
+                        "QMenu::item { padding: 6px 14px 6px 8px; border-radius: 4px; }"
+                        "QMenu::item:selected { background: %4; }"
+                        "QMenu::separator { height: 1px; background: %3; margin: 4px; }")
+                        .arg(bg, text, border, cancelHover));
+                    const auto addSetting = [this, menu, shareId, map](UDriveIcons::Symbol icon, const QString &text, const QString &field, const QString &name) {
+                        auto *action = menu->addAction(UDriveIcons::icon(icon), text);
+                        action->setObjectName(name);
+                        connect(action, &QAction::triggered, this, [this, shareId, map, field] { editPublicLink(shareId, map, field); });
+                    };
+                    addSetting(UDriveIcons::Symbol::Rename, tr("Rename"), QStringLiteral("name"), QStringLiteral("publicLinkRename"));
+                    addSetting(UDriveIcons::Symbol::Calendar, expiration.isValid() ? tr("Change expiration date") : tr("Set expiration date"), QStringLiteral("expireDate"), QStringLiteral("publicLinkExpiration"));
+                    addSetting(UDriveIcons::Symbol::Lock, passwordProtected ? tr("Change password") : tr("Add password"), QStringLiteral("password"), QStringLiteral("publicLinkPassword"));
+                    menu->addSeparator();
+                    auto *remove = menu->addAction(UDriveIcons::icon(UDriveIcons::Symbol::Trash), tr("Delete link"));
+                    remove->setObjectName(QStringLiteral("publicLinkDelete"));
+                    connect(remove, &QAction::triggered, this, [this, shareId] { deletePublicLink(shareId); });
+                    more->setMenu(menu);
+                    rowLayout->addWidget(more, 0, Qt::AlignVCenter);
+                } else {
+                    rowWidget->setLayout(rowLayout);
+                    rowLayout->setContentsMargins(4, 2, 4, 2);
+                    rowLayout->setSpacing(8);
+
+                    auto *iconLabel = new QLabel(rowWidget);
+                    iconLabel->setPixmap(UDriveIcons::icon(UDriveIcons::Symbol::Link).pixmap(16, 16));
+                    rowLayout->addWidget(iconLabel);
+
+                    auto *nameLabel = new QLabel(linkName, rowWidget);
+                    nameLabel->setObjectName(QStringLiteral("publicLinkName"));
+                    nameLabel->setTextFormat(Qt::PlainText);
+                    nameLabel->setWordWrap(true);
+                    nameLabel->setMinimumWidth(0);
+                    nameLabel->setStyleSheet(QStringLiteral("font-weight: 500; font-size: 13px;"));
+                    rowLayout->addWidget(nameLabel, 1);
+
+                    QStringList linkStatus;
+                    if (passwordProtected) linkStatus.append(tr("Password protected"));
+                    if (expiration.isValid()) linkStatus.append(tr("Expires %1").arg(QLocale().toString(expiration, QLocale::ShortFormat)));
+                    if (!linkStatus.isEmpty()) {
+                        auto *status = new QLabel(linkStatus.join(QStringLiteral(" · ")), rowWidget);
+                        status->setObjectName(QStringLiteral("publicLinkStatus"));
+                        status->setTextFormat(Qt::PlainText);
+                        status->setWordWrap(true);
+                        status->setStyleSheet(QStringLiteral("font-size: 12px; color: %1;").arg(subtext));
+                        rowLayout->addWidget(status);
+                    }
+
+                    auto *permCombo = new UDriveComboBox(rowWidget);
+                    permCombo->setObjectName(QStringLiteral("publicLinkRoleCombo"));
+                    permCombo->setProperty("udriveCombo", true);
+                    permCombo->setCursor(Qt::PointingHandCursor);
+                    configureShareRolePopup(permCombo);
+                    permCombo->addItem(tr("Can view"), 1);
+                    permCombo->addItem(tr("Can edit"), 15);
+                    permCombo->setCurrentIndex(isEdit ? 1 : 0);
+                    connect(permCombo, qOverload<int>(&QComboBox::activated), this, [this, shareId, permCombo](int index) {
+                        const int newPerms = permCombo->itemData(index).toInt();
+                        updatePublicLinkPermissions(shareId, newPerms);
+                    });
+                    rowLayout->addWidget(permCombo);
+
+                    auto *copyBtn = new QToolButton(rowWidget);
+                    copyBtn->setObjectName(QStringLiteral("publicLinkActionButton"));
+                    copyBtn->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Copy));
+                    copyBtn->setIconSize(QSize(16, 16));
+                    copyBtn->setToolTip(tr("Copy link"));
+                    copyBtn->setCursor(Qt::PointingHandCursor);
+                    connect(copyBtn, &QToolButton::clicked, this, [this, linkUrl] {
+                        copyPublicLink(linkUrl);
+                    });
+                    rowLayout->addWidget(copyBtn);
+
+                    auto *more = new QToolButton(rowWidget);
+                    more->setObjectName(QStringLiteral("publicLinkMoreButton"));
+                    more->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::MoreVertical));
+                    more->setIconSize(QSize(16, 16));
+                    more->setToolTip(tr("Link settings"));
+                    more->setAccessibleName(tr("Settings for %1").arg(linkName));
+                    more->setCursor(Qt::PointingHandCursor);
+                    more->setPopupMode(QToolButton::InstantPopup);
+                    more->setStyleSheet(QStringLiteral("QToolButton { border: none; border-radius: 6px; background: transparent; padding: 6px; } QToolButton:hover, QToolButton:pressed, QToolButton:open { background: transparent; } QToolButton::menu-indicator { image: none; }"));
+                    auto *menu = new UDriveMenu(more);
+                    menu->setObjectName(QStringLiteral("publicLinkMenu"));
+                    menu->setStyleSheet(QStringLiteral(
+                        "QMenu { background: %1; color: %2; border: 1px solid %3; border-radius: 8px; padding: 5px; menu-scrollable: 1; }"
+                        "QMenu::item { padding: 9px 18px 9px 10px; border-radius: 5px; }"
+                        "QMenu::item:selected { background: %4; }"
+                        "QMenu::separator { height: 1px; background: %3; margin: 5px; }")
+                        .arg(dark ? "#303030" : "#FFFFFF", dark ? "#EDEDED" : "#1F2328",
+                            dark ? "#454545" : "#D0D7DE", dark ? "#414141" : "#F0F2F4"));
+                    menu->setAttribute(Qt::WA_TranslucentBackground, false);
+                    const auto addSetting = [this, menu, shareId, map](UDriveIcons::Symbol icon, const QString &text, const QString &field, const QString &name) {
+                        auto *action = menu->addAction(UDriveIcons::icon(icon), text);
+                        action->setObjectName(name);
+                        connect(action, &QAction::triggered, this, [this, shareId, map, field] { editPublicLink(shareId, map, field); });
+                    };
+                    addSetting(UDriveIcons::Symbol::Rename, tr("Rename"), QStringLiteral("name"), QStringLiteral("publicLinkRename"));
+                    addSetting(UDriveIcons::Symbol::Calendar, expiration.isValid() ? tr("Change expiration date") : tr("Set expiration date"), QStringLiteral("expireDate"), QStringLiteral("publicLinkExpiration"));
+                    addSetting(UDriveIcons::Symbol::Lock, passwordProtected ? tr("Change password") : tr("Add password"), QStringLiteral("password"), QStringLiteral("publicLinkPassword"));
+                    menu->addSeparator();
+                    auto *remove = menu->addAction(UDriveIcons::icon(UDriveIcons::Symbol::Trash), tr("Delete link"));
+                    remove->setObjectName(QStringLiteral("publicLinkDelete"));
+                    connect(remove, &QAction::triggered, this, [this, shareId] { deletePublicLink(shareId); });
+                    more->setMenu(menu);
+                    rowLayout->addWidget(more);
+                }
 
                 _publicLinksLayout->addWidget(rowWidget);
+                if (_sidebar) rowWidget->show();
             } else if (shareType == 0 || shareType == 1 || shareType == -1) {
                 ++userShareCount;
                 const QString displayName = map[QStringLiteral("share_with_displayname")].toString();
                 const QString shareWith = displayName.isEmpty() ? map[QStringLiteral("share_with")].toString() : displayName;
-                const QString role = (perms & 2 || perms & 4 || perms & 8 || perms & 16) ? tr("Editor") : tr("Viewer");
+                people.append(shareWith);
 
                 auto *rowWidget = new QWidget(_sharesContainer);
-                auto *rowLayout = new QHBoxLayout(rowWidget);
-                rowLayout->setContentsMargins(4, 2, 4, 2);
+                auto *rowLayout = new QHBoxLayout;
+                if (_sidebar) {
+                    rowWidget->setLayout(rowLayout);
+                    rowLayout->setContentsMargins(0, 6, 0, 6);
+                    rowLayout->setSpacing(10);
 
-                auto *userIcon = new QLabel(rowWidget);
-                userIcon->setPixmap(UDriveIcons::icon(shareType == 1 ? UDriveIcons::Symbol::Members : UDriveIcons::Symbol::Folder).pixmap(16, 16));
-                rowLayout->addWidget(userIcon);
+                    auto *avatarLabel = new QLabel(rowWidget);
+                    avatarLabel->setFixedSize(36, 36);
+                    avatarLabel->setPixmap(createAvatarPixmap(shareWith, 36, devicePixelRatioF()));
+                    rowLayout->addWidget(avatarLabel, 0, Qt::AlignVCenter);
 
-                auto *userLabel = new QLabel(shareWith, rowWidget);
-                userLabel->setTextFormat(Qt::PlainText);
-                userLabel->setStyleSheet(QStringLiteral("font-weight: 500; font-size: 13px;"));
-                rowLayout->addWidget(userLabel, 1);
+                    auto *infoLayout = new QVBoxLayout;
+                    infoLayout->setContentsMargins(0, 0, 0, 0);
+                    infoLayout->setSpacing(1);
 
-                auto *roleBadge = new QLabel(role, rowWidget);
-                roleBadge->setStyleSheet(QStringLiteral("background: rgba(34, 197, 94, 0.15); color: #22C55E; border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 600;"));
-                rowLayout->addWidget(roleBadge);
+                    auto *userLabel = new QLabel(shareWith, rowWidget);
+                    userLabel->setTextFormat(Qt::PlainText);
+                    userLabel->setWordWrap(false);
+                    userLabel->setStyleSheet(QStringLiteral("font-weight: 600; font-size: 13px; color: %1;").arg(text));
+                    infoLayout->addWidget(userLabel);
 
-                auto *removeBtn = new QPushButton(tr("Remove"), rowWidget);
-                removeBtn->setCursor(Qt::PointingHandCursor);
-                removeBtn->setStyleSheet(QStringLiteral("color: #EF4444; border: none; background: transparent; font-size: 12px; font-weight: 500; padding: 2px 6px;"));
-                connect(removeBtn, &QPushButton::clicked, this, [this, shareId] {
-                    revokeShare(shareId);
-                });
-                rowLayout->addWidget(removeBtn);
+                    auto *role = new UDriveComboBox(rowWidget);
+                    role->setObjectName(QStringLiteral("sharePersonRoleCombo"));
+                    role->setProperty("udriveCombo", true);
+                    configureShareRolePopup(role);
+                    role->addItem(tr("Can view"), 1);
+                    role->addItem(tr("Can edit"), 15);
+                    role->setCurrentIndex((perms & 2 || perms & 4 || perms & 8 || perms & 16) ? 1 : 0);
+                    role->setAccessibleName(tr("Access for %1").arg(shareWith));
+                    connect(role, qOverload<int>(&QComboBox::activated), this, [this, shareId, role](int index) {
+                        updatePersonPermissions(shareId, role->itemData(index).toInt());
+                    });
+                    QFont roleFont = role->font();
+                    roleFont.setPixelSize(12);
+                    role->setFont(roleFont);
+                    role->setStyleSheet(QStringLiteral(
+                        "QComboBox#sharePersonRoleCombo {"
+                        "    border: none; background: transparent; padding: 0 14px 0 0;"
+                        "    color: %1; font-size: 12px; font-weight: 400; combobox-popup: 0;"
+                        "}"
+                        "QComboBox#sharePersonRoleCombo:hover { color: %2; }"
+                        "QComboBox#sharePersonRoleCombo::drop-down { subcontrol-origin: border; subcontrol-position: center right; width: 12px; border: none; }"
+                        "QComboBox#sharePersonRoleCombo::down-arrow { image: url(:/udrive/icons/%3.svg); width: 8px; height: 8px; }"
+                    ).arg(subtext, text, arrow));
+                    role->setFixedHeight(18);
+                    auto updateRoleWidth = [role] {
+                        role->setFixedWidth(role->fontMetrics().horizontalAdvance(role->currentText()) + 26);
+                    };
+                    updateRoleWidth();
+                    connect(role, qOverload<int>(&QComboBox::currentIndexChanged), role, [updateRoleWidth](int) {
+                        updateRoleWidth();
+                    });
+                    infoLayout->addWidget(role, 0, Qt::AlignLeft);
+
+                    rowLayout->addLayout(infoLayout, 1);
+
+                    auto *removeBtn = new QPushButton(rowWidget);
+                    removeBtn->setObjectName(QStringLiteral("shareRemovePerson"));
+                    removeBtn->hide();
+                    connect(removeBtn, &QPushButton::clicked, this, [this, shareId] {
+                        revokeShare(shareId);
+                    });
+
+                    auto *moreBtn = new QToolButton(rowWidget);
+                    moreBtn->setObjectName(QStringLiteral("sharePersonMoreButton"));
+                    moreBtn->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::MoreVertical));
+                    moreBtn->setIconSize(QSize(16, 16));
+                    moreBtn->setToolTip(tr("More options for %1").arg(shareWith));
+                    moreBtn->setCursor(Qt::PointingHandCursor);
+                    moreBtn->setPopupMode(QToolButton::InstantPopup);
+                    moreBtn->setStyleSheet(QStringLiteral("QToolButton { border: none; border-radius: 4px; background: transparent; padding: 4px; } QToolButton:hover, QToolButton:pressed, QToolButton:open { background: transparent; } QToolButton::menu-indicator { image: none; }"));
+
+                    auto *menu = new UDriveMenu(moreBtn);
+                    menu->setObjectName(QStringLiteral("sharePersonMenu"));
+                    menu->setStyleSheet(QStringLiteral(
+                        "QMenu { background: %1; color: %2; border: 1px solid %3; border-radius: 8px; padding: 4px; }"
+                        "QMenu::item { padding: 6px 14px 6px 8px; border-radius: 4px; }"
+                        "QMenu::item:selected { background: %4; }")
+                        .arg(bg, text, border, cancelHover));
+                    auto *removeAction = menu->addAction(UDriveIcons::icon(UDriveIcons::Symbol::Trash, false, QColor(QStringLiteral("#EF4444"))), tr("Remove access"));
+                    removeAction->setObjectName(QStringLiteral("sharePersonRemoveAction"));
+                    connect(removeAction, &QAction::triggered, this, [removeBtn] {
+                        removeBtn->click();
+                    });
+                    moreBtn->setMenu(menu);
+                    rowLayout->addWidget(moreBtn, 0, Qt::AlignVCenter);
+                } else {
+                    rowWidget->setLayout(rowLayout);
+                    rowLayout->setContentsMargins(4, 2, 4, 2);
+
+                    auto *avatarLabel = new QLabel(rowWidget);
+                    avatarLabel->setFixedSize(28, 28);
+                    avatarLabel->setPixmap(createAvatarPixmap(shareWith, 28, devicePixelRatioF()));
+                    rowLayout->addWidget(avatarLabel, 0, Qt::AlignVCenter);
+
+                    auto *userLabel = new QLabel(shareWith, rowWidget);
+                    userLabel->setTextFormat(Qt::PlainText);
+                    userLabel->setWordWrap(true);
+                    userLabel->setMinimumWidth(0);
+                    userLabel->setStyleSheet(QStringLiteral("font-weight: 500; font-size: 13px;"));
+                    rowLayout->addWidget(userLabel, 1);
+
+                    auto *role = new UDriveComboBox(rowWidget);
+                    role->setObjectName(QStringLiteral("sharePersonRoleCombo"));
+                    role->setProperty("udriveCombo", true);
+                    configureShareRolePopup(role);
+                    role->addItem(tr("Can view"), 1);
+                    role->addItem(tr("Can edit"), 15);
+                    role->setCurrentIndex((perms & 2 || perms & 4 || perms & 8 || perms & 16) ? 1 : 0);
+                    role->setAccessibleName(tr("Access for %1").arg(shareWith));
+                    connect(role, qOverload<int>(&QComboBox::activated), this, [this, shareId, role](int index) {
+                        updatePersonPermissions(shareId, role->itemData(index).toInt());
+                    });
+                    QFont roleFont = role->font();
+                    roleFont.setPixelSize(12);
+                    role->setFont(roleFont);
+                    const int roleTextWidth = qMax(role->fontMetrics().horizontalAdvance(tr("Can view")),
+                        role->fontMetrics().horizontalAdvance(tr("Can edit")));
+                    role->setFixedWidth(roleTextWidth + 40);
+                    rowLayout->addWidget(role);
+
+                    auto *removeBtn = new QPushButton(tr("Remove"), rowWidget);
+                    removeBtn->setObjectName(QStringLiteral("shareRemovePerson"));
+                    removeBtn->setAccessibleName(tr("Remove access for %1").arg(shareWith));
+                    removeBtn->setCursor(Qt::PointingHandCursor);
+                    removeBtn->setStyleSheet(QStringLiteral("color: #EF4444; border: none; background: transparent; font-size: 12px; font-weight: 500; padding: 2px 6px;"));
+                    connect(removeBtn, &QPushButton::clicked, this, [this, shareId] {
+                        revokeShare(shareId);
+                    });
+                    rowLayout->addWidget(removeBtn);
+                }
 
                 _sharesLayout->addWidget(rowWidget);
+                if (_sidebar) rowWidget->show();
             }
         }
 
         if (userShareCount == 0) {
-            auto *noShares = new QLabel(tr("Not shared with anyone yet."), _sharesContainer);
-            noShares->setStyleSheet(QStringLiteral("color: #9BA3AF; font-size: 12px; font-style: italic;"));
+            auto *noShares = new QLabel(_sidebar ? tr("No people added yet.") : tr("Not shared with anyone yet."), _sharesContainer);
+            noShares->setStyleSheet(_sidebar ? QStringLiteral("color: %1; font-size: 12px; font-weight: 400;").arg(QGuiApplication::palette().color(QPalette::Window).lightness() < 128 ? QStringLiteral("#9BA3AF") : QStringLiteral("#59636E"))
+                : QStringLiteral("color: #9BA3AF; font-size: 12px; font-style: italic;"));
             _sharesLayout->addWidget(noShares);
         }
         _sharesLayout->addStretch(1);
 
         if (_publicLinksLayout) {
             if (publicLinkCount == 0) {
-                auto *noLinks = new QLabel(tr("This file has no public link."), _publicLinksContainer);
-                noLinks->setStyleSheet(QStringLiteral("color: #9BA3AF; font-size: 12px; font-style: italic;"));
+                auto *noLinks = new QLabel(_sidebar ? tr("No public links created.") : tr("This file has no public link."), _publicLinksContainer);
+                noLinks->setStyleSheet(_sidebar ? QStringLiteral("color: %1; font-size: 12px; font-weight: 400;").arg(QGuiApplication::palette().color(QPalette::Window).lightness() < 128 ? QStringLiteral("#9BA3AF") : QStringLiteral("#59636E"))
+                    : QStringLiteral("color: #9BA3AF; font-size: 12px; font-style: italic;"));
                 _publicLinksLayout->addWidget(noLinks);
             }
             _publicLinksLayout->addStretch(1);
         }
+        if (_sidebar) {
+            auto *peopleScroll = findChild<QScrollArea *>(QStringLiteral("sharesScrollArea"));
+            peopleScroll->setFixedHeight(qBound(40, _sharesLayout->sizeHint().height() + 2, 240));
+            _publicLinksScrollArea->setFixedHeight(qBound(40, _publicLinksLayout->sizeHint().height() + 2, 240));
+        }
+        Q_EMIT accessListLoaded(people, publicLinkCount);
+    });
+    job->start();
+}
+
+void UDriveShareDialog::updatePersonPermissions(const QString &shareId, int permissions)
+{
+    if (!canShare() || _sharing || _target != Target::File || !validName(shareId) || (permissions != 1 && permissions != 15)) return;
+    _sharing = true;
+    _sharesContainer->setEnabled(false);
+    _userInput->setEnabled(false);
+    _roleCombo->setEnabled(false);
+    _shareButton->setEnabled(false);
+    _addLinkButton->setEnabled(false);
+    _statusLabel->setText(tr("Updating access…"));
+    const JsonApiJob::UrlQuery args{{QStringLiteral("permissions"), QString::number(permissions)}};
+    const QString id = QString::fromUtf8(QUrl::toPercentEncoding(shareId));
+    auto *job = new JsonApiJob(_accountState->account(), QStringLiteral("ocs/v1.php/apps/files_sharing/api/v1/shares/%1").arg(id), "PUT", args, {}, this);
+    connect(job, &JsonApiJob::finishedSignal, this, [this, job] {
+        if (!canShare()) return;
+        _sharing = false;
+        _sharesContainer->setEnabled(true);
+        _userInput->setEnabled(true);
+        _roleCombo->setEnabled(true);
+        _shareButton->setEnabled(!_recipientId.isEmpty());
+        _addLinkButton->setEnabled(true);
+        if (job->ocsSuccess()) _modified = true;
+        _statusLabel->setText(job->ocsSuccess() ? tr("Access updated.") : tr("Could not update access: %1").arg(job->ocsMessage().isEmpty() ? job->errorString() : job->ocsMessage()));
+        fetchShares();
     });
     job->start();
 }
@@ -1984,6 +3065,7 @@ void UDriveShareDialog::revokeShare(const QString &shareId)
         if (!canShare())
             return;
         if (job->ocsSuccess()) {
+            _modified = true;
             _statusLabel->setText(tr("Access removed."));
             _statusLabel->setStyleSheet(QStringLiteral("color: #22C55E; font-size: 12px;"));
             fetchShares();
@@ -2224,6 +3306,7 @@ void UDriveShareDialog::createPublicLink()
             _statusLabel->setText(tr("Failed to create public link: %1").arg(err));
             _statusLabel->setStyleSheet(QStringLiteral("color: #EF4444; font-size: 12px;"));
         } else {
+            _modified = true;
             const auto data = job->data().value(QStringLiteral("ocs")).toObject().value(QStringLiteral("data")).toObject();
             const QString url = data.value(QStringLiteral("url")).toString();
             const QUrl parsedUrl(url);
@@ -2243,29 +3326,316 @@ void UDriveShareDialog::createPublicLink()
 
 void UDriveShareDialog::updatePublicLinkPermissions(const QString &shareId, int permissions)
 {
-    if (!canShare() || !validName(shareId) || (permissions != 1 && permissions != 15))
-        return;
+    if (permissions == 1 || permissions == 15)
+        updatePublicLink(shareId, QStringLiteral("permissions"), QString::number(permissions));
+}
 
-    _statusLabel->setText(tr("Updating public link permissions…"));
-    _statusLabel->setStyleSheet(QStringLiteral("color: #3B82F6; font-size: 12px;"));
+void UDriveShareDialog::editPublicLink(const QString &shareId, const QJsonObject &share, const QString &field)
+{
+    if (!canShare() || _sharing || !validName(shareId)) return;
+    const bool rename = field == QLatin1String("name");
+    const bool expiration = field == QLatin1String("expireDate");
+    if (!rename && !expiration && field != QLatin1String("password")) return;
 
-    const JsonApiJob::UrlQuery args {
-        { QStringLiteral("permissions"), QString::number(permissions) }
+    auto *dialog = new QDialog(this);
+    dialog->setObjectName(QStringLiteral("publicLinkEditDialog"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(rename ? tr("Rename link") : expiration ? tr("Set expiration date") : tr("Link password"));
+    dialog->setMinimumWidth(440);
+    styleWorkspaceDialog(dialog);
+    const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+    const QString calIcon = dark ? QStringLiteral("calendar-dark") : QStringLiteral("calendar-light");
+    dialog->setStyleSheet(dialog->styleSheet() + QStringLiteral(
+        "QLineEdit { background: %1; color: %2; border: 1px solid %3; border-radius: 8px; padding: 8px 12px; font-size: 13px; }"
+        "QLineEdit:focus { border-color: #22C55E; }"
+        "QDateEdit { background: %1; color: %2; border: 1px solid %3; border-radius: 8px; padding: 8px 36px 8px 12px; font-size: 13px; }"
+        "QDateEdit:focus { border-color: #22C55E; }"
+        "QDateEdit::up-button, QDateEdit::down-button { width: 0px; height: 0px; border: none; }"
+        "QDateEdit::drop-down { subcontrol-origin: padding; subcontrol-position: top right; width: 34px; border: none; background: transparent; }"
+        "QDateEdit::down-arrow { image: url(:/udrive/icons/%4.svg); width: 18px; height: 18px; }"
+        "QCheckBox { color: %2; spacing: 8px; font-size: 13px; }")
+        .arg(dark ? "#1B1C1E" : "#FAFCFB", dark ? "#EDEDED" : "#1F2328", dark ? "#3E4146" : "#D0D7DE", calIcon));
+    auto *layout = new QVBoxLayout(dialog);
+    layout->setContentsMargins(20, 20, 20, 20);
+    layout->setSpacing(14);
+    auto *label = new QLabel(rename ? tr("Link name") : expiration ? tr("Expiration date") : tr("New password"), dialog);
+    layout->addWidget(label);
+    auto *input = new QLineEdit(dialog);
+    input->setObjectName(QStringLiteral("publicLinkEditValue"));
+    auto *date = new QDateEdit(dialog);
+    date->setObjectName(QStringLiteral("publicLinkExpirationDate"));
+    date->setDisplayFormat(QStringLiteral("dd/MM/yyyy"));
+    date->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    date->setCalendarPopup(true);
+    date->setMinimumDate(QDate::currentDate());
+    const QDate previous = QDate::fromString(share.value(QStringLiteral("expiration")).toString().left(10), Qt::ISODate);
+    date->setDate(previous.isValid() && previous >= QDate::currentDate() ? previous : QDate::currentDate().addDays(7));
+    auto *remove = new QCheckBox(expiration ? tr("Remove expiration date") : tr("Remove password"), dialog);
+    remove->setObjectName(QStringLiteral("publicLinkRemoveSetting"));
+
+    if (auto *calendar = date->calendarWidget()) {
+        calendar->setVerticalHeaderFormat(QCalendarWidget::NoVerticalHeader);
+        calendar->setHorizontalHeaderFormat(QCalendarWidget::SingleLetterDayNames);
+        calendar->setGridVisible(false);
+        calendar->setMinimumSize(320, 310);
+
+        if (auto *view = calendar->findChild<QTableView *>(QStringLiteral("qt_calendar_calendarview"))) {
+            view->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+            view->verticalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        }
+
+        QTextCharFormat normalDayFormat;
+        normalDayFormat.setForeground(dark ? QColor("#EDEDED") : QColor("#1F2328"));
+        calendar->setWeekdayTextFormat(Qt::Saturday, normalDayFormat);
+        calendar->setWeekdayTextFormat(Qt::Sunday, normalDayFormat);
+
+        QTextCharFormat headerFormat;
+        headerFormat.setForeground(dark ? QColor("#9BA3AF") : QColor("#6B7280"));
+        headerFormat.setFontWeight(QFont::DemiBold);
+        calendar->setHeaderTextFormat(headerFormat);
+
+        auto *prevBtn = calendar->findChild<QToolButton *>(QStringLiteral("qt_calendar_prevmonth"));
+        auto *nextBtn = calendar->findChild<QToolButton *>(QStringLiteral("qt_calendar_nextmonth"));
+        auto *yearEdit = calendar->findChild<QSpinBox *>(QStringLiteral("qt_calendar_yearedit"));
+        if (prevBtn) {
+            prevBtn->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Back));
+            prevBtn->setText(QString());
+        }
+        if (nextBtn) {
+            nextBtn->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Next));
+            nextBtn->setText(QString());
+        }
+        if (yearEdit) {
+            yearEdit->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        }
+
+        auto *bottomBar = new QWidget(calendar);
+        bottomBar->setObjectName(QStringLiteral("calendarBottomBar"));
+        auto *barLayout = new QHBoxLayout(bottomBar);
+        barLayout->setContentsMargins(12, 4, 12, 8);
+        auto *clearBtn = new QPushButton(tr("Clear"), bottomBar);
+        clearBtn->setObjectName(QStringLiteral("calendarClearButton"));
+        clearBtn->setCursor(Qt::PointingHandCursor);
+        auto *todayBtn = new QPushButton(tr("Today"), bottomBar);
+        todayBtn->setObjectName(QStringLiteral("calendarTodayButton"));
+        todayBtn->setCursor(Qt::PointingHandCursor);
+        barLayout->addWidget(clearBtn);
+        barLayout->addStretch(1);
+        barLayout->addWidget(todayBtn);
+        if (auto *vbox = qobject_cast<QVBoxLayout *>(calendar->layout())) {
+            vbox->addWidget(bottomBar);
+        }
+
+        connect(clearBtn, &QPushButton::clicked, dialog, [remove, calendar] {
+            remove->setChecked(true);
+            if (auto *p = calendar->parentWidget()) p->close();
+        });
+        connect(todayBtn, &QPushButton::clicked, dialog, [date, remove, calendar] {
+            remove->setChecked(false);
+            const QDate today = QDate::currentDate();
+            date->setDate(today);
+            calendar->setSelectedDate(today);
+            if (auto *p = calendar->parentWidget()) p->close();
+        });
+        connect(calendar, &QCalendarWidget::clicked, dialog, [remove](const QDate &) {
+            remove->setChecked(false);
+        });
+
+        const QString calBg = dark ? QStringLiteral("#222428") : QStringLiteral("#FFFFFF");
+        const QString calText = dark ? QStringLiteral("#EDEDED") : QStringLiteral("#1F2328");
+        const QString calBorder = dark ? QStringLiteral("#383A40") : QStringLiteral("#D0D7DE");
+        const QString calHover = dark ? QStringLiteral("#2E3136") : QStringLiteral("#F3F4F6");
+        const QString calMuted = dark ? QStringLiteral("#9BA3AF") : QStringLiteral("#6B7280");
+
+        calendar->setStyleSheet(QStringLiteral(
+            "QCalendarWidget { background-color: %1; border: 1px solid %3; border-radius: 8px; }"
+            "QWidget#qt_calendar_navigationbar { background-color: %1; border-bottom: 1px solid %3; padding: 6px 8px; }"
+            "QToolButton#qt_calendar_prevmonth, QToolButton#qt_calendar_nextmonth { background: transparent; border: none; border-radius: 4px; padding: 4px; color: %2; min-width: 24px; min-height: 24px; }"
+            "QToolButton#qt_calendar_prevmonth:hover, QToolButton#qt_calendar_nextmonth:hover { background-color: %4; }"
+            "QToolButton#qt_calendar_monthbutton, QToolButton#qt_calendar_yearbutton { background: transparent; color: %2; border: none; font-size: 13px; font-weight: 600; padding: 4px 6px; }"
+            "QToolButton#qt_calendar_monthbutton:hover, QToolButton#qt_calendar_yearbutton:hover { background-color: %4; border-radius: 4px; }"
+            "QToolButton#qt_calendar_monthbutton::menu-indicator { image: none; width: 0px; }"
+            "QSpinBox { background: transparent; color: %2; border: none; font-size: 13px; font-weight: 600; }"
+            "QSpinBox::up-button, QSpinBox::down-button { width: 0px; height: 0px; border: none; }"
+            "QTableView#qt_calendar_calendarview { background-color: %1; color: %2; border: none; selection-background-color: #22C55E; selection-color: #FFFFFF; outline: none; font-size: 12px; }"
+            "QTableView#qt_calendar_calendarview::item { border-radius: 4px; padding: 0px; margin: 1px; }"
+            "QTableView#qt_calendar_calendarview::item:hover { background-color: %4; }"
+            "QTableView#qt_calendar_calendarview::item:selected { background-color: #22C55E; color: #FFFFFF; }"
+            "QTableView#qt_calendar_calendarview::item:disabled { color: %5; }"
+            "QHeaderView::section { background-color: %1; color: %5; border: none; font-size: 11px; font-weight: 600; padding: 4px 0; }"
+            "QWidget#calendarBottomBar { background-color: %1; border-top: 1px solid %3; }"
+            "QPushButton#calendarClearButton, QPushButton#calendarTodayButton { background: transparent; color: #22C55E; border: none; font-size: 13px; font-weight: 500; padding: 4px 8px; }"
+            "QPushButton#calendarClearButton:hover, QPushButton#calendarTodayButton:hover { text-decoration: underline; }"
+        ).arg(calBg, calText, calBorder, calHover, calMuted));
+    }
+
+    if (expiration) {
+        input->hide();
+        layout->addWidget(date);
+        if (previous.isValid()) layout->addWidget(remove);
+        else remove->hide();
+    } else {
+        date->hide();
+        input->setMaxLength(rename ? 64 : 256);
+        input->setText(rename ? share.value(QStringLiteral("name")).toString() : QString());
+        input->setEchoMode(rename ? QLineEdit::Normal : QLineEdit::Password);
+        input->setAccessibleName(label->text());
+        input->selectAll();
+        layout->addWidget(input);
+        const auto protection = share.value(QStringLiteral("share_with"));
+        if (!rename && (share.value(QStringLiteral("password_protected")).toBool() || protection.toBool() || !protection.toString().isEmpty()))
+            layout->addWidget(remove);
+        else remove->hide();
+    }
+    auto *errorBox = new QWidget(dialog);
+    errorBox->setObjectName(QStringLiteral("publicLinkEditError"));
+    errorBox->setAccessibleName(tr("Could not save link settings"));
+    errorBox->setStyleSheet(QStringLiteral(
+        "QWidget#publicLinkEditError { background: transparent; border: none; }"
+        "QLabel { background: transparent; border: none; }"));
+    auto *errorLayout = new QVBoxLayout(errorBox);
+    errorLayout->setContentsMargins(0, 4, 0, 4);
+    errorLayout->setSpacing(6);
+    auto *errorTitle = new QLabel(errorBox);
+    errorTitle->setObjectName(QStringLiteral("publicLinkEditErrorTitle"));
+    errorTitle->setTextFormat(Qt::PlainText);
+    errorTitle->setWordWrap(true);
+    errorTitle->setStyleSheet(QStringLiteral("font-weight: 600; font-size: 13px; color: %1;").arg(dark ? "#F87171" : "#DC2626"));
+    errorLayout->addWidget(errorTitle);
+    auto *errorDetails = new QLabel(errorBox);
+    errorDetails->setObjectName(QStringLiteral("publicLinkEditErrorDetails"));
+    errorDetails->setTextFormat(Qt::PlainText);
+    errorDetails->setWordWrap(true);
+    errorDetails->setMinimumWidth(0);
+    errorDetails->setStyleSheet(QStringLiteral("font-size: 12px; color: %1;").arg(dark ? "#D1D5DB" : "#4B5563"));
+    errorLayout->addWidget(errorDetails);
+    layout->addWidget(errorBox);
+    errorBox->hide();
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, dialog);
+    buttons->button(QDialogButtonBox::Save)->setText(expiration ? tr("Confirm") : tr("Save"));
+    layout->addWidget(buttons);
+    const auto updateSave = [dialog, input, date, remove, buttons, rename, expiration] {
+        const bool busy = dialog->property("publicLinkSaving").toBool();
+        buttons->button(QDialogButtonBox::Save)->setEnabled(!busy && (remove->isChecked() || expiration
+            || (rename ? !input->text().trimmed().isEmpty() : !input->text().isEmpty())));
+        buttons->button(QDialogButtonBox::Save)->setText(busy ? tr("Saving…") : expiration ? tr("Confirm") : tr("Save"));
+        input->setEnabled(!busy && !remove->isChecked());
+        date->setEnabled(!busy && !remove->isChecked());
+        remove->setEnabled(!busy);
     };
+    connect(input, &QLineEdit::textChanged, dialog, updateSave);
+    connect(remove, &QCheckBox::toggled, dialog, updateSave);
+    connect(remove, &QCheckBox::toggled, dialog, [dialog, errorBox](bool checked) {
+        if (checked && errorBox->isVisible()) {
+            errorBox->hide();
+            dialog->adjustSize();
+        }
+    });
+    updateSave();
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, dialog, [this, dialog, input, date, remove, shareId, field, rename, expiration,
+        errorBox, errorTitle, errorDetails, updateSave] {
+        if (dialog->property("publicLinkSaving").toBool()) return;
+        const QString value = remove->isChecked() ? QString() : expiration ? date->date().toString(Qt::ISODate)
+            : rename ? input->text().trimmed() : input->text();
+        dialog->setProperty("publicLinkSaving", true);
+        errorBox->hide();
+        dialog->adjustSize();
+        updateSave();
+        const QPointer<QDialog> guard(dialog);
+        updatePublicLink(shareId, field, value, [guard, input, errorBox, errorTitle, errorDetails, updateSave, rename, expiration](bool success, const QString &error) {
+            if (!guard) return;
+            guard->setProperty("publicLinkSaving", false);
+            if (success) {
+                input->clear();
+                guard->accept();
+                return;
+            }
+            const auto requirements = !rename && !expiration ? publicLinkPasswordRequirements(error) : QStringList();
+            errorTitle->setText(!requirements.isEmpty() ? tr("Choose a stronger password")
+                : rename ? tr("Couldn't rename this link") : expiration ? tr("Couldn't update the expiration date") : tr("Couldn't save the password"));
+            errorDetails->setText(!requirements.isEmpty() ? QStringLiteral("• ") + requirements.join(QStringLiteral("\n• "))
+                : error.isEmpty() ? tr("Check your connection and try again.") : error.simplified().left(400));
+            errorBox->show();
+            updateSave();
+            if (!expiration) { input->setFocus(); input->selectAll(); }
+            guard->adjustSize();
+        });
+    });
+    connect(dialog, &QDialog::finished, this, [this, dialog, input] {
+        input->clear();
+        if (!dialog->property("publicLinkSaving").toBool()) return;
+        dialog->setProperty("publicLinkSaving", false);
+        cancelPublicLinkRequest();
+        setPublicLinkBusy(false);
+        _statusLabel->setText(tr("Update cancelled."));
+        _statusLabel->setStyleSheet(QStringLiteral("font-size: 12px;"));
+    });
+    connect(this, &QDialog::finished, dialog, &QDialog::reject);
+    dialog->adjustSize();
+    dialog->open();
+    if (!expiration) input->setFocus();
+}
 
+void UDriveShareDialog::setPublicLinkBusy(bool busy)
+{
+    _sharing = busy;
+    _publicLinksContainer->setEnabled(!busy);
+    _addLinkButton->setEnabled(!busy);
+    _shareButton->setEnabled(!busy && !_recipientId.isEmpty());
+}
+
+void UDriveShareDialog::updatePublicLink(const QString &shareId, const QString &field, const QString &value,
+    std::function<void(bool, const QString &)> completion)
+{
+    if (!canShare() || _sharing || _target != Target::File || !validName(shareId)) {
+        if (completion) completion(false, tr("This link can't be updated right now. Close this dialog and try again."));
+        return;
+    }
+    if (field != QLatin1String("name") && field != QLatin1String("password")
+        && field != QLatin1String("expireDate") && field != QLatin1String("permissions")) return;
+    if (field == QLatin1String("name") && (value.trimmed().isEmpty() || value.size() > 64)) {
+        if (completion) completion(false, tr("Enter a link name with 1 to 64 characters."));
+        return;
+    }
+    if (field == QLatin1String("expireDate") && !value.isEmpty()
+        && (!QDate::fromString(value, Qt::ISODate).isValid() || QDate::fromString(value, Qt::ISODate) < QDate::currentDate())) {
+        if (completion) completion(false, tr("Choose today's date or a later date."));
+        return;
+    }
+    setPublicLinkBusy(true);
+    const QString previousStatus = _statusLabel->text();
+    const QString previousStyle = _statusLabel->styleSheet();
+    _statusLabel->setText(tr("Updating public link…"));
+    _statusLabel->setStyleSheet(QStringLiteral("font-size: 12px;"));
+    // The OCS endpoint accepts one changed setting per request.
+    const JsonApiJob::UrlQuery args{{field, value}};
     const QString encodedShareId = QString::fromUtf8(QUrl::toPercentEncoding(shareId));
     auto *job = new JsonApiJob(_accountState->account(), QStringLiteral("ocs/v1.php/apps/files_sharing/api/v1/shares/%1").arg(encodedShareId), "PUT", args, {}, this);
-    connect(job, &JsonApiJob::finishedSignal, this, [this, job] {
+    _publicLinkJob = job;
+    connect(job, &JsonApiJob::finishedSignal, this, [this, job, field, previousStatus, previousStyle, completion = std::move(completion)] {
+        if (_publicLinkJob != job) return;
+        _publicLinkJob.clear();
         if (!canShare()) return;
+        setPublicLinkBusy(false);
         if (!job->ocsSuccess()) {
-            const QString err = job->ocsMessage().isEmpty() ? job->errorString() : job->ocsMessage();
-            _statusLabel->setText(tr("Failed to update public link: %1").arg(err));
+            const QString err = publicLinkUpdateError(job);
+            if (completion) {
+                _statusLabel->setText(previousStatus);
+                _statusLabel->setStyleSheet(previousStyle);
+                completion(false, err);
+                return;
+            }
+            _statusLabel->setText(tr("Could not update link permissions. Try again."));
+            _statusLabel->setToolTip(err);
             _statusLabel->setStyleSheet(QStringLiteral("color: #EF4444; font-size: 12px;"));
-            fetchShares();
         } else {
-            _statusLabel->setText(tr("Public link permissions updated."));
+            _modified = true;
+            _statusLabel->setText(field == QLatin1String("permissions") ? tr("Public link permissions updated.") : tr("Public link updated."));
             _statusLabel->setStyleSheet(QStringLiteral("color: #22C55E; font-size: 12px;"));
+            if (completion) completion(true, {});
         }
+        fetchShares();
     });
     job->start();
 }
@@ -2284,6 +3654,15 @@ void UDriveShareDialog::copyPublicLink(const QString &url)
 void UDriveShareDialog::deletePublicLink(const QString &shareId)
 {
     revokeShare(shareId);
+}
+
+QString UDriveFileBrowser::uploadDuration(qint64 milliseconds)
+{
+    if (milliseconds <= 0) return QStringLiteral("00:00");
+    const qint64 seconds = milliseconds / 1000;
+    const auto twoDigits = [](qint64 value) { return QString::number(value).rightJustified(2, QLatin1Char('0')); };
+    const QString minutesAndSeconds = twoDigits(seconds / 60 % 60) + QLatin1Char(':') + twoDigits(seconds % 60);
+    return seconds >= 3600 ? QString::number(seconds / 3600) + QLatin1Char(':') + minutesAndSeconds : minutesAndSeconds;
 }
 
 UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
@@ -2542,6 +3921,15 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     auto *fileToolbar = new QHBoxLayout(_fileToolbar);
     fileToolbar->setContentsMargins(0, 0, 0, 0);
     fileToolbar->setSpacing(8);
+    _emptyTrashButton = new QPushButton(tr("Empty trash"), this);
+    _emptyTrashButton->setObjectName(QStringLiteral("driveEmptyTrash"));
+    _emptyTrashButton->setProperty("driveToolbarButton", true);
+    _emptyTrashButton->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Trash, false, QColor(QStringLiteral("#E03838"))));
+    _emptyTrashButton->setFixedHeight(34);
+    _emptyTrashButton->setToolTip(tr("Permanently delete all items in this space’s Deleted files."));
+    _emptyTrashButton->hide();
+    fileToolbar->addWidget(_emptyTrashButton);
+    connect(_emptyTrashButton, &QPushButton::clicked, this, &UDriveFileBrowser::confirmEmptyTrash);
     fileToolbar->addWidget(_selectAll);
     fileToolbar->addSpacing(12);
     auto *sortLabel = new QLabel(tr("Sort by"), this);
@@ -2639,27 +4027,37 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _workspaceControls->setObjectName(QStringLiteral("driveWorkspaceControls"));
     auto *workspaceControls = new QVBoxLayout(_workspaceControls);
     workspaceControls->setContentsMargins(0, 8, 0, 0);
-    workspaceControls->setSpacing(24);
+    workspaceControls->setSpacing(16);
+
+    auto *workspaceFilterContent = new QVBoxLayout;
+    workspaceFilterContent->setSpacing(4);
+
+    auto *workspaceSearchLabelRow = new QHBoxLayout;
+    workspaceSearchLabelRow->addStretch(1);
+    auto *searchLabel = new QLabel(tr("Search"), _workspaceControls);
+    searchLabel->setFixedWidth(224);
+    workspaceSearchLabelRow->addWidget(searchLabel);
+    workspaceFilterContent->addLayout(workspaceSearchLabelRow);
+
     auto *filters = new QHBoxLayout;
-    filters->setSpacing(12);
+    filters->setSpacing(10);
     auto *filterIcon = new QLabel(_workspaceControls);
     filterIcon->setPixmap(UDriveIcons::icon(UDriveIcons::Symbol::Filter).pixmap(22, 22));
-    filters->addWidget(filterIcon, 0, Qt::AlignBottom);
-    filters->addWidget(new QLabel(tr("Filter:"), _workspaceControls), 0, Qt::AlignBottom);
+    filters->addWidget(filterIcon, 0, Qt::AlignVCenter);
+    auto *filterLabel = new QLabel(tr("Filter:"), _workspaceControls);
+    filters->addWidget(filterLabel, 0, Qt::AlignVCenter);
     _includeDisabledButton = new QPushButton(tr("Include disabled"), _workspaceControls);
     _includeDisabledButton->setObjectName(QStringLiteral("driveIncludeDisabled"));
     _includeDisabledButton->setCheckable(true);
     _includeDisabledButton->setCursor(Qt::PointingHandCursor);
-    filters->addWidget(_includeDisabledButton, 0, Qt::AlignBottom);
+    filters->addWidget(_includeDisabledButton, 0, Qt::AlignVCenter);
     connect(_includeDisabledButton, &QPushButton::toggled, this, [this](bool included) {
         _includeDisabledWorkspaces = included;
         _workspaceNotice = false;
         if (isWorkspacesOverview()) updateSpaces();
     });
     filters->addStretch(1);
-    auto *localSearch = new QVBoxLayout;
-    localSearch->setSpacing(4);
-    auto *searchLabel = new QLabel(tr("Search"), _workspaceControls);
+
     _workspaceSearch = new QLineEdit(_workspaceControls);
     _workspaceSearch->setObjectName(QStringLiteral("driveWorkspaceSearch"));
     _workspaceSearch->setAccessibleName(tr("Search workspaces"));
@@ -2667,10 +4065,11 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _workspaceSearch->setMinimumHeight(30);
     _workspaceSearch->setFixedWidth(224);
     searchLabel->setBuddy(_workspaceSearch);
-    localSearch->addWidget(searchLabel);
-    localSearch->addWidget(_workspaceSearch);
-    filters->addLayout(localSearch);
-    workspaceControls->addLayout(filters);
+    filters->addWidget(_workspaceSearch, 0, Qt::AlignVCenter);
+
+    workspaceFilterContent->addLayout(filters);
+    workspaceControls->addLayout(workspaceFilterContent);
+
     _workspaceSelectionControls = new QWidget(_workspaceControls);
     auto *selection = new QHBoxLayout(_workspaceSelectionControls);
     selection->setContentsMargins(0, 0, 0, 0);
@@ -2678,17 +4077,17 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _workspaceSelectAll = new SelectAllCheckBox(tr("Select all"), _workspaceControls);
     _workspaceSelectAll->setObjectName(QStringLiteral("driveWorkspaceSelectAll"));
     _workspaceSelectAll->setTristate(true);
-    selection->addWidget(_workspaceSelectAll);
+    selection->addWidget(_workspaceSelectAll, 0, Qt::AlignVCenter);
     selection->addSpacing(6);
     auto *workspaceSortLabel = new QLabel(tr("Sort by"), _workspaceControls);
-    selection->addWidget(workspaceSortLabel);
+    selection->addWidget(workspaceSortLabel, 0, Qt::AlignVCenter);
     _workspaceSort = new UDriveComboBox(_workspaceControls);
     _workspaceSort->setObjectName(QStringLiteral("driveWorkspaceSort"));
     _workspaceSort->setProperty("udriveCombo", true);
     _workspaceSort->addItems({tr("A-Z"), tr("Z-A")});
     _workspaceSort->setMinimumWidth(100);
     workspaceSortLabel->setBuddy(_workspaceSort);
-    selection->addWidget(_workspaceSort);
+    selection->addWidget(_workspaceSort, 0, Qt::AlignVCenter);
     selection->addStretch(1);
     workspaceControls->addWidget(_workspaceSelectionControls);
     auto *rule = new QFrame(_workspaceControls);
@@ -2988,10 +4387,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     content->setObjectName(QStringLiteral("driveFileContent"));
     content->setChildrenCollapsible(false);
     content->addWidget(_fileViews);
-    buildFileDetails();
-    content->addWidget(_fileDetails);
     content->setStretchFactor(0, 1);
-    content->setStretchFactor(1, 0);
     layout->addWidget(content, 1);
 
     auto *actions = new QHBoxLayout;
@@ -3045,6 +4441,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     connect(_detailsAction, &QAction::triggered, this, [this] {
         _detailsRequested = true;
         updateFileDetails();
+        showFileDetailsActions(false);
     });
     _newFolderAction->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Folder));
     _uploadAction->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Upload));
@@ -3060,10 +4457,25 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _webAction->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Online));
     connect(_shareButton, &QPushButton::clicked, _shareAction, &QAction::trigger);
     addFileActions(_fileMenu);
+    buildFileDetails();
+    content->addWidget(_fileDetails);
+    content->setStretchFactor(1, 0);
     layout->addLayout(actions);
 
+    _uploadDetails = new QLabel(this);
+    _uploadDetails->setObjectName(QStringLiteral("driveUploadDetails"));
+    _uploadDetails->setAccessibleName(tr("Upload details"));
+    _uploadDetails->setTextFormat(Qt::PlainText);
+    _uploadDetails->setWordWrap(true);
+    _uploadDetails->hide();
+    layout->addWidget(_uploadDetails);
+    _uploadProgressTimer = new QTimer(this);
+    _uploadProgressTimer->setObjectName(QStringLiteral("driveUploadProgressTimer"));
+    _uploadProgressTimer->setInterval(1000);
+    connect(_uploadProgressTimer, &QTimer::timeout, this, &UDriveFileBrowser::refreshUploadDetails);
     auto *transfer = new QHBoxLayout;
     _progress = new QProgressBar(this);
+    _progress->setObjectName(QStringLiteral("driveTransferProgress"));
     _progress->setAccessibleName(tr("Download progress"));
     _cancelButton = new QPushButton(tr("Cancel download"), this);
     _cancelButton->setObjectName(QStringLiteral("driveCancelDownload"));
@@ -3137,7 +4549,11 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     connect(_openButton, &QPushButton::clicked, this, &UDriveFileBrowser::activateSelection);
     connect(_downloadButton, &QPushButton::clicked, this, &UDriveFileBrowser::downloadSelection);
     connect(_cancelButton, &QPushButton::clicked, this, [this] {
-        if (_uploading) {
+        if (_emptyingTrash) {
+            cancelOperation();
+            refresh();
+            setMessage(tr("Empty trash stopped. Some items may already have been permanently deleted."));
+        } else if (_uploading) {
             cancelOperation();
             refresh();
             setMessage(tr("Upload canceled. Refresh to check the server."));
@@ -3177,36 +4593,48 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     connect(_renameAction, &QAction::triggered, this, [renameOrCopy] { renameOrCopy(false); });
     connect(_copyAction, &QAction::triggered, this, [renameOrCopy] { renameOrCopy(true); });
     connect(_moveAction, &QAction::triggered, this, [this] {
-        const QString oldPath = selectedItem().data(PathRole).toString();
+        const auto item = selectedItem();
+        if (!item.isValid()) return;
+        const QString oldPath = item.data(PathRole).toString();
+        const QString itemName = item.data().toString();
+        const bool isFolder = item.data(DirectoryRole).toBool();
         const QUrl root = selectedRoot();
+        const QString spaceName = _spaceName;
         const QPointer<UDriveFileBrowser> guard(this);
-        bool ok = false;
-        const QString path =
-            UDriveInputDialog::getText(this, tr("Move to folder"), tr("Destination folder in this space (leave empty for the root)"), {}, tr("OK"), &ok, true);
-        if (guard && ok && root == selectedRoot() && selectedItem().data(PathRole).toString() == oldPath && !moveSelected(path))
-            setMessage(tr("Choose a valid destination folder. Existing files will not be overwritten."));
+
+        QList<QPair<QString, QString>> initialFolders;
+        if (_model && _path.isEmpty()) {
+            for (int r = 0; r < _model->rowCount(); ++r) {
+                const auto idx = _model->index(r, 0);
+                if (idx.data(DirectoryRole).toBool() && !idx.data(TrashedRole).toBool()) {
+                    const QString p = idx.data(PathRole).toString();
+                    const QString n = idx.data().toString();
+                    if (!p.isEmpty() && !n.isEmpty()) {
+                        initialFolders.append({p, n});
+                    }
+                }
+            }
+        }
+
+        auto *dialog = new UDriveMoveDialog(_state, root, spaceName, oldPath, itemName, isFolder, initialFolders, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dialog, &QDialog::accepted, this, [this, guard, root, oldPath, dialog] {
+            if (!guard || root != selectedRoot() || selectedItem().data(PathRole).toString() != oldPath) {
+                return;
+            }
+            const QString destFolder = dialog->selectedDestination();
+            if (!moveSelected(destFolder)) {
+                setMessage(tr("Choose a valid destination folder. Existing files will not be overwritten."));
+            }
+        });
+        dialog->open();
     });
     connect(_deleteAction, &QAction::triggered, this, [this] { confirmDelete(false); });
     connect(_restoreAction, &QAction::triggered, this, &UDriveFileBrowser::restoreSelected);
     connect(_restoreButton, &QPushButton::clicked, this, &UDriveFileBrowser::restoreSelected);
     connect(_permanentDeleteAction, &QAction::triggered, this, [this] { confirmDelete(true); });
     connect(_favoriteAction, &QAction::triggered, this, [this] { setSelectedFavorite(!selectedItem().data(FavoriteRole).toBool()); });
-    connect(_shareAction, &QAction::triggered, this, [this] {
-        const auto item = selectedItem();
-        if (!item.isValid() || !_state || !_state->account())
-            return;
-        const QString fileName = item.data().toString();
-        const bool isFolder = item.data(DirectoryRole).toBool();
-        const QString path = item.data(PathRole).toString();
-        const QUrl link = item.data(LinkRole).toUrl();
-        const QString spaceId = item.data(SpaceRole).toString();
-
-        UDriveShareDialog dialog(_state, fileName, isFolder, path, link, spaceId, this);
-        connect(&dialog, &QDialog::finished, this, [this] {
-            if (sharedByMeOverview()) refresh();
-        });
-        dialog.exec();
-    });
+    connect(_shareAction, &QAction::triggered, this, &UDriveFileBrowser::showFileShares);
     connect(_linkAction, &QAction::triggered, this, [this] {
         if (_linkAction->isEnabled()) {
             QApplication::clipboard()->setText(selectedItem().data(LinkRole).toUrl().toString());
@@ -3292,6 +4720,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
 
 UDriveFileBrowser::~UDriveFileBrowser()
 {
+    clearFileShares();
     _workspaceActions->cancel();
     cancelListing();
     cancelDownload();
@@ -3373,68 +4802,393 @@ void UDriveFileBrowser::updateFileColumns()
 
 void UDriveFileBrowser::buildFileDetails()
 {
+    const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+    const QString textPrimary = dark ? QStringLiteral("#FFFFFF") : QStringLiteral("#111827");
+    const QString textSecondary = dark ? QStringLiteral("#9CA3AF") : QStringLiteral("#6B7280");
+    const QString borderColor = dark ? QStringLiteral("rgba(255, 255, 255, 0.08)") : QStringLiteral("#E5E7EB");
+    const QString cardBg = dark ? QStringLiteral("rgba(255, 255, 255, 0.04)") : QStringLiteral("#F3F4F6");
+    const QString hoverBg = dark ? QStringLiteral("rgba(255, 255, 255, 0.06)") : QStringLiteral("rgba(0, 0, 0, 0.05)");
+
     auto *scroll = new QScrollArea(this);
     scroll->setObjectName(QStringLiteral("driveFileDetails"));
     scroll->setAccessibleName(tr("File details"));
     scroll->setWidgetResizable(true);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setMinimumWidth(240);
-    scroll->setMaximumWidth(320);
+    scroll->setMinimumWidth(280);
+    scroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    scroll->viewport()->setAutoFillBackground(false);
+    scroll->viewport()->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
+    scroll->setStyleSheet(QStringLiteral(
+        "QScrollArea#driveFileDetails {"
+        "    background: transparent;"
+        "    border: none;"
+        "    border-left: 1px solid %1;"
+        "}"
+        "QScrollArea#driveFileDetails > QWidget,"
+        "QScrollArea#driveFileDetails > QWidget > QWidget {"
+        "    background: transparent;"
+        "}"
+    ).arg(borderColor));
+
     auto *panel = new QWidget(scroll);
+    panel->setStyleSheet(QStringLiteral("background: transparent;"));
     auto *layout = new QVBoxLayout(panel);
-    layout->setContentsMargins(16, 8, 8, 12);
-    layout->setSpacing(14);
+    layout->setContentsMargins(12, 12, 12, 16);
+    layout->setSpacing(10);
+
+    // Sidebar navigation
     auto *header = new QHBoxLayout;
+    header->setContentsMargins(0, 0, 0, 0);
+    header->setSpacing(4);
+
+    _detailsBack = new QToolButton(panel);
+    _detailsBack->setObjectName(QStringLiteral("driveDetailsBack"));
+    _detailsBack->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Back));
+    _detailsBack->setAccessibleName(tr("Back to Details panel"));
+    _detailsBack->setToolTip(tr("Back to Details panel"));
+    _detailsBack->setAutoRaise(true);
+    _detailsBack->setCursor(Qt::PointingHandCursor);
+    _detailsBack->setFixedSize(26, 26);
+    connect(_detailsBack, &QToolButton::clicked, this, [this] { showFileDetailsActions(false, true); });
+    header->addWidget(_detailsBack);
+    header->addStretch(1);
+    _detailsTitle = new QLabel(tr("Actions"), panel);
+    _detailsTitle->setObjectName(QStringLiteral("driveDetailsTitle"));
+    _detailsTitle->setStyleSheet(QStringLiteral("font-size: 14px; font-weight: 600; color: %1;").arg(textPrimary));
+    header->addWidget(_detailsTitle);
+    header->addStretch(1);
+
+    auto *close = new QToolButton(panel);
+    close->setObjectName(QStringLiteral("driveDetailsClose"));
+    close->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Close));
+    close->setAccessibleName(tr("Close details"));
+    close->setToolTip(tr("Close details"));
+    close->setAutoRaise(true);
+    close->setCursor(Qt::PointingHandCursor);
+    close->setFixedSize(26, 26);
+    close->setStyleSheet(QStringLiteral(
+        "QToolButton#driveDetailsClose {"
+        "    border: none;"
+        "    border-radius: 4px;"
+        "    background: transparent;"
+        "    padding: 3px;"
+        "}"
+        "QToolButton#driveDetailsClose:hover {"
+        "    background: %1;"
+        "}"
+    ).arg(hoverBg));
+    connect(close, &QToolButton::clicked, this, [this] { _detailsRequested = false; showFileDetailsActions(false); _fileDetails->hide(); });
+    header->addWidget(close, 0, Qt::AlignVCenter);
+    layout->addLayout(header);
+
+    // 2. File Name (bold text)
     _detailsName = new QLabel(panel);
     _detailsName->setObjectName(QStringLiteral("driveDetailsName"));
     _detailsName->setTextFormat(Qt::PlainText);
     _detailsName->setWordWrap(true);
     _detailsName->setMinimumWidth(0);
-    auto font = _detailsName->font(); font.setBold(true); _detailsName->setFont(font);
-    header->addWidget(_detailsName, 1);
-    auto *close = new QToolButton(panel);
-    close->setObjectName(QStringLiteral("driveDetailsClose"));
-    close->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Close));
-    close->setAccessibleName(tr("Close details")); close->setToolTip(tr("Close details"));
-    close->setAutoRaise(true);
-    connect(close, &QToolButton::clicked, this, [this] { _detailsRequested = false; _fileDetails->hide(); });
-    header->addWidget(close, 0, Qt::AlignTop);
-    layout->addLayout(header);
-    _detailsIcon = new QLabel(panel);
+    _detailsName->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    _detailsName->setStyleSheet(QStringLiteral(
+        "QLabel#driveDetailsName {"
+        "    font-size: 14px;"
+        "    font-weight: 600;"
+        "    color: %1;"
+        "    margin-top: 4px;"
+        "    margin-bottom: 2px;"
+        "}"
+    ).arg(textPrimary));
+    auto *fileHeader = new QHBoxLayout;
+    fileHeader->setSpacing(10);
+    _detailsFileIcon = new QLabel(panel);
+    _detailsFileIcon->setObjectName(QStringLiteral("driveDetailsFileIcon"));
+    _detailsFileIcon->setFixedSize(24, 24);
+    fileHeader->addWidget(_detailsFileIcon);
+    fileHeader->addWidget(_detailsName, 1);
+    layout->addLayout(fileHeader);
+
+    _detailsPages = new QStackedWidget(panel);
+    _detailsPages->setObjectName(QStringLiteral("driveDetailsPages"));
+    layout->addWidget(_detailsPages, 1);
+    auto *detailsPage = new QWidget(_detailsPages);
+    detailsPage->setObjectName(QStringLiteral("driveDetailsOverview"));
+    auto *detailsLayout = new QVBoxLayout(detailsPage);
+    detailsLayout->setContentsMargins(0, 0, 0, 0);
+    detailsLayout->setSpacing(10);
+    _detailsPages->addWidget(detailsPage);
+
+    // 3. Preview Card
+    auto *card = new QFrame(detailsPage);
+    card->setObjectName(QStringLiteral("driveDetailsCard"));
+    card->setFixedHeight(140);
+    card->setStyleSheet(QStringLiteral(
+        "QFrame#driveDetailsCard {"
+        "    background: %1;"
+        "    border: 1px solid %2;"
+        "    border-radius: 8px;"
+        "}"
+    ).arg(cardBg, borderColor));
+    auto *cardLayout = new QVBoxLayout(card);
+    cardLayout->setContentsMargins(6, 6, 6, 6);
+    cardLayout->setAlignment(Qt::AlignCenter);
+    _detailsIcon = new QLabel(card);
+    _detailsIcon->setObjectName(QStringLiteral("driveDetailsIcon"));
     _detailsIcon->setAlignment(Qt::AlignCenter);
-    _detailsIcon->setMinimumHeight(120);
-    layout->addWidget(_detailsIcon);
-    const auto field = [panel, layout](const QString &title, const QString &objectName) {
-        auto *label = new QLabel(title, panel);
-        auto font = label->font(); font.setBold(true); label->setFont(font);
-        layout->addWidget(label);
-        auto *value = new QLabel(panel);
-        value->setObjectName(objectName); value->setTextFormat(Qt::PlainText);
-        value->setWordWrap(true); value->setTextInteractionFlags(Qt::TextSelectableByMouse);
-        value->setMinimumWidth(0); layout->addWidget(value);
-        return value;
+    _detailsIcon->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
+    cardLayout->addWidget(_detailsIcon);
+    detailsLayout->addWidget(card);
+
+    // 4. Sharing status
+    _detailsPeople = new QLabel(detailsPage);
+    _detailsPeople->setObjectName(QStringLiteral("driveDetailsPeople"));
+    _detailsPeople->setTextFormat(Qt::PlainText);
+    _detailsPeople->setWordWrap(true);
+    _detailsPeople->setStyleSheet(QStringLiteral(
+        "QLabel#driveDetailsPeople {"
+        "    font-size: 13px;"
+        "    color: %1;"
+        "    padding: 2px 0 4px 0;"
+        "}"
+    ).arg(textSecondary));
+    detailsLayout->addWidget(_detailsPeople);
+
+    // 5. Metadata Grid (2 columns: Key | Value)
+    auto *grid = new QGridLayout;
+    grid->setContentsMargins(0, 4, 0, 8);
+    grid->setHorizontalSpacing(16);
+    grid->setVerticalSpacing(8);
+    grid->setColumnStretch(0, 0);
+    grid->setColumnStretch(1, 1);
+
+    const auto makeKey = [detailsPage, textSecondary](const QString &title) {
+        auto *key = new QLabel(title, detailsPage);
+        key->setStyleSheet(QStringLiteral("QLabel { font-size: 12px; font-weight: 500; color: %1; background: transparent; }").arg(textSecondary));
+        return key;
     };
-    _detailsModified = field(tr("Last modified"), QStringLiteral("driveDetailsModified"));
-    _detailsSize = field(tr("Size"), QStringLiteral("driveDetailsSize"));
-    _detailsLocation = field(tr("Location"), QStringLiteral("driveDetailsLocation"));
-    _detailsPeople = field(tr("Shares"), QStringLiteral("driveDetailsPeople"));
-    auto *rule = new QFrame(panel); rule->setFrameShape(QFrame::HLine); layout->addWidget(rule);
-    auto *actions = new QLabel(tr("Actions"), panel); actions->setFont(font); layout->addWidget(actions);
-    const auto button = [this, panel, layout](const QString &text, UDriveIcons::Symbol icon, const std::function<void()> &clicked) {
-        auto *value = new QPushButton(UDriveIcons::icon(icon), text, panel);
-        value->setCursor(Qt::PointingHandCursor);
-        connect(value, &QPushButton::clicked, this, clicked);
-        layout->addWidget(value); return value;
+    const auto makeValue = [detailsPage, textPrimary](const QString &objectName) {
+        auto *val = new QLabel(detailsPage);
+        val->setObjectName(objectName);
+        val->setTextFormat(Qt::PlainText);
+        val->setWordWrap(true);
+        val->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        val->setMinimumWidth(0);
+        val->setStyleSheet(QStringLiteral("QLabel { font-size: 12px; font-weight: 400; color: %1; background: transparent; }").arg(textPrimary));
+        return val;
     };
-    _detailsShare = button(tr("Manage shares"), UDriveIcons::Symbol::Share, [this] { _shareAction->trigger(); });
-    _detailsDownload = button(tr("Download"), UDriveIcons::Symbol::Download, [this] { downloadSelection(); });
-    _detailsRename = button(tr("Rename"), UDriveIcons::Symbol::Rename, [this] { _renameAction->trigger(); });
-    _detailsWeb = button(tr("Open on Web"), UDriveIcons::Symbol::Online, [this] { _webAction->trigger(); });
-    layout->addStretch(1);
+
+    grid->addWidget(makeKey(tr("Last modified")), 0, 0, Qt::AlignLeft | Qt::AlignTop);
+    _detailsModified = makeValue(QStringLiteral("driveDetailsModified"));
+    grid->addWidget(_detailsModified, 0, 1, Qt::AlignLeft | Qt::AlignTop);
+
+    grid->addWidget(makeKey(tr("Owner")), 1, 0, Qt::AlignLeft | Qt::AlignTop);
+    _detailsOwner = makeValue(QStringLiteral("driveDetailsOwner"));
+    grid->addWidget(_detailsOwner, 1, 1, Qt::AlignLeft | Qt::AlignTop);
+
+    grid->addWidget(makeKey(tr("Size")), 2, 0, Qt::AlignLeft | Qt::AlignTop);
+    _detailsSize = makeValue(QStringLiteral("driveDetailsSize"));
+    grid->addWidget(_detailsSize, 2, 1, Qt::AlignLeft | Qt::AlignTop);
+
+    grid->addWidget(makeKey(tr("Location")), 3, 0, Qt::AlignLeft | Qt::AlignTop);
+    _detailsLocation = makeValue(QStringLiteral("driveDetailsLocation"));
+    grid->addWidget(_detailsLocation, 3, 1, Qt::AlignLeft | Qt::AlignTop);
+
+    detailsLayout->addLayout(grid);
+
+    // 6. Sidebar sections
+    const auto makeAccordionHeader = [detailsPage, detailsLayout, borderColor, textPrimary, textSecondary, hoverBg](
+        UDriveIcons::Symbol sym, const QString &title, QLabel **chevronOut) {
+        auto *row = new QWidget(detailsPage);
+        auto *rowLayout = new QVBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(4);
+        auto *separator = new QFrame(row);
+        separator->setFixedHeight(1);
+        separator->setStyleSheet(QStringLiteral("background: %1; border: none;").arg(borderColor));
+        rowLayout->addWidget(separator);
+        auto *btn = new QPushButton(row);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setFixedHeight(44);
+        btn->setStyleSheet(QStringLiteral(
+            "QPushButton {"
+            "    border: 1px solid transparent;"
+            "    border-radius: 8px;"
+            "    padding: 0;"
+            "    min-height: 42px; max-height: 42px;"
+            "    background: transparent;"
+            "}"
+            "QPushButton:hover {"
+            "    background: %1;"
+            "}"
+            "QPushButton:focus { border-color: #00856B; }"
+        ).arg(hoverBg));
+
+        auto *h = new QHBoxLayout(btn);
+        h->setContentsMargins(10, 0, 10, 0);
+        h->setSpacing(8);
+
+        auto *iconLbl = new QLabel(btn);
+        iconLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+        iconLbl->setPixmap(UDriveIcons::icon(sym).pixmap(16, 16));
+        iconLbl->setStyleSheet(QStringLiteral("background: transparent; border: none;"));
+        h->addWidget(iconLbl);
+
+        auto *titleLbl = new QLabel(title, btn);
+        titleLbl->setAttribute(Qt::WA_TransparentForMouseEvents);
+        titleLbl->setStyleSheet(QStringLiteral("QLabel { border: none; background: transparent; color: %1; font-size: 13px; font-weight: 500; }").arg(textPrimary));
+        h->addWidget(titleLbl);
+
+        h->addStretch(1);
+
+        auto *chev = new QLabel(QStringLiteral("›"), btn);
+        chev->setAttribute(Qt::WA_TransparentForMouseEvents);
+        chev->setStyleSheet(QStringLiteral("QLabel { border: none; background: transparent; color: %1; font-size: 15px; font-weight: bold; }").arg(textSecondary));
+        h->addWidget(chev);
+
+        if (chevronOut) *chevronOut = chev;
+        rowLayout->addWidget(btn);
+        detailsLayout->addWidget(row);
+        return btn;
+    };
+
+    auto *actionsHeader = makeAccordionHeader(UDriveIcons::Symbol::Open, tr("Actions"), nullptr);
+    actionsHeader->setObjectName(QStringLiteral("driveDetailsActions"));
+
+    auto *actionsContainer = new QWidget(_detailsPages);
+    actionsContainer->setObjectName(QStringLiteral("driveDetailsActionsPage"));
+    actionsContainer->setAccessibleName(tr("File actions"));
+    auto *actionsLayout = new QVBoxLayout(actionsContainer);
+    actionsLayout->setContentsMargins(0, 12, 0, 0);
+    actionsLayout->setSpacing(6);
+    _detailsPages->addWidget(actionsContainer);
+
+    const auto actionStyle = QStringLiteral(
+        "QPushButton { background: transparent; color: %1; border: 1px solid transparent;"
+        " border-radius: 6px; padding: 0; min-width: 0; min-height: 42px; max-height: 42px; font-size: 13px; }"
+        "QPushButton:hover { background: %2; }"
+        "QPushButton:focus { border: 1px solid #00856B; }"
+        "QPushButton:disabled { color: %3; }").arg(textPrimary, hoverBg, textSecondary);
+    _detailsOpen = new FileDetailsActionButton(actionsContainer);
+    _detailsOpen->setObjectName(QStringLiteral("driveDetailsOpen"));
+    _detailsOpen->setStyleSheet(actionStyle);
+    _detailsOpen->setCursor(Qt::PointingHandCursor);
+    _detailsOpen->setFixedHeight(44);
+    _detailsOpen->setIconSize(QSize(20, 20));
+    connect(_detailsOpen, &QPushButton::clicked, this, &UDriveFileBrowser::activateSelection);
+    actionsLayout->addWidget(_detailsOpen);
+
+    const auto actionButton = [actionsContainer, actionsLayout, actionStyle](QAction *action, const QString &objectName) {
+        auto *button = new FileDetailsActionButton(actionsContainer);
+        button->setObjectName(objectName);
+        button->setStyleSheet(actionStyle);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setFixedHeight(44);
+        button->setIconSize(QSize(20, 20));
+        const auto sync = [button, action] {
+            button->setText(action->text());
+            button->setIcon(action->icon());
+            button->setEnabled(action->isEnabled());
+            button->setVisible(action->isVisible());
+            button->setToolTip(action->toolTip());
+        };
+        sync();
+        connect(action, &QAction::changed, button, sync);
+        connect(button, &QPushButton::clicked, action, &QAction::trigger);
+        actionsLayout->addWidget(button);
+        return button;
+    };
+    _detailsDownload = actionButton(_fileMenu->findChild<QAction *>(QStringLiteral("driveMenuDownload")), QStringLiteral("driveDetailsDownload"));
+    actionButton(_deleteAction, QStringLiteral("driveDetailsDelete"));
+    actionButton(_moveAction, QStringLiteral("driveDetailsMove"));
+    actionButton(_copyAction, QStringLiteral("driveDetailsCopy"));
+    _detailsRename = actionButton(_renameAction, QStringLiteral("driveDetailsRename"));
+    actionButton(_favoriteAction, QStringLiteral("driveDetailsFavorite"));
+    _detailsShare = actionButton(_shareAction, QStringLiteral("driveDetailsShare"));
+    _detailsWeb = actionButton(_webAction, QStringLiteral("driveDetailsWeb"));
+    actionsLayout->addStretch(1);
+    connect(actionsHeader, &QPushButton::clicked, this, [this] { showFileDetailsActions(true, true); });
+
+    auto *sharesHeader = makeAccordionHeader(UDriveIcons::Symbol::Share, tr("Shares"), nullptr);
+    sharesHeader->setObjectName(QStringLiteral("driveDetailsShares"));
+    connect(sharesHeader, &QPushButton::clicked, this, [this] { _shareAction->trigger(); });
+
+    auto *bottomBorder = new QFrame(panel);
+    bottomBorder->setFrameShape(QFrame::HLine);
+    bottomBorder->setFixedHeight(1);
+    bottomBorder->setStyleSheet(QStringLiteral("background: %1; border: none;").arg(borderColor));
+    detailsLayout->addWidget(bottomBorder);
+
+    detailsLayout->addStretch(1);
     scroll->setWidget(panel);
     _fileDetails = scroll;
+    showFileDetailsActions(false);
     _fileDetails->hide();
+}
+
+void UDriveFileBrowser::showFileDetailsActions(bool show, bool focus)
+{
+    if (!_detailsPages) return;
+    clearFileShares();
+    _detailsTitle->setText(tr("Actions"));
+    _detailsPages->setCurrentIndex(show ? 1 : 0);
+    _detailsBack->setVisible(show);
+    _detailsTitle->setVisible(show);
+    _detailsFileIcon->setVisible(show);
+    _fileDetails->setAccessibleName(show ? tr("File actions") : tr("File details"));
+    static_cast<QScrollArea *>(_fileDetails)->verticalScrollBar()->setValue(0);
+    if (focus && _fileDetails->isVisible()) {
+        if (show) _detailsBack->setFocus(Qt::OtherFocusReason);
+        else _detailsPages->widget(0)->findChild<QPushButton *>(QStringLiteral("driveDetailsActions"))->setFocus(Qt::OtherFocusReason);
+    }
+}
+
+void UDriveFileBrowser::clearFileShares()
+{
+    auto *share = _detailsShares.data();
+    _detailsShares.clear();
+    if (!share) return;
+    if (share->hasChanges() && sharedByMeOverview() && _detailsIndex.isValid()) {
+        const auto source = _detailsIndex;
+        QTimer::singleShot(0, this, [this, source] {
+            if (source == _detailsIndex && !_detailsShares && sharedByMeOverview() && canBrowse() && isVisible()) refresh();
+        });
+    }
+    _detailsPages->removeWidget(share);
+    share->reject();
+    share->deleteLater();
+}
+
+void UDriveFileBrowser::showFileShares()
+{
+    if (!_shareAction->isEnabled() || !canBrowse()) return;
+    const auto item = selectedItem();
+    if (!item.isValid()) return;
+    _detailsRequested = true;
+    updateFileDetails();
+    if (!_detailsShares) {
+        auto *share = new UDriveShareDialog(_state, item.data().toString(), item.data(DirectoryRole).toBool(),
+            item.data(PathRole).toString(), item.data(LinkRole).toUrl(), item.data(SpaceRole).toString(), _detailsPages,
+            UDriveShareDialog::Target::File, UDriveShareDialog::Presentation::Sidebar);
+        _detailsShares = share;
+        _detailsPages->addWidget(share);
+        const QPersistentModelIndex source = _detailsIndex;
+        connect(share, &UDriveShareDialog::accessListLoaded, this, [this, share, source](const QStringList &people, int publicLinks) {
+            if (_detailsShares != share || source != _detailsIndex || !source.isValid()) return;
+            _model->setData(source, people, SharePeopleRole);
+            _model->setData(source, publicLinks, SharePublicLinksRole);
+            _detailsPeople->setText(fileSharingSummary(people, publicLinks));
+        });
+        connect(share, &QDialog::finished, this, [this, share] {
+            if (_detailsShares == share) showFileDetailsActions(false);
+        });
+    }
+    _detailsPages->setCurrentWidget(_detailsShares);
+    _detailsTitle->setText(tr("Shares"));
+    _detailsTitle->show();
+    _detailsBack->show();
+    _detailsFileIcon->show();
+    _fileDetails->setAccessibleName(tr("File shares"));
+    static_cast<QScrollArea *>(_fileDetails)->verticalScrollBar()->setValue(0);
+    _detailsShares->findChild<QLineEdit *>(QStringLiteral("shareUserInput"))->setFocus(Qt::OtherFocusReason);
 }
 
 void UDriveFileBrowser::updateFileDetails()
@@ -3448,17 +5202,83 @@ void UDriveFileBrowser::updateFileDetails()
     if (source != _detailsIndex) {
         auto job = _shareItemJob; _shareItemJob.clear(); if (job) job->abort();
         _detailsIndex = source;
+        showFileDetailsActions(false);
         _detailsRequested = available && _section == Section::Shares;
     }
     _fileDetails->setVisible(available && _detailsRequested);
+    if (_fileDetails->isVisible() && !_fileDetails->property("driveDetailsSized").toBool()) {
+        if (auto *splitter = qobject_cast<QSplitter *>(_fileDetails->parentWidget())) {
+            const int sidebarWidth = qBound(280, splitter->width() / 3, 360);
+            splitter->setSizes({qMax(0, splitter->width() - sidebarWidth - splitter->handleWidth()), sidebarWidth});
+            _fileDetails->setProperty("driveDetailsSized", true);
+        }
+    }
     if (!available) return;
+
     _detailsName->setText(index.data().toString());
-    _detailsIcon->setPixmap(UDriveIcons::fileIcon(index.data().toString(), index.data(DirectoryRole).toBool()).pixmap(72, 72));
+
+    const bool isDir = index.data(DirectoryRole).toBool();
+    const auto icon = index.data(Qt::DecorationRole).value<QIcon>();
+    _detailsFileIcon->setPixmap(UDriveIcons::fileIcon(index.data().toString(), isDir).pixmap(24, 24));
+    if (!isDir && index.data(ThumbnailRole).toBool() && !icon.isNull()) {
+        const auto pixmap = icon.pixmap(QSize(256, 256));
+        if (!pixmap.isNull()) {
+            _detailsIcon->setPixmap(pixmap.scaled(QSize(200, 120), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        } else {
+            _detailsIcon->setPixmap(UDriveIcons::fileIcon(index.data().toString(), isDir).pixmap(64, 64));
+        }
+    } else {
+        _detailsIcon->setPixmap(UDriveIcons::fileIcon(index.data().toString(), isDir).pixmap(64, 64));
+    }
+
     _detailsModified->setText(index.siblingAtColumn(2).data().toString());
-    _detailsSize->setText(index.data(DirectoryRole).toBool() ? tr("Folder") : index.siblingAtColumn(1).data().toString());
-    _detailsLocation->setText(index.data(LocationRole).toString());
+    const QString sizeStr = index.siblingAtColumn(1).data().toString();
+    if (!sizeStr.isEmpty() && sizeStr != QStringLiteral("—")) {
+        _detailsSize->setText(sizeStr);
+    } else {
+        _detailsSize->setText(isDir ? tr("Folder") : QStringLiteral("—"));
+    }
+
+    QString loc = index.data(LocationRole).toString();
+    if (loc.isEmpty()) {
+        loc = _path.isEmpty() ? (_spaceName.isEmpty() ? tr("Personal") : _spaceName)
+                              : (_spaceName.isEmpty() ? _path : _spaceName + QStringLiteral(" / ") + _path);
+    }
+    _detailsLocation->setText(loc);
+
+    QString owner;
+    if (_section == Section::Shares && _shareTab == ShareTab::WithMe) {
+        const auto sharers = index.data(ShareSharersRole).toStringList();
+        if (!sharers.isEmpty()) {
+            owner = sharers.join(QStringLiteral(", "));
+        }
+    }
+    if (owner.isEmpty() && _state && _state->account()) {
+        owner = _state->account()->davDisplayName();
+        if (owner.isEmpty()) {
+            owner = _state->account()->davUser();
+        }
+    }
+    if (owner.isEmpty()) {
+        owner = tr("Personal");
+    }
+    if (_detailsOwner) {
+        _detailsOwner->setText(owner);
+    }
+
     const auto people = index.data(SharePeopleRole).toStringList();
-    _detailsPeople->setText(people.isEmpty() ? tr("Use Manage shares to view sharing details.") : people.join(QLatin1Char('\n')));
+    _detailsPeople->setText(fileSharingSummary(people, index.data(SharePublicLinksRole).toInt()));
+
+    bool pdf = false;
+#if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
+    pdf = !isDir && index.data().toString().endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive);
+#endif
+    const bool external = UDriveFilePreview::kindForName(index.data().toString()) == UDriveFilePreview::Kind::External;
+    _detailsOpen->setText(isDir ? tr("Open folder") : pdf ? tr("Open PDF") : external ? tr("Open in app") : tr("Preview"));
+    _detailsOpen->setIcon(isDir ? UDriveIcons::icon(UDriveIcons::Symbol::Folder) : UDriveIcons::icon(UDriveIcons::Symbol::Open));
+    _detailsOpen->setEnabled(_openButton->isEnabled());
+    _detailsOpen->setVisible(true);
+
     _detailsShare->setEnabled(_shareAction->isEnabled());
     _detailsDownload->setEnabled(_downloadButton->isEnabled());
     _detailsRename->setEnabled(_renameAction->isEnabled());
@@ -3584,7 +5404,7 @@ void UDriveFileBrowser::showWorkspacesOverview()
     _workspaceOverview = true;
     cancelListing();
     cancelDownload();
-    if (_uploading) cancelOperation();
+    if (_uploading || _emptyingTrash) cancelOperation();
     _model->removeRows(0, _model->rowCount());
     _spaceId.clear(); _root.clear(); _webUrl.clear(); _driveId.clear();
     _path.clear();
@@ -3612,7 +5432,7 @@ void UDriveFileBrowser::openWorkspace(const QString &spaceId)
     closePdf();
     cancelListing();
     cancelDownload();
-    if (_uploading) cancelOperation();
+    if (_uploading || _emptyingTrash) cancelOperation();
 
     _section = Section::Workspaces;
     _workspaceOverview = false;
@@ -4098,7 +5918,7 @@ void UDriveFileBrowser::setSection(Section section)
         _workspaceActions->cancel();
         for (auto *dialog : findChildren<QDialog *>()) if (dialog->property("udriveWorkspaceDialog").toBool()) dialog->close();
         cancelListing(); cancelDownload();
-        if (_uploading) cancelOperation();
+        if (_uploading || _emptyingTrash) cancelOperation();
         _spaceId.clear();
         _path.clear();
         updateSpaces();
@@ -4354,7 +6174,7 @@ void UDriveFileBrowser::selectSpace()
     closePdf();
     // An in-progress save belongs to the space in which it was started.
     cancelDownload();
-    if (_uploading) cancelOperation();
+    if (_uploading || _emptyingTrash) cancelOperation();
     _spaceId = id;
     _root = root;
     _path.clear();
@@ -4379,6 +6199,7 @@ void UDriveFileBrowser::cancelListing()
     if (details) details->abort();
     _detailsIndex = QPersistentModelIndex();
     _detailsRequested = false;
+    clearFileShares();
     if (_fileDetails) _fileDetails->hide();
 }
 
@@ -4463,6 +6284,7 @@ void UDriveFileBrowser::retranslate()
     if (_downloadButton) _downloadButton->setText(tr("Download"));
     if (_shareButton) _shareButton->setText(tr("Share"));
     if (_restoreButton) _restoreButton->setText(tr("Restore"));
+    if (_emptyTrashButton) _emptyTrashButton->setText(tr("Empty trash"));
 }
 
 void UDriveFileBrowser::changeEvent(QEvent *event)
@@ -4507,6 +6329,7 @@ void UDriveFileBrowser::loadVisibleThumbnails()
 
 void UDriveFileBrowser::refresh()
 {
+    if (_emptyingTrash) return;
     if (isWorkspacesOverview()) {
         if (_workspaceActions->busy()) return;
         _workspaceActions->refreshPermissions();
@@ -4553,7 +6376,7 @@ void UDriveFileBrowser::refresh()
     _listing = job;
     job->setTimeout(std::chrono::seconds(30));
     job->setProperties({"resourcetype", "getcontentlength", "getlastmodified", "getetag",
-        "http://owncloud.org/ns:permissions", "http://owncloud.org/ns:favorite", "http://owncloud.org/ns:privatelink",
+        "http://owncloud.org/ns:size", "http://owncloud.org/ns:permissions", "http://owncloud.org/ns:favorite", "http://owncloud.org/ns:privatelink",
         "http://owncloud.org/ns:trashbin-original-filename", "http://owncloud.org/ns:trashbin-original-location", "http://owncloud.org/ns:trashbin-delete-datetime"});
     connect(job, &PropfindJob::directoryListingIterated, this, [this, job](const QString &href, const QMap<QString, QString> &properties) {
         if (_listing == job) appendEntry(href, properties);
@@ -4562,7 +6385,22 @@ void UDriveFileBrowser::refresh()
         if (_listing != job) return;
         _listing.clear();
         _emptyStateReady = true;
-        setMessage(_model->rowCount() ? tr("%n item(s)", nullptr, _model->rowCount()) : tr("This folder is empty."));
+        qint64 totalBytes = 0;
+        bool hasKnownSize = false;
+        for (int row = 0; row < _model->rowCount(); ++row) {
+            const qint64 b = _model->index(row, 1).data(SortRole).toLongLong();
+            if (b >= 0) {
+                totalBytes += b;
+                hasKnownSize = true;
+            }
+        }
+        if (_model->rowCount() == 0) {
+            setMessage(tr("This folder is empty."));
+        } else if (hasKnownSize && totalBytes > 0) {
+            setMessage(tr("%n item(s) (%1)", nullptr, _model->rowCount()).arg(QLocale().formattedDataSize(totalBytes)));
+        } else {
+            setMessage(tr("%n item(s)", nullptr, _model->rowCount()));
+        }
         updateActions();
         scheduleThumbnails();
         updateEmptyState();
@@ -4622,9 +6460,15 @@ void UDriveFileBrowser::appendEntry(const QString &href, const QMap<QString, QSt
     item->setData(_recentFiles.value(recentKey(root, relative), qint64(0)), OpenedRole);
     item->setToolTip(name);
     bool validSize = false;
-    const qint64 bytes = properties.value(QStringLiteral("getcontentlength")).toLongLong(&validSize);
+    qint64 bytes = -1;
+    if (properties.contains(QStringLiteral("size"))) {
+        bytes = properties.value(QStringLiteral("size")).toLongLong(&validSize);
+    }
+    if (!validSize && properties.contains(QStringLiteral("getcontentlength"))) {
+        bytes = properties.value(QStringLiteral("getcontentlength")).toLongLong(&validSize);
+    }
     validSize = validSize && bytes >= 0;
-    auto *size = new QStandardItem(directory || !validSize ? QStringLiteral("—") : QLocale().formattedDataSize(bytes));
+    auto *size = new QStandardItem(!validSize ? QStringLiteral("—") : QLocale().formattedDataSize(bytes));
     size->setData(validSize ? bytes : qint64(-1), SortRole);
     auto modified = QDateTime::fromString(properties.value(QStringLiteral("getlastmodified")), QStringLiteral("ddd, dd MMM yyyy HH:mm:ss 'GMT'"));
     if (modified.isValid()) modified.setTimeZone(QTimeZone::utc());
@@ -4690,6 +6534,9 @@ bool UDriveFileBrowser::rowActionEnabled(const QModelIndex &index, int action) c
 
 void UDriveFileBrowser::updateActions()
 {
+    _emptyTrashButton->setVisible(_section == Section::Trash);
+    _emptyTrashButton->setEnabled(_section == Section::Trash && canBrowse() && !_listing && !_report && !_operation && !_download
+        && !_emptyingTrash && _emptyStateReady && _model->rowCount() > 0 && !trashRoot().isEmpty());
     if (isWorkspacesOverview()) {
         const bool idle = !_workspaceActions->busy();
         const auto rows = selectedWorkspaces();
@@ -4732,12 +6579,12 @@ void UDriveFileBrowser::updateActions()
         Q_EMIT creationAvailabilityChanged();
         return;
     }
-    _message->show();
+    _message->setVisible(!_uploading);
     _heading->show(); _workspaceBulkActions->hide();
     _workspacesView->setEnabled(canBrowse());
     _viewButton->setEnabled(true);
     const auto index = selectedItem();
-    const bool valid = index.isValid() && !index.data(ShareUnavailableRole).toBool() && canBrowse() && !_listing && !_report && !_operation;
+    const bool valid = index.isValid() && !index.data(ShareUnavailableRole).toBool() && canBrowse() && !_listing && !_report && !_operation && !_emptyingTrash;
     const bool trash = _section == Section::Trash;
     const bool overview = sharedByMeOverview();
     const bool directory = index.data(DirectoryRole).toBool();
@@ -4756,7 +6603,7 @@ void UDriveFileBrowser::updateActions()
     _breadcrumbs->setEnabled(navigate);
     _rootButton->setEnabled(navigate && !_path.isEmpty());
     const bool incomingOverview = _section == Section::Shares && _path.isEmpty();
-    _refreshButton->setEnabled(canBrowse() && (!_root.isEmpty() || overview || incomingOverview));
+    _refreshButton->setEnabled(canBrowse() && !_emptyingTrash && (!_root.isEmpty() || overview || incomingOverview));
     _shareScope->setEnabled(canBrowse() && !_operation);
     if (_search)
         _search->setEnabled(canBrowse() && (!_root.isEmpty() || overview || incomingOverview));
@@ -4970,7 +6817,30 @@ void UDriveFileBrowser::updateSelectionState()
     const QSignalBlocker blocker(_selectAll);
     _selectAll->setCheckState(count == 0 ? Qt::Unchecked : count == total ? Qt::Checked : Qt::PartiallyChecked);
     _selectAll->setEnabled(canBrowse() && total > 0 && !_listing && !_report && !_operation && !_download);
-    _message->setText(count > 1 ? tr("%1 selected. Select one item to use file actions.").arg(count) : _statusMessage);
+    if (count > 1) {
+        qint64 selectedBytes = 0;
+        bool hasSelectedBytes = false;
+        auto *view = activeView();
+        if (view && view->selectionModel()) {
+            const auto selectedRows = view->selectionModel()->selectedRows(0);
+            for (const auto &proxyIdx : selectedRows) {
+                const auto sourceIdx = _proxy->mapToSource(proxyIdx);
+                const qint64 b = _model->index(sourceIdx.row(), 1).data(SortRole).toLongLong();
+                if (b >= 0) {
+                    selectedBytes += b;
+                    hasSelectedBytes = true;
+                }
+            }
+        }
+        if (hasSelectedBytes && selectedBytes > 0) {
+            _message->setText(tr("%1 selected (%2). Select one item to use file actions.")
+                .arg(count).arg(QLocale().formattedDataSize(selectedBytes)));
+        } else {
+            _message->setText(tr("%1 selected. Select one item to use file actions.").arg(count));
+        }
+    } else {
+        _message->setText(_statusMessage);
+    }
     updateEmptyState();
 }
 
@@ -5198,7 +7068,7 @@ void UDriveFileBrowser::refreshFavorites()
     QNetworkRequest request;
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/xml; charset=utf-8"));
     QByteArray body = "<?xml version=\"1.0\"?><oc:filter-files xmlns:d=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\">"
-        "<d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/><d:getetag/><oc:permissions/><oc:favorite/><oc:privatelink/><oc:spaceid/></d:prop>"
+        "<d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/><d:getetag/><oc:permissions/><oc:favorite/><oc:privatelink/><oc:spaceid/><oc:size/></d:prop>"
         "<oc:filter-rules><oc:favorite>1</oc:favorite></oc:filter-rules></oc:filter-files>";
     auto *job = new SimpleNetworkJob(_state->account(), _state->account()->davUrl(), {}, "REPORT", std::move(body), request, this);
     _report = job;
@@ -5285,7 +7155,7 @@ void UDriveFileBrowser::refreshFavorites()
 bool UDriveFileBrowser::runOperation(
     const QByteArray &verb, const QUrl &root, const QString &path, const QNetworkRequest &request, const QString &message, QIODevice *body)
 {
-    if (!canBrowse() || _operation || _download || !validPath(path) || root.host().isEmpty()
+    if (!canBrowse() || _operation || _emptyingTrash || _download || !validPath(path) || root.host().isEmpty()
         || !LocalDevelopment::allowsAuthenticatedUrl(root, _state->account()->url()) || !root.query().isEmpty() || !root.fragment().isEmpty()) {
         delete body;
         return false;
@@ -5303,12 +7173,11 @@ bool UDriveFileBrowser::runOperation(
         : 60;
     job->setTimeout(std::chrono::seconds(timeoutSec));
     if (_uploading) {
-        _progress->setAccessibleName(tr("Upload progress"));
-        _progress->setRange(0, 100); _progress->setValue(0); _progress->show();
-        _cancelButton->setText(tr("Cancel upload")); _cancelButton->show();
+        startUploadProgress(path.section(QLatin1Char('/'), -1), body ? body->size() : 0);
         job->addNewReplyHook([this, job](QNetworkReply *reply) {
             connect(reply, &QNetworkReply::uploadProgress, this, [this, job](qint64 sent, qint64 total) {
-                if (_operation == job && total > 0) _progress->setValue(static_cast<int>(100.0 * sent / total));
+                Q_UNUSED(total);
+                if (_operation == job && sent >= 0) updateUploadProgress(sent);
             });
         });
     }
@@ -5330,7 +7199,7 @@ bool UDriveFileBrowser::runOperation(
                 result = tr("The original parent folder is missing. Restore or recreate that folder first.");
         }
         _operation.clear();
-        if (_uploading) { _progress->hide(); _cancelButton->hide(); }
+        if (_uploading) { stopUploadProgress(); _progress->hide(); _cancelButton->hide(); }
         _uploading = false;
         if (success && _root == viewRoot && _path == viewPath && _section == section) refresh();
         setMessage(result);
@@ -5345,17 +7214,84 @@ bool UDriveFileBrowser::runOperation(
 void UDriveFileBrowser::cancelOperation()
 {
     auto job = _operation; _operation.clear();
+    const bool wasEmptying = _emptyingTrash;
+    _emptyingTrash = false; _trashItems.clear(); _emptyTrashRoot.clear(); _emptyTrashAccount = {};
     if (job) job->abort();
-    if (_uploading) { _progress->hide(); _cancelButton->hide(); }
+    if (_uploading || wasEmptying) { _progress->hide(); _cancelButton->hide(); }
+    if (_uploading) stopUploadProgress();
     _uploading = false;
     updateActions();
-    if (job) Q_EMIT operationFinished(false, tr("Operation canceled. Refresh to check the server."));
+    if (job || wasEmptying) Q_EMIT operationFinished(false, tr("Operation canceled. Refresh to check the server."));
 }
 
 bool UDriveFileBrowser::createFolder(const QString &name)
 {
     if (!_newFolderAction->isEnabled() || !validName(name)) return false;
     return runOperation("MKCOL", _root, _path.isEmpty() ? name : _path + QLatin1Char('/') + name, {}, tr("Folder created."));
+}
+
+void UDriveFileBrowser::startUploadProgress(const QString &name, qint64 total)
+{
+    _uploadName = name;
+    _uploadTotal = std::max<qint64>(0, total);
+    _uploadSent = 0;
+    _uploadElapsed.start();
+    _progress->setAccessibleName(tr("Upload progress"));
+    _progress->setRange(0, 100);
+    _progress->setValue(0);
+    _progress->show();
+    _cancelButton->setText(tr("Cancel upload"));
+    _cancelButton->show();
+    _message->hide();
+    _uploadDetails->show();
+    refreshUploadDetails();
+    _uploadProgressTimer->start();
+}
+
+void UDriveFileBrowser::updateUploadProgress(qint64 sent)
+{
+    if (!_uploading || !_uploadElapsed.isValid()) return;
+    // TUS callers supply the file offset plus bytes sent in the current chunk.
+    // Repeated progress events and retries must never be added together.
+    _uploadSent = std::clamp<qint64>(sent, 0, _uploadTotal);
+    refreshUploadDetails();
+}
+
+void UDriveFileBrowser::refreshUploadDetails()
+{
+    if (!_uploading || !_uploadElapsed.isValid()) return;
+    const qint64 elapsed = _uploadElapsed.elapsed();
+    const int percent = _uploadTotal == 0 || _uploadSent == _uploadTotal ? 100
+        : std::clamp(int(100.0 * _uploadSent / _uploadTotal), 0, 99);
+    _progress->setValue(percent);
+    const QLocale locale;
+    QStringList details{
+        tr("%1%").arg(locale.toString(percent)),
+        tr("%1 of %2").arg(locale.formattedDataSize(_uploadSent), locale.formattedDataSize(_uploadTotal)),
+        tr("%1 elapsed").arg(uploadDuration(elapsed))};
+    QString remaining = tr("Estimating time remaining…");
+    if (elapsed >= 1000 && _uploadSent > 0) {
+        const qint64 speed = qint64(std::min(1000.0 * _uploadSent / elapsed, double(std::numeric_limits<qint64>::max() / 2)));
+        details.insert(2, tr("%1/s").arg(locale.formattedDataSize(speed)));
+        const double milliseconds = std::ceil(double(_uploadTotal - _uploadSent) * elapsed / _uploadSent);
+        if (std::isfinite(milliseconds) && milliseconds < double(std::numeric_limits<qint64>::max() / 2)) {
+            const qint64 rounded = ((qint64(milliseconds) + 999) / 1000) * 1000;
+            remaining = tr("About %1 remaining").arg(uploadDuration(rounded));
+        }
+    }
+    // Sending the request body is not confirmation that the server saved it.
+    details.append(_uploadSent == _uploadTotal ? tr("Finalizing…") : remaining);
+    _uploadDetails->setText(tr("Uploading “%1”\n%2").arg(_uploadName, details.join(QStringLiteral(" · "))));
+}
+
+void UDriveFileBrowser::stopUploadProgress()
+{
+    _uploadProgressTimer->stop();
+    _uploadElapsed.invalidate();
+    _uploadName.clear();
+    _uploadSent = 0; _uploadTotal = 0;
+    _uploadDetails->clear();
+    _uploadDetails->hide();
 }
 
 bool UDriveFileBrowser::uploadFile(const QString &localFile)
@@ -5389,12 +7325,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
     const quint64 chunkSize = (maxChunk > 0 && maxChunk <= 10ULL * 1024 * 1024) ? maxChunk : 10ULL * 1024 * 1024;
 
     _uploading = true;
-    _progress->setAccessibleName(tr("Upload progress"));
-    _progress->setRange(0, 100);
-    _progress->setValue(0);
-    _progress->show();
-    _cancelButton->setText(tr("Cancel upload"));
-    _cancelButton->show();
+    startUploadProgress(QFileInfo(localFile).fileName(), totalSize);
     setMessage(tr("Uploading…"));
     updateActions();
 
@@ -5423,6 +7354,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
             setMessage(firstDevice->errorString());
             delete firstDevice;
             _uploading = false;
+            stopUploadProgress();
             _progress->hide();
             _cancelButton->hide();
             updateActions();
@@ -5439,10 +7371,10 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
     postJob->setTimeout(std::chrono::seconds(300));
 
     if (firstDevice) {
-        postJob->addNewReplyHook([this, postJob, totalSize](QNetworkReply *reply) {
-            connect(reply, &QNetworkReply::uploadProgress, this, [this, postJob, totalSize](qint64 sent, qint64) {
-                if (_operation == postJob && totalSize > 0)
-                    _progress->setValue(static_cast<int>(100.0 * sent / totalSize));
+        postJob->addNewReplyHook([this, postJob, firstChunk](QNetworkReply *reply) {
+            connect(reply, &QNetworkReply::uploadProgress, this, [this, postJob, firstChunk](qint64 sent, qint64) {
+                if (_operation == postJob && sent >= 0)
+                    updateUploadProgress(std::min<qint64>(sent, firstChunk));
             });
         });
     }
@@ -5453,6 +7385,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
         if (!_uploading || offset >= static_cast<quint64>(totalSize)) {
             _operation.clear();
             _uploading = false;
+            stopUploadProgress();
             _progress->hide();
             _cancelButton->hide();
             if (_root == viewRoot && _path == viewPath && _section == section) refresh();
@@ -5468,6 +7401,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
             const QString err = tr("Upload failed: %1").arg(device->errorString());
             _operation.clear();
             _uploading = false;
+            stopUploadProgress();
             _progress->hide();
             _cancelButton->hide();
             setMessage(err);
@@ -5488,10 +7422,10 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
         _operation = patchJob;
         patchJob->setTimeout(std::chrono::seconds(300));
 
-        patchJob->addNewReplyHook([this, patchJob, offset, totalSize](QNetworkReply *reply) {
-            connect(reply, &QNetworkReply::uploadProgress, this, [this, patchJob, offset, totalSize](qint64 sent, qint64) {
-                if (_operation == patchJob && totalSize > 0)
-                    _progress->setValue(static_cast<int>(100.0 * (offset + sent) / totalSize));
+        patchJob->addNewReplyHook([this, patchJob, offset, thisChunk](QNetworkReply *reply) {
+            connect(reply, &QNetworkReply::uploadProgress, this, [this, patchJob, offset, thisChunk](qint64 sent, qint64) {
+                if (_operation == patchJob && sent >= 0)
+                    updateUploadProgress(offset + std::min<quint64>(sent, thisChunk));
             });
         });
 
@@ -5502,6 +7436,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
                 const QString err = tr("Upload failed: %1 (HTTP %2)").arg(patchJob->errorString()).arg(patchJob->httpStatusCode());
                 _operation.clear();
                 _uploading = false;
+                stopUploadProgress();
                 _progress->hide();
                 _cancelButton->hide();
                 setMessage(err);
@@ -5514,7 +7449,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
             if (patchJob->reply()->hasRawHeader("Upload-Offset")) {
                 nextOffset = patchJob->reply()->rawHeader("Upload-Offset").toULongLong();
             }
-            _progress->setValue(static_cast<int>(100.0 * nextOffset / totalSize));
+            updateUploadProgress(std::min<quint64>(nextOffset, totalSize));
             (*sendChunkPtr)(nextOffset, location);
         });
 
@@ -5528,6 +7463,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
             const QString err = tr("Upload failed: %1 (HTTP %2)").arg(postJob->errorString()).arg(postJob->httpStatusCode());
             _operation.clear();
             _uploading = false;
+            stopUploadProgress();
             _progress->hide();
             _cancelButton->hide();
             setMessage(err);
@@ -5549,7 +7485,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
         if (postJob->reply()->hasRawHeader("Upload-Offset")) {
             serverOffset = postJob->reply()->rawHeader("Upload-Offset").toULongLong();
         }
-        _progress->setValue(static_cast<int>(100.0 * serverOffset / totalSize));
+        updateUploadProgress(std::min<quint64>(serverOffset, totalSize));
         (*sendChunkPtr)(serverOffset, location);
     });
 
@@ -5601,6 +7537,126 @@ bool UDriveFileBrowser::moveSelected(const QString &destinationFolder)
     request.setRawHeader("Overwrite", "F");
     if (!item.data(EtagRole).toString().isEmpty()) request.setRawHeader("If-Match", item.data(EtagRole).toString().toUtf8());
     return runOperation("MOVE", selectedRoot(), source, request, tr("Item moved."));
+}
+
+void UDriveFileBrowser::confirmEmptyTrash()
+{
+    if (_deleteConfirmation || !_emptyTrashButton->isEnabled() || !canBrowse()) return;
+    const QUrl root = trashRoot();
+    if (root.host().isEmpty() || !LocalDevelopment::allowsAuthenticatedUrl(root, _state->account()->url())
+        || !root.query().isEmpty() || !root.fragment().isEmpty()) return;
+    const auto accountId = _state->account()->uuid();
+    QList<QPersistentModelIndex> rows;
+    QList<QPair<QString, QString>> items;
+    QSet<QString> paths;
+    // Use the complete source listing, not the search-filtered proxy or selection.
+    for (int row = 0; row < _model->rowCount(); ++row) {
+        const auto item = _model->index(row, 0);
+        const QString path = item.data(PathRole).toString();
+        if (!validPath(path) || paths.contains(path) || !item.data(TrashedRole).toBool()) {
+            setMessage(tr("Deleted files changed. Refresh and try again."));
+            return;
+        }
+        paths.insert(path);
+        rows.append(QPersistentModelIndex(item));
+        items.append({path, item.data(EtagRole).toString()});
+    }
+    if (items.isEmpty()) return;
+    auto *dialog = new DeleteConfirmDialog(_spaceName, true, this, true, items.size());
+    _deleteConfirmation = dialog;
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QDialog::finished, this, [this, dialog] {
+        if (_deleteConfirmation == dialog) _deleteConfirmation.clear();
+    });
+    connect(dialog, &QDialog::accepted, this, [this, root, accountId, rows, items] {
+        if (!canBrowse() || !isVisible() || _section != Section::Trash || trashRoot() != root
+            || _state->account()->uuid() != accountId || _listing || _report || _operation || _download
+            || _emptyingTrash || !_emptyStateReady || _model->rowCount() != rows.size()) {
+            setMessage(tr("Deleted files changed. Review them and confirm again."));
+            return;
+        }
+        for (int i = 0; i < rows.size(); ++i) {
+            if (!rows.at(i).isValid() || rows.at(i).data(PathRole).toString() != items.at(i).first
+                || rows.at(i).data(EtagRole).toString() != items.at(i).second) {
+                setMessage(tr("Deleted files changed. Review them and confirm again."));
+                return;
+            }
+        }
+        _trashItems = items;
+        _trashPosition = 0;
+        _emptyTrashRoot = root;
+        _emptyTrashAccount = accountId;
+        _emptyingTrash = true;
+        _progress->setAccessibleName(tr("Empty trash progress"));
+        _progress->setRange(0, items.size());
+        _progress->setValue(0);
+        _progress->show();
+        _cancelButton->setText(tr("Stop"));
+        _cancelButton->show();
+        updateActions();
+        deleteNextTrashItem();
+    });
+    dialog->open();
+}
+
+void UDriveFileBrowser::deleteNextTrashItem()
+{
+    if (!_emptyingTrash || _operation) return;
+    if (!canBrowse() || !isVisible() || _section != Section::Trash || trashRoot() != _emptyTrashRoot
+        || _state->account()->uuid() != _emptyTrashAccount) {
+        finishEmptyTrash(false, tr("Empty trash stopped. Some items may already have been permanently deleted."));
+        return;
+    }
+    if (_trashPosition == _trashItems.size()) {
+        finishEmptyTrash(true, tr("Permanently deleted %n item(s).", nullptr, _trashPosition));
+        return;
+    }
+    const auto item = _trashItems.at(_trashPosition);
+    QNetworkRequest request;
+    if (!item.second.isEmpty()) request.setRawHeader("If-Match", item.second.toUtf8());
+    auto *job = new FileActionJob(_state->account(), _emptyTrashRoot, item.first, "DELETE", nullptr, request, this);
+    _operation = job;
+    job->setTimeout(std::chrono::seconds(60));
+    connect(job, &AbstractNetworkJob::finishedSignal, this, [this, job] {
+        if (_operation != job || !_emptyingTrash) return;
+        bool success = job->reply() && job->reply()->error() == QNetworkReply::NoError
+            && job->httpStatusCode() >= 200 && job->httpStatusCode() < 300;
+        if (success && job->httpStatusCode() == 207) success = multistatusSucceeded(job->reply()->readAll());
+        _operation.clear();
+        if (!success) {
+            finishEmptyTrash(false, tr("Could not empty trash (HTTP %1). %2 of %3 items were confirmed deleted. Some changes may have completed; remaining items were not processed.")
+                .arg(job->httpStatusCode()).arg(_trashPosition).arg(_trashItems.size()));
+            return;
+        }
+        ++_trashPosition;
+        _progress->setValue(_trashPosition);
+        setMessage(tr("Emptying trash… %1 of %2").arg(_trashPosition).arg(_trashItems.size()));
+        QTimer::singleShot(0, this, &UDriveFileBrowser::deleteNextTrashItem);
+    });
+    setMessage(tr("Emptying trash… %1 of %2").arg(_trashPosition + 1).arg(_trashItems.size()));
+    job->start();
+}
+
+void UDriveFileBrowser::finishEmptyTrash(bool success, const QString &message)
+{
+    const QUrl root = _emptyTrashRoot;
+    const auto accountId = _emptyTrashAccount;
+    _emptyingTrash = false;
+    _trashItems.clear();
+    _emptyTrashRoot.clear();
+    _emptyTrashAccount = {};
+    _progress->hide();
+    _cancelButton->hide();
+    if (canBrowse() && _section == Section::Trash && trashRoot() == root && _state->account()->uuid() == accountId) {
+        refresh();
+        if (_listing) connect(_listing, &PropfindJob::finishedWithoutError, this, [this, root, accountId, message] {
+            if (canBrowse() && _section == Section::Trash && trashRoot() == root && _state->account()->uuid() == accountId)
+                setMessage(message);
+        });
+    }
+    setMessage(message);
+    updateActions();
+    Q_EMIT operationFinished(success, message);
 }
 
 void UDriveFileBrowser::confirmDelete(bool permanent)
@@ -5697,7 +7753,8 @@ bool UDriveFileBrowser::previewSelectedPdf()
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     const auto index = selectedItem();
     if (!index.isValid() || index.data(ShareUnavailableRole).toBool() || index.data(DirectoryRole).toBool() || _listing || _report || _operation || _download
-        || !canBrowse() || _section == Section::Trash || !index.data().toString().endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)) return false;
+        || !canBrowse() || _section == Section::Trash || !index.data().toString().endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)
+        || UDriveFilePreview::hasSuspiciousDoubleExtension(index.data().toString())) return false;
     closePdf();
     const QString local = localPath(index.data(PathRole).toString(), selectedRoot());
     if (!local.isEmpty()) {
@@ -5842,6 +7899,7 @@ void UDriveFileBrowser::closePdf()
 
 void UDriveFileBrowser::hideEvent(QHideEvent *event)
 {
+    showFileDetailsActions(false);
     auto details = _shareItemJob;
     _shareItemJob.clear();
     if (details) details->abort();
@@ -5849,6 +7907,7 @@ void UDriveFileBrowser::hideEvent(QHideEvent *event)
     for (auto *dialog : findChildren<QDialog *>()) if (dialog->property("udriveWorkspaceDialog").toBool()) dialog->close();
     _checkboxViewport.clear();
     if (_deleteConfirmation) _deleteConfirmation->reject();
+    if (_emptyingTrash) cancelOperation();
     _thumbnailTimer->stop();
     _thumbnails->cancel();
     closePdf();

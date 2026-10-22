@@ -29,6 +29,8 @@
 #include <QAbstractButton>
 #include <QScreen>
 #include <QStackedWidget>
+#include <QSplitter>
+#include <QPainter>
 #include <QClipboard>
 #include <QQuickWidget>
 #include <QQuickItem>
@@ -69,8 +71,13 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QDateEdit>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
+#include <QCalendarWidget>
 #include <QSignalSpy>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -169,10 +176,16 @@ public:
     int shareGetStatus = 200;
     QStringList shareDeletions;
     QList<QUrlQuery> sharePuts;
+    int sharePutStatus = 200;
+    QString sharePutMessage = QStringLiteral("Access denied");
+    int sharePutDelay = 0;
     bool slowStarted = false;
     bool rejectFavorite = false;
     bool readOnly = false;
     bool holdUpload = false;
+    bool holdTusPatch = false;
+    int trashDeleteDelay = 0;
+    QSet<QString> deniedTrash;
     QMap<QString, QString> tusSessions;
     QMap<QString, QByteArray> tusUploaded;
     int thumbnailDelay = 0;
@@ -314,10 +327,24 @@ public:
                         const QString shareId = path.section('/', -1);
                         const QUrlQuery arguments(QString::fromUtf8(requestBodies.value(key)));
                         sharePuts.append(arguments);
+                        if (sharePutStatus != 200) {
+                            const auto body = QJsonDocument(QJsonObject{{"ocs", QJsonObject{
+                                {"meta", QJsonObject{{"statuscode", sharePutStatus}, {"message", sharePutMessage}}}, {"data", QJsonObject{}}}}}).toJson();
+                            const QPointer<QTcpSocket> guard(socket);
+                            const int status = sharePutStatus;
+                            QTimer::singleShot(sharePutDelay, this, [this, guard, status, body] {
+                                if (guard && guard->state() == QAbstractSocket::ConnectedState)
+                                    respond(guard, status, "application/json", body);
+                            });
+                            return;
+                        }
                         for (int i = 0; i < existingShares.size(); ++i) {
                             auto obj = existingShares.at(i).toObject();
                             if (obj.value("id").toString() == shareId) {
-                                obj.insert("permissions", arguments.queryItemValue("permissions").toInt());
+                                if (arguments.hasQueryItem("permissions")) obj.insert("permissions", arguments.queryItemValue("permissions").toInt());
+                                if (arguments.hasQueryItem("name")) obj.insert("name", arguments.queryItemValue("name"));
+                                if (arguments.hasQueryItem("expireDate")) obj.insert("expiration", arguments.queryItemValue("expireDate"));
+                                if (arguments.hasQueryItem("password")) obj.insert("share_with", !arguments.queryItemValue("password").isEmpty());
                                 existingShares.replace(i, obj);
                                 break;
                             }
@@ -430,6 +457,7 @@ public:
                         extraHeaders.insert("Upload-Offset", QByteArray::number(chunk.size()));
                         respond(socket, 201, "text/plain", {}, extraHeaders);
                     } else if (parts.at(0) == "PATCH" && headers.contains("tus-resumable")) {
+                        if (holdTusPatch) return;
                         const QString targetPath = tusSessions.value(path);
                         const QByteArray chunk = data->mid(headerEnd + 4, length);
                         tusUploaded[targetPath].append(chunk);
@@ -470,9 +498,14 @@ public:
                         }
                     } else if (parts.at(0) == "DELETE") {
                         if (path.startsWith("/dav/spaces/trash-bin/")) {
-                            if (readOnly) respond(socket, 403, "text/plain", "Forbidden");
+                            if (readOnly || deniedTrash.contains(path.section('/', -1))) respond(socket, 403, "text/plain", "Forbidden");
                             else if (!trash.remove(path.section('/', -1))) respond(socket, 404, "text/plain", "Missing");
-                            else respond(socket, 204, "text/plain", {});
+                            else {
+                                const QPointer<QTcpSocket> guard(socket);
+                                QTimer::singleShot(trashDeleteDelay, this, [this, guard] {
+                                    if (guard && guard->state() == QAbstractSocket::ConnectedState) respond(guard, 204, "text/plain", {});
+                                });
+                            }
                         } else if (!exists(path)) respond(socket, 404, "text/plain", "Missing");
                         else { removed.insert(path); trash.insert(QStringLiteral("deleted-%1").arg(trash.size() + 1), path); respond(socket, 204, "text/plain", {}); }
                     } else if (parts.at(0) == "PROPFIND") {
@@ -552,7 +585,7 @@ public:
                               "<d:getetag>&quot;tag&quot;</d:getetag><oc:favorite>%4</oc:favorite><oc:permissions>%5</oc:permissions><oc:privatelink>%6</oc:privatelink>"
                               "<oc:trashbin-original-filename>%7</oc:trashbin-original-filename><oc:trashbin-original-location>%8</oc:trashbin-original-location>"
                               "<oc:trashbin-delete-datetime>2026-10-09T08:00:00Z</oc:trashbin-delete-datetime>"
-                              "<d:getcontentlength>%9</d:getcontentlength><d:getlastmodified>%3</d:getlastmodified>"
+                              "<d:getcontentlength>%9</d:getcontentlength><oc:size>%9</oc:size><d:getlastmodified>%3</d:getlastmodified>"
                               "</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>")
             .arg(href, folder ? QStringLiteral("<d:collection/>") : QString(),
                 modifiedDates.value(path, path.endsWith("denied.txt") ? QStringLiteral("invalid date") : QStringLiteral("Wed, 01 Oct 2025 10:00:00 GMT")),
@@ -1074,6 +1107,8 @@ private Q_SLOTS:
             queueGuard.unblock();
         }
         QTRY_COMPARE(finished.count(), 1); QCOMPARE(finished.first().at(0).toBool(), success);
+        QVERIFY(browser.findChild<QLabel *>("driveUploadDetails")->isHidden());
+        QVERIFY(!browser.findChild<QTimer *>("driveUploadProgressTimer")->isActive());
         QCOMPARE(std::count_if(server.requests.cbegin(), server.requests.cend(), [&](const auto &request) { return request.first == verb; }), attempts);
         if (success && verb == "PUT") QCOMPARE(server.uploaded.value("/dav/personal/retry.txt"), payload);
         if (success && verb == "PROPPATCH") QVERIFY(server.favorites.contains("/dav/personal/a&b.txt"));
@@ -1741,19 +1776,18 @@ private Q_SLOTS:
         actions->hide();
         select(tree, "denied.txt");
         // Direct Share must target the clicked row, without sending an invitation.
-        bool opened = false;
-        QTimer::singleShot(0, &browser, [&] {
-            auto *dialog = browser.findChild<UDriveShareDialog *>();
-            if (!dialog) return;
-            opened = dialog->windowTitle().contains(QStringLiteral("a&b.txt"));
-            dialog->reject();
-        });
         QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(row.right() - 95, row.center().y()));
-        QVERIFY(opened);
+        auto *sharePanel = browser.findChild<UDriveShareDialog *>();
+        QVERIFY(sharePanel && sharePanel->isVisible());
+        QVERIFY(!sharePanel->isWindow() && !sharePanel->isModal());
+        QVERIFY(sharePanel->windowTitle().contains(QStringLiteral("a&b.txt")));
+        browser.findChild<QToolButton *>("driveDetailsBack")->click();
         QCOMPARE(server.sharePosts, 0);
         QCOMPARE(tree->selectionModel()->selectedRows().size(), 1);
         QCOMPARE(tree->currentIndex().siblingAtColumn(0).data().toString(), QStringLiteral("a&b.txt"));
         QSignalSpy completed(&browser, &UDriveFileBrowser::operationFinished);
+        QTest::qWait(50); // Opening the sidebar resizes the file list.
+        row = tree->visualRect(target);
         QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(row.right() - 129, row.center().y()));
         QTRY_COMPARE(completed.count(), 1);
         QVERIFY(completed.first().first().toBool());
@@ -1771,6 +1805,7 @@ private Q_SLOTS:
         QCOMPARE(server.sharePosts, 0);
         QVERIFY(server.authenticated);
     }
+
 
     void workspaceHeaderAccountIsolation()
     {
@@ -2537,6 +2572,7 @@ private Q_SLOTS:
         QVERIFY(server.authenticated);
     }
 
+
     void uploadedImagePreviewsWithoutSaveDialogAndReusesCache()
     {
         DriveServer server;
@@ -2595,6 +2631,7 @@ private Q_SLOTS:
         QVERIFY(preview->findChild<QLabel *>("previewImage")->pixmap().isNull());
         QVERIFY(server.authenticated);
     }
+
 
     void officeFilesOpenAutomaticallyAsTemporaryReadOnlyCopies()
     {
@@ -2655,6 +2692,19 @@ private Q_SLOTS:
         QVERIFY(preview->findChild<QLabel *>("previewStatus")->text().contains("not available"));
         QCOMPARE(server.requests.count(), requests);
         QVERIFY(!browser.findChild<QFileDialog *>());
+    }
+
+    void suspiciousDoubleExtensionsRejectedFromPreview()
+    {
+        for (const auto &name : {"invoice.exe.docx", "document.bat.pdf", "report.vbs.txt", "picture.scr.png", "malware.cmd.xlsx", "script.ps1.txt", "setup.msi.rtf"}) {
+            QVERIFY(UDriveFilePreview::hasSuspiciousDoubleExtension(name));
+            QCOMPARE(UDriveFilePreview::kindForName(name), UDriveFilePreview::Kind::Unsupported);
+        }
+        for (const auto &name : {"component.test.tsx", "data.sample.json", "config.backup.yaml", "main.spec.js", "Report.final.docx"}) {
+            QVERIFY(!UDriveFilePreview::hasSuspiciousDoubleExtension(name));
+            QVERIFY(UDriveFilePreview::kindForName(name) != UDriveFilePreview::Kind::Unsupported);
+        }
+        QVERIFY(!UDriveFilePreview::hasSuspiciousDoubleExtension(QStringLiteral("archive.tar.gz")));
     }
 
     void developerCodeAndConfigPreview()
@@ -3079,6 +3129,7 @@ private Q_SLOTS:
         QVERIFY(server.authenticated);
     }
 
+
     void favoritesHrefCompatibility_data()
     {
         QTest::addColumn<QString>("href");
@@ -3283,6 +3334,100 @@ private Q_SLOTS:
         QVERIFY(server.authenticated);
     }
 
+    void uploadDurationFormatting()
+    {
+        QCOMPARE(UDriveFileBrowser::uploadDuration(-1000), QStringLiteral("00:00"));
+        QCOMPARE(UDriveFileBrowser::uploadDuration(0), QStringLiteral("00:00"));
+        QCOMPARE(UDriveFileBrowser::uploadDuration(500), QStringLiteral("00:00"));
+        QCOMPARE(UDriveFileBrowser::uploadDuration(1000), QStringLiteral("00:01"));
+        QCOMPARE(UDriveFileBrowser::uploadDuration(65000), QStringLiteral("01:05"));
+        QCOMPARE(UDriveFileBrowser::uploadDuration(3665000), QStringLiteral("1:01:05"));
+    }
+
+    void uploadProgressDetails_data()
+    {
+        QTest::addColumn<QString>("mode");
+        for (const auto *mode : {"put", "empty", "tus-data", "tus-no-data", "tus-patch"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
+    void uploadProgressDetails()
+    {
+        QFETCH(QString, mode);
+        const bool tus = mode.startsWith("tus");
+        DriveServer server;
+        server.holdUpload = mode != "tus-patch";
+        server.holdTusPatch = mode == "tus-patch";
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        if (tus) {
+            QVariantMap support{{QStringLiteral("version"), QStringLiteral("1.0.0")},
+                {QStringLiteral("resumable"), QStringLiteral("1.0.0")},
+                {QStringLiteral("extension"), mode == "tus-no-data" ? QStringLiteral("creation") : QStringLiteral("creation,creation-with-upload")},
+                {QStringLiteral("max_chunk_size"), 5ULL * 1024 * 1024}};
+            account->setCapabilities(Capabilities(server.url(), {
+                {QStringLiteral("spaces"), QVariantMap{{QStringLiteral("enabled"), true}, {QStringLiteral("version"), QStringLiteral("1.0.0")}}},
+                {QStringLiteral("files"), QVariantMap{{QStringLiteral("tus_support"), support}}}}));
+        }
+        AccountState state(account);
+        UDriveFileBrowser browser(&state); browser.resize(1000, 650); browser.show();
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        auto *details = browser.findChild<QLabel *>("driveUploadDetails");
+        auto *progress = browser.findChild<QProgressBar *>("driveTransferProgress");
+        auto *timer = browser.findChild<QTimer *>("driveUploadProgressTimer");
+        QVERIFY(details && progress && timer);
+        QVERIFY(details->isHidden());
+        QTemporaryDir files;
+        QFile file(files.filePath("presentation.pptx"));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        const QByteArray payload(mode == "empty" ? 0 : tus ? 12 * 1024 * 1024 : 1024 * 1024, 'U');
+        QCOMPARE(file.write(payload), payload.size()); file.close();
+        QSignalSpy finished(&browser, &UDriveFileBrowser::operationFinished);
+        QVERIFY(browser.uploadFile(file.fileName()));
+        QVERIFY(details->isVisible() && timer->isActive());
+        QVERIFY(details->text().contains("presentation.pptx"));
+        QVERIFY(details->text().contains("00:00 elapsed"));
+        QCOMPARE(progress->value(), mode == "empty" ? 100 : 0);
+        QTRY_VERIFY(server.requests.contains({tus ? QByteArray("POST") : QByteArray("PUT"),
+            tus ? QStringLiteral("/dav/personal") : QStringLiteral("/dav/personal/presentation.pptx")}));
+        if (mode == "tus-patch") QTRY_VERIFY(server.requests.contains({"PATCH", "/tus-session-1"}));
+        const int expected = mode == "tus-no-data" ? 0 : mode == "tus-data" ? 41 : mode == "tus-patch" ? 83 : 100;
+        QTRY_COMPARE(progress->value(), expected);
+        QVERIFY(details->text().contains(QStringLiteral("%1%").arg(expected)));
+        QVERIFY(details->text().contains(" of "));
+        QTest::qWait(1100);
+        QVERIFY(details->text().contains("elapsed"));
+        if (expected == 100) QVERIFY(details->text().contains("Finalizing"));
+        else if (expected == 0) QVERIFY(details->text().contains("Estimating time remaining"));
+        else {
+            QVERIFY(details->text().contains("About "));
+            QVERIFY(details->text().contains("remaining"));
+            QVERIFY(details->text().contains("/s"));
+        }
+        if (mode == "tus-data" && qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE"))
+            QVERIFY(browser.grab().save(QStringLiteral("/tmp/udrive-upload-progress.png")));
+        const QString before = details->text();
+        QTRY_VERIFY_WITH_TIMEOUT(details->text() != before, 2500); // Elapsed time updates without a network event.
+        browser.findChild<QPushButton *>("driveCancelDownload")->click();
+        QTRY_COMPARE(finished.count(), 1);
+        QVERIFY(!finished.first().at(0).toBool());
+        QVERIFY(details->isHidden() && details->text().isEmpty() && !timer->isActive());
+        // A new upload starts at zero, and success removes its timing display.
+        server.holdUpload = false; server.holdTusPatch = false;
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        QFile next(files.filePath("next.txt")); QVERIFY(next.open(QIODevice::WriteOnly)); next.write("next upload"); next.close();
+        QVERIFY(browser.uploadFile(next.fileName()));
+        QVERIFY(details->text().contains("next.txt"));
+        QVERIFY(details->text().contains("0%"));
+        QVERIFY(details->text().contains("00:00 elapsed"));
+        QVERIFY(details->text().contains("Estimating time remaining"));
+        QTRY_COMPARE(finished.count(), 2);
+        QVERIFY(finished.last().at(0).toBool());
+        QVERIFY(details->isHidden() && details->text().isEmpty() && !timer->isActive());
+    }
+
     void uploadLargeFileViaTus()
     {
         DriveServer server(true);
@@ -3449,6 +3594,7 @@ private Q_SLOTS:
         QVERIFY(server.authenticated);
     }
 
+
     void readOnlyPermissions()
     {
         DriveServer server;
@@ -3549,6 +3695,332 @@ private Q_SLOTS:
         QCOMPARE(removeBtn->cursor().shape(), Qt::PointingHandCursor);
         QCOMPARE(cancelBtn->text(), QStringLiteral("Cancel"));
         QCOMPARE(removeBtn->text(), QStringLiteral("Remove connection"));
+    }
+
+    void moveDialogStylingAndHierarchy()
+    {
+        const QUrl spaceRoot(QStringLiteral("https://example.com/remote.php/dav/spaces/space-123/"));
+        QList<QPair<QString, QString>> initialFolders = {
+            {QStringLiteral("working on testing"), QStringLiteral("working on testing")},
+            {QStringLiteral("ថតថ្មី"), QStringLiteral("ថតថ្មី")}
+        };
+
+        // Case 1: moving a root file
+        UDriveMoveDialog rootDialog(nullptr, spaceRoot, QStringLiteral("Personal"),
+                                    QStringLiteral("2026-10-05 16.02.12.jpg"), QStringLiteral("2026-10-05 16.02.12.jpg"),
+                                    false, initialFolders);
+        auto *title = rootDialog.findChild<QLabel *>(QStringLiteral("moveDialogTitle"));
+        auto *subtitle = rootDialog.findChild<QLabel *>(QStringLiteral("moveDialogSubtitle"));
+        auto *destLabel = rootDialog.findChild<QLabel *>(QStringLiteral("moveDialogDestination"));
+        auto *tree = rootDialog.findChild<QTreeWidget *>(QStringLiteral("moveDialogTree"));
+        auto *newFolderBtn = rootDialog.findChild<QPushButton *>(QStringLiteral("moveNewFolderButton"));
+        auto *cancelBtn = rootDialog.findChild<QPushButton *>(QStringLiteral("moveCancelButton"));
+        auto *moveBtn = rootDialog.findChild<QPushButton *>(QStringLiteral("moveConfirmButton"));
+
+        QVERIFY(title && subtitle && destLabel && tree && newFolderBtn && cancelBtn && moveBtn);
+        QCOMPARE(rootDialog.windowTitle(), QStringLiteral("Move item"));
+        QVERIFY(title->text().contains(QStringLiteral("2026-10-05 16.02.12.jpg")));
+        QVERIFY(subtitle->text().contains(QStringLiteral("Personal")));
+
+        // Root item is selected by default; since file is currently at root, move is disabled
+        QVERIFY(!moveBtn->isEnabled());
+        QVERIFY(destLabel->text().contains(QStringLiteral("Current location")));
+
+        // Selecting a child folder enables Move
+        auto *rootItem = tree->topLevelItem(0);
+        QVERIFY(rootItem);
+        QCOMPARE(rootItem->childCount(), 2);
+        auto *firstFolder = rootItem->child(0);
+        tree->setCurrentItem(firstFolder);
+        QVERIFY(moveBtn->isEnabled());
+        QCOMPARE(rootDialog.selectedDestination(), QStringLiteral("working on testing"));
+        QVERIFY(destLabel->text().contains(QStringLiteral("Destination: working on testing")));
+
+        // Case 2: moving a file that is in a subfolder
+        UDriveMoveDialog subDialog(nullptr, spaceRoot, QStringLiteral("Personal"),
+                                   QStringLiteral("working on testing/doc.pdf"), QStringLiteral("doc.pdf"),
+                                   false, initialFolders);
+        auto *subMoveBtn = subDialog.findChild<QPushButton *>(QStringLiteral("moveConfirmButton"));
+        QVERIFY(subMoveBtn && subMoveBtn->isEnabled());
+        QCOMPARE(subDialog.selectedDestination(), QString());
+
+        // Case 3: moving a folder (must exclude itself to prevent invalid circular moves)
+        UDriveMoveDialog folderDialog(nullptr, spaceRoot, QStringLiteral("Personal"),
+                                      QStringLiteral("working on testing"), QStringLiteral("working on testing"),
+                                      true, initialFolders);
+        auto *folderTree = folderDialog.findChild<QTreeWidget *>(QStringLiteral("moveDialogTree"));
+        auto *folderRootItem = folderTree->topLevelItem(0);
+        QVERIFY(folderRootItem);
+        QCOMPARE(folderRootItem->childCount(), 1);
+        QCOMPARE(folderRootItem->child(0)->data(0, Qt::UserRole).toString(), QStringLiteral("ថតថ្មី"));
+    }
+
+    void testExpirationDateDialogStyling()
+    {
+        auto *account = new Account(QUuid::createUuid(), QStringLiteral("test"), QUrl(QStringLiteral("http://localhost")));
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveShareDialog panel(&state, QStringLiteral("Report.pdf"), false, QStringLiteral("Report.pdf"), {}, QStringLiteral("space-1"));
+
+        QJsonObject share{
+            {QStringLiteral("id"), QStringLiteral("link-1")},
+            {QStringLiteral("expiration"), QStringLiteral("2026-10-22")}
+        };
+
+        panel.editPublicLink(QStringLiteral("link-1"), share, QStringLiteral("expireDate"));
+        auto *dialog = panel.findChild<QDialog *>(QStringLiteral("publicLinkEditDialog"));
+        QVERIFY(dialog);
+        QCOMPARE(dialog->windowTitle(), QStringLiteral("Set expiration date"));
+
+        auto *label = dialog->findChild<QLabel *>();
+        QVERIFY(label);
+        QCOMPARE(label->text(), QStringLiteral("Expiration date"));
+
+        auto *date = dialog->findChild<QDateEdit *>(QStringLiteral("publicLinkExpirationDate"));
+        QVERIFY(date);
+        QCOMPARE(date->displayFormat(), QStringLiteral("dd/MM/yyyy"));
+        QCOMPARE(date->buttonSymbols(), QAbstractSpinBox::NoButtons);
+
+        auto *calendar = date->calendarWidget();
+        QVERIFY(calendar);
+        QCOMPARE(calendar->horizontalHeaderFormat(), QCalendarWidget::SingleLetterDayNames);
+        QCOMPARE(calendar->verticalHeaderFormat(), QCalendarWidget::NoVerticalHeader);
+
+        auto *clearBtn = calendar->findChild<QPushButton *>(QStringLiteral("calendarClearButton"));
+        auto *todayBtn = calendar->findChild<QPushButton *>(QStringLiteral("calendarTodayButton"));
+        QVERIFY(clearBtn && todayBtn);
+        QCOMPARE(clearBtn->text(), QStringLiteral("Clear"));
+        QCOMPARE(todayBtn->text(), QStringLiteral("Today"));
+
+        auto *remove = dialog->findChild<QCheckBox *>(QStringLiteral("publicLinkRemoveSetting"));
+        QVERIFY(remove);
+        todayBtn->click();
+        QCOMPARE(date->date(), QDate::currentDate());
+        QCOMPARE(remove->isChecked(), false);
+
+        clearBtn->click();
+        QCOMPARE(remove->isChecked(), true);
+
+        auto *box = dialog->findChild<QDialogButtonBox *>();
+        QVERIFY(box);
+        auto *confirmBtn = box->button(QDialogButtonBox::Save);
+        QVERIFY(confirmBtn);
+        QCOMPARE(confirmBtn->text(), QStringLiteral("Confirm"));
+
+        dialog->show();
+        dialog->resize(440, 200);
+        QTest::qWait(50);
+        dialog->grab().save(QStringLiteral("/tmp/expiration-dialog.png"));
+
+        calendar->show();
+        calendar->resize(320, 320);
+        QTest::qWait(50);
+        calendar->grab().save(QStringLiteral("/tmp/calendar-popup.png"));
+
+        dialog->reject();
+    }
+
+    void testWorkspaceControlsAlignment()
+    {
+        auto *account = new Account(QUuid::createUuid(), QStringLiteral("test"), QUrl(QStringLiteral("http://localhost")));
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        browser.resize(1050, 760);
+        browser.show();
+        browser.showWorkspacesOverview();
+
+        auto *controls = browser.findChild<QWidget *>(QStringLiteral("driveWorkspaceControls"));
+        QVERIFY(controls);
+        QVERIFY(controls->isVisible());
+
+        auto *includeDisabled = browser.findChild<QPushButton *>(QStringLiteral("driveIncludeDisabled"));
+        auto *search = browser.findChild<QLineEdit *>(QStringLiteral("driveWorkspaceSearch"));
+        auto *sort = browser.findChild<QComboBox *>(QStringLiteral("driveWorkspaceSort"));
+        auto *selectAll = browser.findChild<QCheckBox *>(QStringLiteral("driveWorkspaceSelectAll"));
+        QVERIFY(includeDisabled && search && sort && selectAll);
+
+        QTest::qWait(50);
+        controls->grab().save(QStringLiteral("/tmp/workspace-controls.png"));
+    }
+
+    void testFolderSizeDisplay()
+    {
+        auto *account = new Account(QUuid::createUuid(), QStringLiteral("test"), QUrl(QStringLiteral("http://localhost")));
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        browser.show();
+        auto *tree = browser.findChild<QTreeView *>(QStringLiteral("driveFiles"));
+        QVERIFY(tree);
+
+        // Append a folder entry with oc:size = 1048576 (1 MB)
+        QMap<QString, QString> folderProps{
+            {QStringLiteral("resourcetype"), QStringLiteral("collection")},
+            {QStringLiteral("size"), QStringLiteral("1048576")},
+            {QStringLiteral("permissions"), QStringLiteral("RDNVCKW")},
+            {QStringLiteral("getetag"), QStringLiteral("etag-folder")}
+        };
+        browser.appendEntry(QStringLiteral("/dav/personal/Projects"), folderProps, QUrl(QStringLiteral("http://localhost/dav/personal")));
+
+        auto *model = tree->model();
+        QCOMPARE(model->rowCount(), 1);
+        QCOMPARE(model->index(0, 0).data().toString(), QStringLiteral("Projects"));
+        // Folder must display formatted size, NOT "—"
+        const QString folderSizeStr = model->index(0, 1).data().toString();
+        QVERIFY(folderSizeStr != QStringLiteral("—"));
+        QCOMPARE(folderSizeStr, QLocale().formattedDataSize(1048576));
+
+        // Append a folder with missing size: displays "—"
+        QMap<QString, QString> unknownFolderProps{
+            {QStringLiteral("resourcetype"), QStringLiteral("collection")},
+            {QStringLiteral("permissions"), QStringLiteral("RDNVCKW")}
+        };
+        browser.appendEntry(QStringLiteral("/dav/personal/EmptyFolder"), unknownFolderProps, QUrl(QStringLiteral("http://localhost/dav/personal")));
+        QCOMPARE(model->rowCount(), 2);
+
+        int emptyFolderRow = -1;
+        int projectsRow = -1;
+        for (int r = 0; r < model->rowCount(); ++r) {
+            const QString name = model->index(r, 0).data().toString();
+            if (name == QStringLiteral("EmptyFolder")) {
+                emptyFolderRow = r;
+            } else if (name == QStringLiteral("Projects")) {
+                projectsRow = r;
+            }
+        }
+        QVERIFY(emptyFolderRow != -1);
+        QVERIFY(projectsRow != -1);
+        QCOMPARE(model->index(emptyFolderRow, 1).data().toString(), QStringLiteral("—"));
+        QCOMPARE(model->index(projectsRow, 1).data().toString(), QLocale().formattedDataSize(1048576));
+    }
+
+    void emptyTrash_data()
+    {
+        QTest::addColumn<QString>("scenario");
+        for (const auto *scenario : {"accept", "filter", "cancel", "space", "refresh", "etag", "signout", "hide", "error", "partial", "multistatus"})
+            QTest::newRow(scenario) << QString::fromLatin1(scenario);
+    }
+
+    void emptyTrash()
+    {
+        QFETCH(QString, scenario);
+        DriveServer server;
+        server.trash.insert("deleted-1", "/dav/personal/a&b.txt");
+        server.trash.insert("deleted-2", "/dav/personal/denied.txt");
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state); browser.resize(1000, 650); browser.show();
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        auto *empty = browser.findChild<QPushButton *>("driveEmptyTrash");
+        QVERIFY(empty);
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        QVERIFY(!empty->isVisible());
+        browser.showTrash();
+        auto *spaces = browser.findChild<QComboBox *>("driveSpaces");
+        spaces->setCurrentIndex(spaces->findText("Personal"));
+        QTRY_COMPARE(tree->model()->rowCount(), 2);
+        QTRY_VERIFY(empty->isVisible() && empty->isEnabled());
+        if (scenario == "filter") {
+            browser.findChild<QLineEdit *>("driveSearch")->setText("a&b");
+            QTRY_COMPARE(tree->model()->rowCount(), 1);
+        } else tree->selectAll(); // Works with multiple selection as well.
+        QSignalSpy finished(&browser, &UDriveFileBrowser::operationFinished);
+        empty->click();
+        QPointer<DeleteConfirmDialog> dialog = browser.findChild<DeleteConfirmDialog *>();
+        QVERIFY(dialog && dialog->isVisible());
+        QVERIFY(dialog->findChild<QLabel *>("confirmTitle")->text().contains("Personal"));
+        QVERIFY(dialog->findChild<QLabel *>("confirmMessage")->text().contains("2"));
+        QVERIFY(dialog->findChild<QLabel *>("confirmMessage")->text().contains("hidden by search"));
+        QVERIFY(dialog->findChild<QPushButton *>("cancelDeleteButton")->isDefault());
+        QCOMPARE(server.trash.size(), 2); // Opening the dialog never deletes.
+        if (scenario == "space") {
+            spaces->setCurrentIndex(spaces->findText("Team files"));
+            QTRY_COMPARE(tree->model()->rowCount(), 2);
+        } else if (scenario == "refresh") {
+            browser.findChild<QPushButton *>("driveRefresh")->click();
+            QTRY_COMPARE(tree->model()->rowCount(), 2);
+        } else if (scenario == "etag") {
+            QVERIFY(tree->model()->setData(tree->model()->index(0, 0), QStringLiteral("\"new-revision\""), Qt::UserRole + 9));
+        } else if (scenario == "signout") state.signOutByUi();
+        else if (scenario == "hide") browser.hide();
+        else if (scenario == "error") {
+            server.rejectVerb = "DELETE"; server.rejectStatus = 403; server.rejectionsLeft = 1;
+        } else if (scenario == "partial") server.deniedTrash.insert("deleted-2");
+        else if (scenario == "multistatus") {
+            server.mutationVerb = "DELETE";
+            server.mutationResponse = "<d:multistatus xmlns:d=\"DAV:\"><d:response><d:href>/failed</d:href><d:status>HTTP/1.1 403 Forbidden</d:status></d:response></d:multistatus>";
+        }
+        if (dialog) {
+            if (scenario == "cancel" || scenario == "hide") dialog->reject();
+            else dialog->accept();
+        }
+        const bool success = scenario == "accept" || scenario == "filter";
+        const bool attempted = success || scenario == "error" || scenario == "partial" || scenario == "multistatus";
+        if (attempted) {
+            QTRY_COMPARE(finished.count(), 1);
+            QCOMPARE(finished.first().at(0).toBool(), success);
+            if (success) {
+                QTRY_VERIFY(server.trash.isEmpty());
+                QTRY_VERIFY(!empty->isEnabled());
+                QCOMPARE(server.requestHeaders.value("DELETE /dav/spaces/trash-bin/personal/deleted-1").value("if-match"), QByteArray("\"tag\""));
+                QCOMPARE(server.requestHeaders.value("DELETE /dav/spaces/trash-bin/personal/deleted-2").value("if-match"), QByteArray("\"tag\""));
+            } else if (scenario == "partial") {
+                QCOMPARE(server.trash.size(), 1);
+                QVERIFY(server.trash.contains("deleted-2"));
+                QVERIFY(finished.first().at(1).toString().contains("1 of 2"));
+            } else QCOMPARE(server.trash.size(), 2);
+        } else {
+            QTest::qWait(100);
+            QCOMPARE(finished.count(), 0);
+            QCOMPARE(server.trash.size(), 2);
+        }
+        QCOMPARE(std::count_if(server.requests.cbegin(), server.requests.cend(), [](const auto &request) { return request.first == "DELETE"; }), (success || scenario == "partial") ? 2 : attempted ? 1 : 0);
+        QTRY_VERIFY(dialog.isNull());
+    }
+
+    void emptyTrashStopsBetweenItems_data()
+    {
+        QTest::addColumn<QString>("stop");
+        for (const auto *stop : {"button", "navigate", "hide", "destroy"}) QTest::newRow(stop) << QString::fromLatin1(stop);
+    }
+
+    void emptyTrashStopsBetweenItems()
+    {
+        QFETCH(QString, stop);
+        DriveServer server;
+        server.trashDeleteDelay = 300;
+        server.trash.insert("deleted-1", "/dav/personal/a&b.txt");
+        server.trash.insert("deleted-2", "/dav/personal/denied.txt");
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        auto browser = std::make_unique<UDriveFileBrowser>(&state); browser->show();
+        auto *tree = browser->findChild<QTreeView *>("driveFiles");
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        browser->showTrash();
+        auto *spaces = browser->findChild<QComboBox *>("driveSpaces");
+        spaces->setCurrentIndex(spaces->findText("Personal"));
+        QTRY_COMPARE(tree->model()->rowCount(), 2);
+        auto *empty = browser->findChild<QPushButton *>("driveEmptyTrash");
+        QTRY_VERIFY(empty->isEnabled());
+        empty->click();
+        browser->findChild<DeleteConfirmDialog *>()->accept();
+        QTRY_VERIFY(server.requests.contains({"DELETE", "/dav/spaces/trash-bin/personal/deleted-1"}));
+        QVERIFY(!empty->isEnabled());
+        if (stop == "button") browser->findChild<QPushButton *>("driveCancelDownload")->click();
+        else if (stop == "navigate") browser->showPersonal();
+        else if (stop == "hide") browser->hide();
+        else browser.reset();
+        QTest::qWait(400);
+        QVERIFY(server.trash.contains("deleted-2"));
+        QCOMPARE(std::count_if(server.requests.cbegin(), server.requests.cend(), [](const auto &request) { return request.first == "DELETE"; }), 1);
     }
 
     void deleteConfirmationGuards_data()
@@ -3798,6 +4270,324 @@ private Q_SLOTS:
         settings.remove(QStringLiteral("UDrive/sidebarVisible"));
     }
 
+    void detailsSidebarLayout_data()
+    {
+        QTest::addColumn<bool>("dark");
+        QTest::newRow("dark") << true;
+        QTest::newRow("light") << false;
+    }
+
+    void detailsSidebarLayout()
+    {
+        QFETCH(bool, dark);
+        DriveServer server;
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        auto *manager = AccountManager::instance();
+        auto *state = manager->addAccount(account);
+        const auto cleanupAccount = qScopeGuard([&] { manager->deleteAccount(state); });
+        const QPalette previous = qApp->palette();
+        const auto restorePalette = qScopeGuard([&] { qApp->setPalette(previous); });
+        QPalette palette = previous;
+        palette.setColor(QPalette::Window, QColor(dark ? "#292929" : "#FFFFFF"));
+        palette.setColor(QPalette::WindowText, QColor(dark ? "#EDEEF0" : "#111827"));
+        palette.setColor(QPalette::ButtonText, palette.color(QPalette::WindowText));
+        qApp->setPalette(palette);
+        SettingsDialog window(nullptr);
+        window.resize(1250, 850);
+        window.setCurrentAccount(account);
+        window.setCurrentPage(SettingsDialog::SettingsPage::Files);
+        window.show();
+        // The executable and library each compile the browser's moc metadata.
+        auto *browser = static_cast<UDriveFileBrowser *>(window.findChild<QWidget *>("udriveFileBrowser"));
+        QVERIFY(browser);
+        auto *tree = browser->findChild<QTreeView *>("driveFiles");
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        QVERIFY(select(tree, "a&b.txt").isValid());
+        auto *details = browser->findChild<QScrollArea *>("driveFileDetails");
+        auto *splitter = browser->findChild<QSplitter *>("driveFileContent");
+        auto *openDetails = browser->findChild<QAction *>("driveDetailsAction");
+        auto *actions = browser->findChild<QPushButton *>("driveDetailsActions");
+        QVERIFY(details && splitter && openDetails && actions);
+        openDetails->trigger();
+        QTRY_VERIFY(details->isVisible());
+        QTest::qWait(50);
+        const int expectedWidth = qBound(280, splitter->width() / 3, 360);
+        QVERIFY(qAbs(details->width() - expectedWidth) <= 1);
+        QVERIFY(qAbs(details->geometry().right() - splitter->contentsRect().right()) <= 1);
+        const int detailsWidth = details->width();
+        QCOMPARE(actions->height(), 44);
+        if (qEnvironmentVariableIsSet("UDRIVE_SHARES_TEST_CAPTURE"))
+            window.grab().save(QStringLiteral("/tmp/udrive-details-full-%1.png").arg(dark ? "dark" : "light"));
+        actions->click();
+        QTest::qWait(50);
+        QCOMPARE(details->width(), detailsWidth);
+        auto *page = browser->findChild<QWidget *>("driveDetailsActionsPage");
+        int lastBottom = -1;
+        int left = -1;
+        int width = -1;
+        for (auto *button : page->findChildren<QPushButton *>(QString(), Qt::FindDirectChildrenOnly)) {
+            if (!button->isVisible()) continue;
+            QCOMPARE(button->height(), 44);
+            if (left < 0) { left = button->x(); width = button->width(); }
+            QCOMPARE(button->x(), left);
+            QCOMPARE(button->width(), width);
+            if (lastBottom >= 0) QVERIFY(button->y() - lastBottom >= 6);
+            lastBottom = button->geometry().bottom();
+        }
+        QVERIFY(lastBottom > 0);
+        if (qEnvironmentVariableIsSet("UDRIVE_SHARES_TEST_CAPTURE"))
+            window.grab().save(QStringLiteral("/tmp/udrive-actions-aligned-%1.png").arg(dark ? "dark" : "light"));
+        browser->findChild<QToolButton *>("driveDetailsBack")->click();
+        QCOMPARE(details->width(), detailsWidth);
+        browser->findChild<QToolButton *>("driveDetailsClose")->click();
+        openDetails->trigger();
+        QTRY_VERIFY(details->isVisible());
+        QCOMPARE(details->width(), detailsWidth);
+        if (qEnvironmentVariableIsSet("UDRIVE_SHARES_TEST_CAPTURE")) {
+            browser->findChild<QPushButton *>("driveDetailsShares")->click();
+            QPointer<QWidget> emptyShare = browser->findChild<QWidget *>("udriveShareDialog");
+            QVERIFY(emptyShare);
+            QTRY_VERIFY(!server.shareQueries.isEmpty());
+            QTest::qWait(50);
+            window.grab().save(QStringLiteral("/tmp/udrive-shares-empty-%1.png").arg(dark ? "dark" : "light"));
+            browser->findChild<QToolButton *>("driveDetailsBack")->click();
+            QTRY_VERIFY(!emptyShare);
+        }
+        server.existingShares = QJsonArray{
+            QJsonObject{{"id", "person-1"}, {"share_type", 0}, {"share_with_displayname", "Alice Example"}, {"permissions", 1}},
+            QJsonObject{{"id", "public-1"}, {"share_type", 3}, {"name", "Review link"}, {"permissions", 1}, {"url", server.url("/s/review").toString()}}};
+        browser->findChild<QPushButton *>("driveDetailsShares")->click();
+        auto *share = static_cast<UDriveShareDialog *>(browser->findChild<QWidget *>("udriveShareDialog"));
+        QVERIFY(share && share->isVisible() && !share->isWindow() && !share->isModal());
+        QTRY_VERIFY(share->findChild<QComboBox *>("sharePersonRoleCombo"));
+        QTRY_COMPARE(share->findChild<QScrollArea *>("sharesScrollArea")->verticalScrollBar()->maximum(), 0);
+        QTRY_COMPARE(share->findChild<QScrollArea *>("publicLinksScrollArea")->verticalScrollBar()->maximum(), 0);
+        QCOMPARE(details->width(), detailsWidth);
+        QVERIFY(share->width() <= details->viewport()->width());
+        QVERIFY(share->findChild<QLineEdit *>("shareUserInput")->width() >= 120);
+        auto *shareRole = share->findChild<QComboBox *>("shareRoleCombo");
+        QVERIFY(shareRole->fontMetrics().horizontalAdvance(shareRole->currentText()) + 48 <= shareRole->width());
+        QCOMPARE(browser->findChild<QLabel *>("driveDetailsTitle")->text(), QStringLiteral("Shares"));
+        if (qEnvironmentVariableIsSet("UDRIVE_SHARES_TEST_CAPTURE"))
+            window.grab().save(QStringLiteral("/tmp/udrive-shares-sidebar-%1.png").arg(dark ? "dark" : "light"));
+        // The access selector lives inside a transparent scroll area. Its menu
+        // must paint an opaque surface just like the invite and public-link menus.
+        for (const char *name : {"shareRoleCombo", "sharePersonRoleCombo", "publicLinkRoleCombo"}) {
+            auto *combo = share->findChild<QComboBox *>(QLatin1String(name));
+            QVERIFY(combo);
+            window.activateWindow();
+            QApplication::setActiveWindow(&window);
+            combo->showPopup();
+            auto *view = combo->view();
+            auto *menu = view->window();
+            QTRY_VERIFY(menu->isVisible());
+            QTest::qWait(20);
+            QVERIFY(!menu->testAttribute(Qt::WA_TranslucentBackground));
+            QVERIFY(menu->width() >= combo->width());
+            QVERIFY(menu->height() <= 120);
+            QVERIFY(QRect(window.mapToGlobal(QPoint()), window.size()).contains(menu->geometry()));
+            QCOMPARE(view->viewport()->grab().toImage().pixelColor(1, 1), QColor(dark ? "#1F2023" : "#FFFFFF"));
+            QVERIFY(view->visualRect(combo->model()->index(0, 0)).height() >= 32);
+            QVERIFY(view->visualRect(combo->model()->index(1, 0)).bottom() < view->viewport()->height());
+            if (qEnvironmentVariableIsSet("UDRIVE_SHARES_TEST_CAPTURE")) {
+                QPixmap capture = window.grab();
+                QPainter painter(&capture);
+                painter.drawPixmap(menu->mapToGlobal(QPoint()) - window.mapToGlobal(QPoint()), menu->grab());
+                painter.end();
+                capture.save(QStringLiteral("/tmp/udrive-permission-%1-%2.png").arg(QLatin1String(name), dark ? "dark" : "light"));
+            }
+            QTest::keyClick(view, Qt::Key_Escape);
+            QTRY_VERIFY(!menu->isVisible());
+            QCOMPARE(combo->currentData().toInt(), 1);
+        }
+        QCOMPARE(server.sharePuts.size(), 0);
+        server.recipientData = QJsonObject{{"users", QJsonArray{
+            QJsonObject{{"label", "Seng Porekeat"}, {"value", QJsonObject{{"shareType", 0}, {"shareWith", "porekeat"}}}},
+            QJsonObject{{"label", "Por Keat"}, {"value", QJsonObject{{"shareType", 0}, {"shareWith", "porekeatv2"}}}}}}};
+        auto *input = share->findChild<QLineEdit *>("shareUserInput");
+        auto *completer = share->findChild<QCompleter *>();
+        window.activateWindow();
+        QApplication::setActiveWindow(&window);
+        QTest::mouseClick(input, Qt::LeftButton);
+        input->setFocus();
+        QTRY_VERIFY(input->hasFocus());
+        input->setText("por");
+        auto *popup = completer->popup();
+        QTRY_COMPARE(completer->completionModel()->rowCount(), 2);
+        // Native activation can change while the fake server responds. Exercise
+        // popup rendering explicitly; the recipient-search tests cover auto-open.
+        QApplication::setActiveWindow(&window);
+        input->setFocus();
+        completer->complete(input->rect().translated(0, 4));
+        QTRY_VERIFY(popup->isVisible());
+        QCOMPARE(completer->completionModel()->rowCount(), 2);
+        QCOMPARE(popup->width(), input->width());
+        QVERIFY(!popup->testAttribute(Qt::WA_TranslucentBackground));
+        QVERIFY(popup->y() >= input->mapToGlobal(QPoint(0, input->height())).y());
+        QVERIFY(QRect(window.mapToGlobal(QPoint()), window.size()).contains(popup->geometry()));
+        const auto surface = popup->viewport()->grab().toImage();
+        QCOMPARE(surface.pixelColor(1, 1), QColor(dark ? "#1F2023" : "#FFFFFF"));
+        if (qEnvironmentVariableIsSet("UDRIVE_SHARES_TEST_CAPTURE")) {
+            QPixmap capture = window.grab();
+            QPainter painter(&capture);
+            painter.drawPixmap(popup->mapToGlobal(QPoint()) - window.mapToGlobal(QPoint()), popup->grab());
+            painter.end();
+            capture.save(QStringLiteral("/tmp/udrive-recipient-sidebar-%1.png").arg(dark ? "dark" : "light"));
+        }
+        QTest::keyClick(popup, Qt::Key_Down);
+        QTest::keyClick(popup, Qt::Key_Return);
+        QTRY_VERIFY(!popup->isVisible());
+        QCOMPARE(input->text(), QStringLiteral("Seng Porekeat"));
+        QVERIFY(share->findChild<QPushButton *>("shareConfirmButton")->isEnabled());
+        QCOMPARE(server.sharePosts, 0);
+        browser->findChild<QToolButton *>("driveDetailsBack")->click();
+        QVERIFY(browser->findChild<QWidget *>("driveDetailsOverview")->isVisible());
+    }
+
+    void fileSharesSidebar()
+    {
+        DriveServer server;
+        server.existingShares = {QJsonObject{{"id", "person-1"}, {"share_type", 0}, {"share_with_displayname", "Alice <Admin>"}, {"permissions", 1}}};
+        server.recipientData = QJsonObject{{"users", QJsonArray{QJsonObject{{"label", "Carol"},
+            {"value", QJsonObject{{"shareType", 0}, {"shareWith", "carol-id"}}}}}}};
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        browser.resize(1160, 850); browser.show();
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        QVERIFY(select(tree, "a&b.txt").isValid());
+        browser.findChild<QAction *>("driveShareAction")->trigger();
+        auto *panel = browser.findChild<UDriveShareDialog *>();
+        QVERIFY(panel && panel->isVisible() && !panel->isWindow());
+        QVERIFY(!QApplication::activeModalWidget());
+        QTRY_COMPARE(server.shareQueries.size(), 1);
+        QCOMPARE(server.shareQueries.first().queryItemValue("path", QUrl::FullyDecoded), QStringLiteral("/a&b.txt"));
+        QCOMPARE(server.shareQueries.first().queryItemValue("space_ref", QUrl::FullyDecoded), QStringLiteral("personal/a&b.txt"));
+        auto *input = panel->findChild<QLineEdit *>("shareUserInput");
+        auto *confirm = panel->findChild<QPushButton *>("shareConfirmButton");
+        auto *status = panel->findChild<QLabel *>("shareStatusLabel");
+        auto *completer = panel->findChild<QCompleter *>();
+        panel->findChild<QPushButton *>("shareCopyLinkButton")->click();
+        QCOMPARE(qApp->clipboard()->text(), server.url("/f/dav/personal/a&b.txt").toString());
+        QCOMPARE(server.sharePosts, 0);
+        input->setText("carol");
+        QVERIFY(!confirm->isEnabled());
+        QTRY_COMPARE(completer->completionModel()->rowCount(), 1);
+        Q_EMIT completer->activated(completer->completionModel()->index(0, 0));
+        QVERIFY(confirm->isEnabled());
+        panel->findChild<QComboBox *>("shareRoleCombo")->setCurrentIndex(1);
+        confirm->click();
+        QTRY_COMPARE(server.sharePosts, 1);
+        QTRY_VERIFY(status->text().contains("Successfully shared"));
+        const QUrlQuery invite(QString::fromUtf8(server.requestBodies.value("POST /ocs/v1.php/apps/files_sharing/api/v1/shares")));
+        QCOMPARE(invite.queryItemValue("shareWith"), QStringLiteral("carol-id"));
+        QCOMPARE(invite.queryItemValue("permissions"), QStringLiteral("15"));
+        QCOMPARE(invite.queryItemValue("space_ref", QUrl::FullyDecoded), QStringLiteral("personal/a&b.txt"));
+        QTRY_COMPARE(server.shareQueries.size(), 2);
+        QTRY_VERIFY(panel->findChild<QComboBox *>("sharePersonRoleCombo"));
+        auto *role = panel->findChild<QComboBox *>("sharePersonRoleCombo");
+        role->setCurrentIndex(1); Q_EMIT role->activated(1);
+        QTRY_COMPARE(server.sharePuts.size(), 1);
+        QTRY_VERIFY(status->text() == QStringLiteral("Access updated."));
+        QTRY_COMPARE(server.shareQueries.size(), 3);
+        QTRY_COMPARE(panel->findChild<QComboBox *>("sharePersonRoleCombo")->currentData().toInt(), 15);
+        panel->findChild<QPushButton *>("shareRemovePerson")->click();
+        QTRY_COMPARE(server.shareDeletions.size(), 1);
+        QTRY_COMPARE(server.shareQueries.size(), 4);
+        panel->findChild<QPushButton *>("shareAddLinkButton")->click();
+        QTRY_COMPARE(server.sharePosts, 2);
+        QTRY_VERIFY(panel->findChild<QComboBox *>("publicLinkRoleCombo"));
+        QTRY_VERIFY(browser.findChild<QLabel *>("driveDetailsPeople")->text().contains("public link"));
+        QVERIFY(qApp->clipboard()->text().contains("/s/public-share-1"));
+        auto buttons = panel->findChildren<QToolButton *>("publicLinkActionButton");
+        QCOMPARE(buttons.size(), 1);
+        buttons.at(0)->click();
+        QCOMPARE(qApp->clipboard()->text(), server.url("/s/public-share-1").toString());
+        panel->findChild<QAction *>("publicLinkDelete")->trigger();
+        QTRY_COMPARE(server.shareDeletions.size(), 2);
+        QTRY_VERIFY(server.existingShares.isEmpty());
+        QTRY_VERIFY(browser.findChild<QLabel *>("driveDetailsPeople")->text().contains("Private"));
+        browser.findChild<QToolButton *>("driveDetailsBack")->click();
+        QVERIFY(browser.findChild<QWidget *>("driveDetailsOverview")->isVisible());
+        QVERIFY(browser.findChild<QLabel *>("driveDetailsPeople")->text().contains("Private"));
+    }
+
+    void sharesSidebarCancelsOnExit_data()
+    {
+        QTest::addColumn<QString>("mode");
+        for (const auto &mode : {"back", "close", "select", "navigate", "hide", "signout", "destroy"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
+    void sharesSidebarCancelsOnExit()
+    {
+        QFETCH(QString, mode);
+        DriveServer server;
+        server.recipientDelay = 500;
+        server.recipientData = QJsonObject{{"users", QJsonArray{QJsonObject{{"label", "Alice"},
+            {"value", QJsonObject{{"shareType", 0}, {"shareWith", "alice-id"}}}}}}};
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        auto browser = std::make_unique<UDriveFileBrowser>(&state);
+        browser->resize(1160, 850); browser->show();
+        auto *tree = browser->findChild<QTreeView *>("driveFiles");
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        QVERIFY(select(tree, "a&b.txt").isValid());
+        browser->findChild<QAction *>("driveShareAction")->trigger();
+        QPointer<UDriveShareDialog> panel = browser->findChild<UDriveShareDialog *>();
+        QVERIFY(panel);
+        panel->findChild<QLineEdit *>("shareUserInput")->setText("alice");
+        QTRY_COMPARE(server.recipientQueries.size(), 1);
+        if (mode == "back") browser->findChild<QToolButton *>("driveDetailsBack")->click();
+        else if (mode == "close") browser->findChild<QToolButton *>("driveDetailsClose")->click();
+        else if (mode == "select") QVERIFY(select(tree, "denied.txt").isValid());
+        else if (mode == "navigate") browser->showFavorites();
+        else if (mode == "hide") browser->hide();
+        else if (mode == "signout") state.signOutByUi();
+        else browser.reset();
+        QTRY_VERIFY(!panel);
+        QTest::qWait(550);
+        QCOMPARE(server.sharePosts, 0);
+        QCOMPARE(server.recipientQueries.size(), 1);
+        QVERIFY(!QApplication::activeModalWidget());
+        if (browser && mode != "signout" && mode != "hide" && mode != "navigate") {
+            QVERIFY(select(tree, "denied.txt").isValid());
+            browser->findChild<QAction *>("driveShareAction")->trigger();
+            auto *next = browser->findChild<UDriveShareDialog *>();
+            QVERIFY(next && next->isVisible());
+            QVERIFY(next->findChild<QLineEdit *>("shareUserInput")->text().isEmpty());
+            QTRY_VERIFY(server.shareQueries.last().queryItemValue("path", QUrl::FullyDecoded) == QStringLiteral("/denied.txt"));
+        }
+    }
+
+    void sharePermissionFailureRestoresRole()
+    {
+        DriveServer server;
+        server.existingShares = {QJsonObject{{"id", "person-1"}, {"share_type", 0}, {"share_with_displayname", "Alice"}, {"permissions", 1}}};
+        server.sharePutStatus = 403;
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveShareDialog panel(&state, "Report.pdf", false, "/Report.pdf", {}, "personal", nullptr,
+            UDriveShareDialog::Target::File, UDriveShareDialog::Presentation::Sidebar);
+        panel.show();
+        QTRY_VERIFY(panel.findChild<QComboBox *>("sharePersonRoleCombo"));
+        auto *role = panel.findChild<QComboBox *>("sharePersonRoleCombo");
+        role->setCurrentIndex(1); Q_EMIT role->activated(1);
+        QTRY_COMPARE(server.sharePuts.size(), 1);
+        QTRY_COMPARE(server.shareQueries.size(), 2);
+        QTRY_COMPARE(panel.findChild<QComboBox *>("sharePersonRoleCombo")->currentData().toInt(), 1);
+        QVERIFY(panel.findChild<QLabel *>("shareStatusLabel")->text().contains("Could not update access"));
+    }
+
     void sharesLayoutAndActions()
     {
         DriveServer server(true);
@@ -3841,6 +4631,33 @@ private Q_SLOTS:
         QCOMPARE(name->text(), QStringLiteral("a&b.txt"));
         QVERIFY(people->text().contains("Seng Porekeat")); QVERIFY(people->text().contains("Toch Vanna"));
         QVERIFY(browser.findChild<QLabel *>("driveDetailsLocation")->text().contains("Personal"));
+        auto *detailsOpen = browser.findChild<QPushButton *>("driveDetailsOpen");
+        auto *actionsHeader = browser.findChild<QPushButton *>("driveDetailsActions");
+        auto *back = browser.findChild<QToolButton *>("driveDetailsBack");
+        auto *actionsPage = browser.findChild<QWidget *>("driveDetailsActionsPage");
+        auto *overviewPage = browser.findChild<QWidget *>("driveDetailsOverview");
+        QVERIFY(detailsOpen && actionsHeader && back && actionsPage && overviewPage);
+        QVERIFY(overviewPage->isVisible());
+        QVERIFY(!actionsPage->isVisible());
+        QVERIFY(!back->isVisible());
+        actionsHeader->click();
+        QVERIFY(actionsPage->isVisible());
+        QVERIFY(!overviewPage->isVisible());
+        QVERIFY(back->isVisible());
+        QVERIFY(detailsOpen->isVisible());
+        QCOMPARE(detailsOpen->text(), QStringLiteral("Preview"));
+        QCOMPARE(details->accessibleName(), QStringLiteral("File actions"));
+        QVERIFY(!menu->isVisible());
+        QCOMPARE(name->text(), QStringLiteral("a&b.txt"));
+        if (qEnvironmentVariableIsSet("UDRIVE_SHARES_TEST_CAPTURE")) {
+            QTest::qWait(50);
+            browser.grab().save("/tmp/udrive-actions-sidebar.png");
+        }
+        back->click();
+        QVERIFY(overviewPage->isVisible());
+        QVERIFY(!actionsPage->isVisible());
+        QCOMPARE(details->accessibleName(), QStringLiteral("File details"));
+        QVERIFY(browser.findChild<QFrame *>("driveDetailsCard"));
         const auto rename = [&menu] {
             for (auto *action : menu->actions()) if (action->text() == QStringLiteral("Rename")) return action;
             return static_cast<QAction *>(nullptr);
@@ -3857,8 +4674,10 @@ private Q_SLOTS:
         }
         QCOMPARE(labels, QStringList({"Preview", "Share", "Copy permanent link", "Download", "Rename", "Details"}));
         menu->close();
+        actionsHeader->click(); QVERIFY(actionsPage->isVisible());
         close->click(); QVERIFY(details->isHidden());
         detailsAction->trigger(); QVERIFY(details->isVisible());
+        QVERIFY(overviewPage->isVisible());
         QSignalSpy operation(&browser, &UDriveFileBrowser::operationFinished);
         QVERIFY(browser.renameSelected("renamed.txt"));
         QTRY_VERIFY(server.requests.contains({"MOVE", "/dav/personal/a&b.txt"}));
@@ -3867,8 +4686,14 @@ private Q_SLOTS:
         QCOMPARE(server.requestHeaders.value("MOVE /dav/personal/a&b.txt").value("overwrite"), QByteArray("F"));
         QVERIFY(select(tree, "denied.txt").isValid());
         QTest::qWait(160); QVERIFY(!rename->isEnabled());
+        actionsHeader->click();
+        auto *panelRename = browser.findChild<QPushButton *>("driveDetailsRename");
+        QVERIFY(panelRename->isVisible());
+        QVERIFY(!panelRename->isEnabled());
         QVERIFY(!browser.renameSelected("forbidden.txt"));
         QVERIFY(select(tree, "truncated.txt").isValid());
+        QVERIFY(overviewPage->isVisible());
+        QVERIFY(!actionsPage->isVisible());
         QTest::qWait(160); QVERIFY(!rename->isEnabled());
         QVERIFY(!browser.renameSelected("missing-permissions.txt"));
 
@@ -3900,6 +4725,28 @@ private Q_SLOTS:
         QVERIFY(details->isHidden());
         QVERIFY(!tree->isColumnHidden(1)); QVERIFY(!tree->isColumnHidden(2));
         QCOMPARE(tree->model()->headerData(3, Qt::Horizontal).toString(), QStringLiteral("Location"));
+        QVERIFY(select(tree, "Docs").isValid());
+        detailsAction->trigger();
+        QVERIFY(overviewPage->isVisible());
+        actionsHeader->click();
+        QVERIFY(actionsPage->isVisible());
+        QCOMPARE(detailsOpen->text(), QStringLiteral("Open folder"));
+        QVERIFY(!browser.findChild<QPushButton *>("driveDetailsDownload")->isEnabled());
+        auto *favoriteButton = browser.findChild<QPushButton *>("driveDetailsFavorite");
+        QVERIFY(favoriteButton->isVisible() && favoriteButton->isEnabled());
+        QCOMPARE(favoriteButton->text(), QStringLiteral("Add to Favorites"));
+        if (qEnvironmentVariableIsSet("UDRIVE_SHARES_TEST_CAPTURE")) {
+            QTest::qWait(50);
+            browser.grab().save("/tmp/udrive-actions-sidebar-personal.png");
+        }
+        operation.clear();
+        favoriteButton->click();
+        QTRY_COMPARE(operation.size(), 1);
+        QVERIFY(operation.first().first().toBool());
+        QVERIFY(server.favorites.contains(QStringLiteral("/dav/personal/Docs")));
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        QVERIFY(select(tree, "Docs").isValid());
+        QCOMPARE(favoriteButton->text(), QStringLiteral("Remove from Favorites"));
     }
 
     void outgoingAndIncomingShares()
@@ -4048,6 +4895,7 @@ private Q_SLOTS:
         QVERIFY(server.authenticated);
     }
 
+
     void sharePermissionAndIdentityFilters()
     {
         DriveServer server(true);
@@ -4095,6 +4943,7 @@ private Q_SLOTS:
         for (const auto &request : server.requests) QVERIFY(request.first == "GET" || request.first == "PROPFIND");
         QVERIFY(server.authenticated);
     }
+
 
     void incomingShareMetadataAndCancellation()
     {
@@ -4163,6 +5012,7 @@ private Q_SLOTS:
         QVERIFY(!refresh->isEnabled());
         QVERIFY(server.authenticated);
     }
+
 
     void outgoingSharesWithoutIncomingSpace()
     {
@@ -4312,6 +5162,245 @@ private Q_SLOTS:
             QCOMPARE(request.first, QByteArray("GET"));
     }
 
+    void publicLinkSettings_data()
+    {
+        QTest::addColumn<bool>("dark");
+        QTest::newRow("dark") << true;
+        QTest::newRow("light") << false;
+    }
+
+    void publicLinkSettings()
+    {
+        QFETCH(bool, dark);
+        const auto previousPalette = qApp->palette();
+        const auto restore = qScopeGuard([&] { qApp->setPalette(previousPalette); });
+        auto palette = previousPalette;
+        palette.setColor(QPalette::Window, QColor(dark ? "#292929" : "#FFFFFF"));
+        palette.setColor(QPalette::WindowText, QColor(dark ? "#EDEDED" : "#1F2328"));
+        qApp->setPalette(palette);
+        DriveServer server;
+        server.existingShares = {
+            QJsonObject{{"id", "link-1"}, {"share_type", 3}, {"name", "Review"}, {"permissions", 1}, {"url", server.url("/s/review").toString()}},
+            QJsonObject{{"id", "link-2"}, {"share_type", 3}, {"name", "Other link"}, {"permissions", 15}, {"url", server.url("/s/other").toString()}}};
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveShareDialog panel(&state, "Report.pdf", false, "/Docs/Report.pdf", {}, "space-1");
+        panel.resize(520, 700);
+        panel.show();
+        QTRY_VERIFY(panel.findChild<QAction *>("publicLinkRename"));
+        auto *more = panel.findChild<QToolButton *>("publicLinkMoreButton");
+        QVERIFY(more && more->menu());
+        QTRY_VERIFY(more->isVisible());
+        auto *menu = more->menu();
+        menu->popup(more->mapToGlobal(QPoint(0, more->height())));
+        QTRY_VERIFY(menu->isVisible());
+        QCOMPARE(menu->grab().toImage().pixelColor(6, menu->height() / 2).alpha(), 255);
+        if (qEnvironmentVariableIsSet("UDRIVE_SHARES_TEST_CAPTURE")) {
+            QPixmap capture = panel.grab();
+            QPainter painter(&capture);
+            painter.drawPixmap(menu->mapToGlobal(QPoint()) - panel.mapToGlobal(QPoint()), menu->grab());
+            painter.end();
+            capture.save(QStringLiteral("/tmp/udrive-public-link-menu-%1.png").arg(dark ? "dark" : "light"));
+        }
+        menu->hide();
+
+        panel.findChild<QAction *>("publicLinkRename")->trigger();
+        auto *edit = panel.findChild<QDialog *>("publicLinkEditDialog");
+        QVERIFY(edit);
+        edit->findChild<QLineEdit *>("publicLinkEditValue")->setText("Discard");
+        QPointer<QDialog> pending = edit;
+        edit->reject();
+        QTRY_VERIFY(!pending);
+        QCOMPARE(server.sharePuts.size(), 0);
+
+        panel.findChild<QAction *>("publicLinkRename")->trigger();
+        edit = panel.findChild<QDialog *>("publicLinkEditDialog");
+        auto *input = edit->findChild<QLineEdit *>("publicLinkEditValue");
+        QCOMPARE(input->text(), QStringLiteral("Review"));
+        QCOMPARE(input->maxLength(), 64);
+        input->setText("Review & approval");
+        pending = edit;
+        edit->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+        QTRY_VERIFY(!pending);
+        QTRY_COMPARE(server.sharePuts.size(), 1);
+        QCOMPARE(server.sharePuts.last().queryItems(), (QList<QPair<QString, QString>>{{"name", "Review & approval"}}));
+        QTRY_COMPARE(server.existingShares.first().toObject().value("name").toString(), QStringLiteral("Review & approval"));
+        QTRY_VERIFY(panel.findChild<QAction *>("publicLinkRename"));
+        QTRY_VERIFY(panel.findChild<QLabel *>("shareStatusLabel")->text() == "Public link updated.");
+        QTRY_COMPARE(panel.findChild<QLabel *>("publicLinkName")->text(), QStringLiteral("Review & approval"));
+
+        panel.findChild<QAction *>("publicLinkExpiration")->trigger();
+        edit = panel.findChild<QDialog *>("publicLinkEditDialog");
+        auto *date = edit->findChild<QDateEdit *>("publicLinkExpirationDate");
+        QCOMPARE(date->minimumDate(), QDate::currentDate());
+        const auto expires = QDate::currentDate().addDays(10);
+        date->setDate(expires);
+        pending = edit;
+        edit->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+        QTRY_VERIFY(!pending);
+        QTRY_COMPARE(server.sharePuts.size(), 2);
+        QCOMPARE(server.sharePuts.last().queryItemValue("expireDate"), expires.toString(Qt::ISODate));
+        QTRY_VERIFY(panel.findChild<QLabel *>("publicLinkStatus"));
+        QVERIFY(panel.findChild<QLabel *>("publicLinkStatus")->text().contains("Expires"));
+
+        panel.findChild<QAction *>("publicLinkPassword")->trigger();
+        edit = panel.findChild<QDialog *>("publicLinkEditDialog");
+        input = edit->findChild<QLineEdit *>("publicLinkEditValue");
+        QCOMPARE(input->echoMode(), QLineEdit::Password);
+        QVERIFY(input->text().isEmpty());
+        QVERIFY(!edit->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->isEnabled());
+        input->setText(" Test & password! ");
+        pending = edit;
+        edit->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+        QTRY_VERIFY(!pending);
+        QTRY_COMPARE(server.sharePuts.size(), 3);
+        QCOMPARE(server.sharePuts.last().queryItemValue("password", QUrl::FullyDecoded), QStringLiteral(" Test & password! "));
+        QTRY_VERIFY(panel.findChild<QLabel *>("publicLinkStatus")->text().contains("Password protected"));
+
+        panel.findChild<QAction *>("publicLinkPassword")->trigger();
+        edit = panel.findChild<QDialog *>("publicLinkEditDialog");
+        QVERIFY(edit->findChild<QLineEdit *>("publicLinkEditValue")->text().isEmpty());
+        auto *remove = edit->findChild<QCheckBox *>("publicLinkRemoveSetting");
+        QVERIFY(remove->isVisible());
+        remove->setChecked(true);
+        pending = edit;
+        edit->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+        QTRY_VERIFY(!pending);
+        QTRY_COMPARE(server.sharePuts.size(), 4);
+        QVERIFY(server.sharePuts.last().hasQueryItem("password"));
+        QVERIFY(server.sharePuts.last().queryItemValue("password").isEmpty());
+        QTRY_VERIFY(!panel.findChild<QLabel *>("publicLinkStatus")->text().contains("Password protected"));
+
+        panel.findChild<QAction *>("publicLinkExpiration")->trigger();
+        edit = panel.findChild<QDialog *>("publicLinkEditDialog");
+        edit->findChild<QCheckBox *>("publicLinkRemoveSetting")->setChecked(true);
+        pending = edit;
+        edit->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+        QTRY_VERIFY(!pending);
+        QTRY_COMPARE(server.sharePuts.size(), 5);
+        QVERIFY(server.sharePuts.last().hasQueryItem("expireDate"));
+        QVERIFY(server.sharePuts.last().queryItemValue("expireDate").isEmpty());
+        QTRY_VERIFY(!panel.findChild<QLabel *>("publicLinkStatus"));
+        QCOMPARE(server.existingShares.first().toObject().value("permissions").toInt(), 1);
+        QCOMPARE(server.existingShares.last().toObject().value("name").toString(), QStringLiteral("Other link"));
+        QCOMPARE(server.existingShares.last().toObject().value("permissions").toInt(), 15);
+
+        server.sharePutStatus = 403;
+        panel.findChild<QAction *>("publicLinkRename")->trigger();
+        edit = panel.findChild<QDialog *>("publicLinkEditDialog");
+        edit->findChild<QLineEdit *>("publicLinkEditValue")->setText("Rejected");
+        pending = edit;
+        edit->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+        QTRY_VERIFY(edit->findChild<QWidget *>("publicLinkEditError")->isVisible());
+        QVERIFY(pending && edit->isVisible());
+        QCOMPARE(edit->findChild<QLabel *>("publicLinkEditErrorDetails")->text(), QStringLiteral("Access denied"));
+        QCOMPARE(edit->findChild<QLineEdit *>("publicLinkEditValue")->text(), QStringLiteral("Rejected"));
+        QVERIFY(!panel.findChild<QLabel *>("shareStatusLabel")->text().contains("Failed to update"));
+        QCOMPARE(server.existingShares.first().toObject().value("name").toString(), QStringLiteral("Review & approval"));
+        edit->reject();
+        QTRY_VERIFY(!pending);
+        QTRY_VERIFY(panel.findChild<QAction *>("publicLinkRename"));
+        QTRY_COMPARE(panel.findChild<QLabel *>("publicLinkName")->text(), QStringLiteral("Review & approval"));
+        panel.findChild<QAction *>("publicLinkRename")->trigger();
+        edit = panel.findChild<QDialog *>("publicLinkEditDialog");
+        QVERIFY(edit);
+        pending = edit;
+        panel.reject();
+        QTRY_VERIFY(!pending);
+        QCOMPARE(server.sharePuts.size(), 6);
+    }
+
+    void publicLinkPasswordError_data()
+    {
+        QTest::addColumn<bool>("dark");
+        QTest::newRow("dark") << true;
+        QTest::newRow("light") << false;
+    }
+
+    void publicLinkPasswordError()
+    {
+        QFETCH(bool, dark);
+        const auto previousPalette = qApp->palette();
+        const auto restore = qScopeGuard([&] { qApp->setPalette(previousPalette); });
+        auto palette = previousPalette;
+        palette.setColor(QPalette::Window, QColor(dark ? "#292929" : "#FFFFFF"));
+        palette.setColor(QPalette::WindowText, QColor(dark ? "#EDEDED" : "#1F2328"));
+        qApp->setPalette(palette);
+        DriveServer server;
+        server.existingShares = {QJsonObject{{"id", "link-1"}, {"share_type", 3}, {"name", "Review"}, {"permissions", 1}, {"url", server.url("/s/review").toString()}}};
+        server.sharePutStatus = 400;
+        server.sharePutDelay = 150;
+        server.sharePutMessage = QStringLiteral("At least 8 characters are required\nat least 1 uppercase letters are required\nat least 1 numbers are required\nat least 1 special characters are required !\"#$%&'()*+,-./:;<=>?@[]^_`{}|~");
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveShareDialog panel(&state, "Report.pdf", false, "/Report.pdf", {}, "space-1");
+        panel.show();
+        QTRY_VERIFY(panel.findChild<QAction *>("publicLinkPassword"));
+        const QString oldStatus = panel.findChild<QLabel *>("shareStatusLabel")->text();
+        panel.findChild<QAction *>("publicLinkPassword")->trigger();
+        QPointer<QDialog> edit = panel.findChild<QDialog *>("publicLinkEditDialog");
+        QVERIFY(edit);
+        const int initialHeight = edit->height();
+        auto *input = edit->findChild<QLineEdit *>("publicLinkEditValue");
+        auto *save = edit->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save);
+        input->setText("weak");
+        save->click();
+        QVERIFY(!save->isEnabled());
+        QVERIFY(!input->isEnabled());
+        save->click();
+        QTRY_COMPARE(server.sharePuts.size(), 1);
+        auto *error = edit->findChild<QWidget *>("publicLinkEditError");
+        QTRY_VERIFY(error->isVisible());
+        QVERIFY(edit->isVisible());
+        QVERIFY(edit->height() > initialHeight + 40);
+        QCOMPARE(input->text(), QStringLiteral("weak"));
+        QCOMPARE(input->echoMode(), QLineEdit::Password);
+        QVERIFY(input->isEnabled() && save->isEnabled());
+        QCOMPARE(edit->findChild<QLabel *>("publicLinkEditErrorTitle")->text(), QStringLiteral("Choose a stronger password"));
+        auto *details = edit->findChild<QLabel *>("publicLinkEditErrorDetails");
+        QCOMPARE(details->text(), QStringLiteral("• At least 8 characters\n• At least 1 uppercase letter\n• At least 1 number\n• At least 1 special character"));
+        QCOMPARE(details->textFormat(), Qt::PlainText);
+        QCOMPARE(panel.findChild<QLabel *>("shareStatusLabel")->text(), oldStatus);
+        QVERIFY(!panel.hasChanges());
+        if (qEnvironmentVariableIsSet("UDRIVE_SHARES_TEST_CAPTURE"))
+            edit->grab().save(QStringLiteral("/tmp/udrive-password-error-%1.png").arg(dark ? "dark" : "light"));
+
+        // Retry in the same editor; preserve exact input, collapse error height on save, and close only on success.
+        server.sharePutStatus = 200;
+        server.sharePutDelay = 100;
+        input->setText("New Strong Password 9!");
+        save->click();
+        QVERIFY(!error->isVisible());
+        QCOMPARE(edit->height(), initialHeight);
+        QTRY_VERIFY(!edit);
+        QTRY_COMPARE(server.sharePuts.size(), 2);
+        QCOMPARE(server.sharePuts.last().queryItemValue("password", QUrl::FullyDecoded), QStringLiteral("New Strong Password 9!"));
+        QTRY_VERIFY(panel.findChild<QLabel *>("publicLinkStatus"));
+        QVERIFY(panel.findChild<QLabel *>("publicLinkStatus")->text().contains("Password protected"));
+        QVERIFY(panel.hasChanges());
+
+        // Cancellation while saving invalidates the response and releases the UI.
+        server.sharePutStatus = 400;
+        server.sharePutDelay = 300;
+        panel.findChild<QAction *>("publicLinkPassword")->trigger();
+        edit = panel.findChild<QDialog *>("publicLinkEditDialog");
+        input = edit->findChild<QLineEdit *>("publicLinkEditValue");
+        input->setText("weak again");
+        edit->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Save)->click();
+        QTRY_COMPARE(server.sharePuts.size(), 3);
+        edit->reject();
+        QTRY_VERIFY(!edit);
+        QVERIFY(panel.findChild<QPushButton *>("shareAddLinkButton")->isEnabled());
+        QTest::qWait(350);
+        QVERIFY(!panel.findChild<QLabel *>("shareStatusLabel")->text().contains("required"));
+        QCOMPARE(server.existingShares.first().toObject().value("permissions").toInt(), 1);
+        QVERIFY(server.existingShares.first().toObject().value("share_with").toBool());
+    }
+
     void publicLinkManagement()
     {
         DriveServer server;
@@ -4356,15 +5445,14 @@ private Q_SLOTS:
 
         // Click copy action button
         auto actionButtons = dialog.findChildren<QToolButton *>(QStringLiteral("publicLinkActionButton"));
-        QVERIFY(actionButtons.size() >= 2);
+        QCOMPARE(actionButtons.size(), 1);
         auto *copyBtn = actionButtons.at(0);
-        auto *deleteBtn = actionButtons.at(1);
         copyBtn->click();
         QCOMPARE(QApplication::clipboard()->text(), server.url(QStringLiteral("/s/public-share-1")).toString());
         QVERIFY(status->text().contains(QStringLiteral("copied to clipboard")));
 
         // Delete public link
-        deleteBtn->click();
+        dialog.findChild<QAction *>("publicLinkDelete")->trigger();
         QTRY_COMPARE(server.shareDeletions.size(), 1);
         QCOMPARE(server.shareDeletions.first(), QStringLiteral("public-share-1"));
         QTRY_COMPARE(publicScroll->widget()->findChild<QLabel *>()->text(), QStringLiteral("This file has no public link."));
@@ -4628,6 +5716,7 @@ private Q_SLOTS:
         }
         QVERIFY(server.authenticated);
     }
+
 
     void shareRejectsInvalidTargets_data()
     {
@@ -5140,6 +6229,7 @@ private Q_SLOTS:
         QVERIFY(server.authenticated);
     }
 
+
     void workspaceInteractionRegressions_data()
     {
         QTest::addColumn<QString>("scenario");
@@ -5310,6 +6400,7 @@ private Q_SLOTS:
         }
         QVERIFY(server.authenticated);
     }
+
 
     void workspaceMemberAccessAndCancellation_data()
     {

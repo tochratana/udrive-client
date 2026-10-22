@@ -9,7 +9,10 @@
 #include <QDialog>
 #include <QVariant>
 #include <QMap>
+#include <QUuid>
+#include <QElapsedTimer>
 #include <memory>
+#include <functional>
 
 class QToolButton;
 class QComboBox;
@@ -36,6 +39,8 @@ class QTimer;
 class QListView;
 class QAbstractItemView;
 class QScrollArea;
+class QTreeWidget;
+class QTreeWidgetItem;
 
 namespace OpenAPI { class OAIDrive; }
 
@@ -50,6 +55,8 @@ class UDriveThumbnails;
 class UDriveWorkspaceActions;
 class DeleteConfirmDialog;
 class UDriveIncomingSharesNotifier;
+class UDriveShareDialog;
+class UDriveMoveDialog;
 
 class UDriveFileBrowser : public QWidget
 {
@@ -96,12 +103,14 @@ public:
     bool previewSelectedPdf();
     bool previewSelectedFile();
     static void cleanupOrphanedPreviews();
+    static QString uploadDuration(qint64 milliseconds);
     QLineEdit *takeSearchField();
     bool canCreate() const;
     void showNewMenu(const QPoint &globalPosition, int minimumWidth = 0);
     UDriveIncomingSharesNotifier *sharesNotifier() const { return _sharesNotifier; }
     void navigateToSharesTab();
     void retranslate();
+    void appendEntry(const QString &href, const QMap<QString, QString> &properties, const QUrl &root = {}, const QString &spaceId = {}, bool nested = false);
 
 Q_SIGNALS:
     void creationAvailabilityChanged();
@@ -149,11 +158,21 @@ private:
     bool runOperation(
         const QByteArray &verb, const QUrl &root, const QString &path, const QNetworkRequest &request, const QString &message, QIODevice *body = nullptr);
     bool uploadFileTus(const QString &localFile, const QString &remotePath, qint64 totalSize);
+    void startUploadProgress(const QString &name, qint64 total);
+    void updateUploadProgress(qint64 sent);
+    void refreshUploadDetails();
+    void stopUploadProgress();
     void cancelOperation();
     void confirmDelete(bool permanent);
+    void confirmEmptyTrash();
+    void deleteNextTrashItem();
+    void finishEmptyTrash(bool success, const QString &message);
     void addFileActions(QMenu *menu);
     void buildFileDetails();
     void updateFileDetails();
+    void showFileDetailsActions(bool show, bool focus = false);
+    void showFileShares();
+    void clearFileShares();
     void updateFileColumns();
     void loadShareItemPermissions();
     void updateBreadcrumbs();
@@ -170,7 +189,6 @@ private:
     void scheduleThumbnails();
     void loadVisibleThumbnails();
     void cancelDownload();
-    void appendEntry(const QString &href, const QMap<QString, QString> &properties, const QUrl &root = {}, const QString &spaceId = {}, bool nested = false);
     QString localPath(const QString &remotePath, const QUrl &root = {}) const;
     bool canBrowse() const;
     void setMessage(const QString &message);
@@ -247,7 +265,18 @@ private:
     QPointer<SimpleNetworkJob> _report;
     QPointer<SimpleNetworkJob> _operation;
     QPointer<DeleteConfirmDialog> _deleteConfirmation;
+    bool _emptyingTrash = false;
+    QList<QPair<QString, QString>> _trashItems;
+    int _trashPosition = 0;
+    QUrl _emptyTrashRoot;
+    QUuid _emptyTrashAccount;
     bool _uploading = false;
+    QString _uploadName;
+    qint64 _uploadTotal = 0;
+    qint64 _uploadSent = 0;
+    QElapsedTimer _uploadElapsed;
+    QTimer *_uploadProgressTimer = nullptr;
+    QLabel *_uploadDetails = nullptr;
     QString _driveId;
     QString _folderPermissions;
     bool _folderPermissionsKnown = false;
@@ -281,6 +310,7 @@ private:
     QPushButton *_openButton;
     QPushButton *_downloadButton;
     QPushButton *_restoreButton;
+    QPushButton *_emptyTrashButton;
     QPushButton *_shareButton;
     QPushButton *_cancelButton;
     QPushButton *_newButton;
@@ -299,12 +329,19 @@ private:
     QAction *_shareAction;
     QAction *_detailsAction = nullptr;
     QWidget *_fileDetails = nullptr;
+    QStackedWidget *_detailsPages = nullptr;
+    QToolButton *_detailsBack = nullptr;
+    QLabel *_detailsTitle = nullptr;
+    QLabel *_detailsFileIcon = nullptr;
+    QPointer<UDriveShareDialog> _detailsShares;
     QLabel *_detailsName = nullptr;
     QLabel *_detailsIcon = nullptr;
     QLabel *_detailsLocation = nullptr;
     QLabel *_detailsModified = nullptr;
     QLabel *_detailsSize = nullptr;
     QLabel *_detailsPeople = nullptr;
+    QLabel *_detailsOwner = nullptr;
+    QPushButton *_detailsOpen = nullptr;
     QPushButton *_detailsShare = nullptr;
     QPushButton *_detailsDownload = nullptr;
     QPushButton *_detailsRename = nullptr;
@@ -334,7 +371,7 @@ class DeleteConfirmDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit DeleteConfirmDialog(const QString &fileName, bool isFolder, QWidget *parent = nullptr, bool permanent = false);
+    explicit DeleteConfirmDialog(const QString &fileName, bool isFolder, QWidget *parent = nullptr, bool permanent = false, int trashCount = 0);
 };
 
 class UDriveInputDialog : public QDialog
@@ -354,15 +391,55 @@ private:
     QPushButton *_confirmButton = nullptr;
 };
 
+class UDriveMoveDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    explicit UDriveMoveDialog(AccountState *accountState, const QUrl &rootUrl, const QString &spaceName,
+                              const QString &sourcePath, const QString &sourceName, bool isFolder,
+                              const QList<QPair<QString, QString>> &initialFolders = {},
+                              QWidget *parent = nullptr);
+    ~UDriveMoveDialog() override;
+
+    QString selectedDestination() const;
+
+private:
+    void populateInitialFolders(const QList<QPair<QString, QString>> &initialFolders);
+    void loadFolderChildren(QTreeWidgetItem *parentItem, const QString &folderPath);
+    void createNewFolder();
+    void updateMoveButtonState();
+
+    QPointer<AccountState> _accountState;
+    QUrl _rootUrl;
+    QString _spaceName;
+    QString _sourcePath;
+    QString _sourceName;
+    QString _currentParentFolder;
+    bool _isFolder = false;
+
+    QTreeWidget *_tree = nullptr;
+    QTreeWidgetItem *_rootItem = nullptr;
+    QPushButton *_newFolderButton = nullptr;
+    QPushButton *_cancelButton = nullptr;
+    QPushButton *_moveButton = nullptr;
+    QLabel *_destinationLabel = nullptr;
+};
+
 class UDriveShareDialog : public QDialog
 {
     Q_OBJECT
 public:
     enum class Target { File, Workspace };
+    enum class Presentation { Dialog, Sidebar };
     explicit UDriveShareDialog(AccountState *accountState, const QString &fileName, bool isFolder,
                                const QString &remotePath, const QUrl &linkUrl, const QString &spaceId = {},
-                               QWidget *parent = nullptr, Target target = Target::File);
+                               QWidget *parent = nullptr, Target target = Target::File, Presentation presentation = Presentation::Dialog);
     ~UDriveShareDialog() override;
+    bool hasChanges() const { return _modified; }
+    void editPublicLink(const QString &shareId, const QJsonObject &share, const QString &field);
+
+Q_SIGNALS:
+    void accessListLoaded(const QStringList &people, int publicLinks);
 
 private:
     bool canShare() const;
@@ -372,9 +449,13 @@ private:
     void sendShare();
     void fetchShares();
     void revokeShare(const QString &shareId);
+    void updatePersonPermissions(const QString &shareId, int permissions);
     void copyLink();
     void createPublicLink();
     void updatePublicLinkPermissions(const QString &shareId, int permissions);
+    void updatePublicLink(const QString &shareId, const QString &field, const QString &value,
+        std::function<void(bool, const QString &)> completion = {});
+    void setPublicLinkBusy(bool busy);
     void copyPublicLink(const QString &url);
     void deletePublicLink(const QString &shareId);
     void fetchWorkspaceMembers();
@@ -392,6 +473,8 @@ private:
     QPointer<SimpleNetworkJob> _workspaceJob;
     QPointer<JsonApiJob> _publicLinkJob;
     Target _target = Target::File;
+    bool _sidebar = false;
+    bool _modified = false;
     QMap<QString, QString> _workspaceRoles;
     bool _canInviteMembers = false;
     bool _canRemoveMembers = false;

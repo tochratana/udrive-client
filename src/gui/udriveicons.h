@@ -53,6 +53,10 @@ enum class Symbol {
     Disable,
     Help,
     Bell,
+    Calendar,
+    Lock,
+    Eye,
+    Check,
     Play,
     Pause,
     FullScreen,
@@ -97,6 +101,29 @@ public:
             painter->drawPath(path);
         };
         switch (_symbol) {
+        case Symbol::Calendar:
+            painter->drawRoundedRect(QRectF(4, 5, 16, 16), 2, 2);
+            line({{4, 10}, {20, 10}});
+            line({{8, 3}, {8, 7}});
+            line({{16, 3}, {16, 7}});
+            break;
+        case Symbol::Lock:
+            painter->drawRoundedRect(QRectF(5, 10, 14, 11), 2, 2);
+            painter->drawArc(QRectF(8, 3, 8, 14), 0, 180 * 16);
+            line({{12, 14}, {12, 17}});
+            break;
+        case Symbol::Eye: {
+            QPainterPath eye;
+            eye.moveTo(2, 12);
+            eye.cubicTo(6, 6, 18, 6, 22, 12);
+            eye.cubicTo(18, 18, 6, 18, 2, 12);
+            painter->drawPath(eye);
+            painter->drawEllipse(QRectF(9.5, 9.5, 5, 5));
+            break;
+        }
+        case Symbol::Check:
+            line({{4, 12}, {9, 17}, {20, 6}});
+            break;
         case Symbol::Cloud: {
             QPainterPath path;
             path.moveTo(7, 19); path.cubicTo(0, 19, 0, 10, 6, 10);

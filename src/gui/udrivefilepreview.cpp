@@ -11,6 +11,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QSet>
 #include <QSlider>
 #include <QStackedWidget>
 #include <QStringDecoder>
@@ -49,8 +50,27 @@ static QString formatMediaTime(qint64 ms)
 #endif
 
 namespace OCC {
+bool UDriveFilePreview::hasSuspiciousDoubleExtension(const QString &name)
+{
+    const QStringList parts = QFileInfo(name).completeSuffix().toLower().split(QLatin1Char('.'));
+    if (parts.size() > 1) {
+        static const QSet<QString> dangerous{
+            QStringLiteral("exe"), QStringLiteral("bat"), QStringLiteral("cmd"),
+            QStringLiteral("com"), QStringLiteral("scr"), QStringLiteral("pif"),
+            QStringLiteral("vbs"), QStringLiteral("wsf"), QStringLiteral("hta"),
+            QStringLiteral("cpl"), QStringLiteral("msi"), QStringLiteral("ps1"),
+            QStringLiteral("reg")
+        };
+        for (int i = 0; i < parts.size() - 1; ++i) {
+            if (dangerous.contains(parts.at(i).trimmed())) return true;
+        }
+    }
+    return false;
+}
+
 UDriveFilePreview::Kind UDriveFilePreview::kindForName(const QString &name)
 {
+    if (hasSuspiciousDoubleExtension(name)) return Kind::Unsupported;
     const QString extension = QFileInfo(name).suffix().toLower();
     if (QStringList{"png", "jpg", "jpeg", "gif", "webp", "bmp"}.contains(extension)) return Kind::Image;
     if (QStringList{"mp4", "m4v", "mov", "webm", "mkv", "avi", "wmv"}.contains(extension)) return Kind::Video;

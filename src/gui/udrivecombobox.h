@@ -6,6 +6,7 @@
 #include <QAbstractItemView>
 #include <QComboBox>
 #include <QFrame>
+#include <QLayout>
 #include <QScreen>
 #include <QTimer>
 
@@ -21,7 +22,18 @@ public:
         if (customPopup) {
             auto *popup = view()->window();
             popup->setWindowFlag(Qt::FramelessWindowHint);
-            popup->setAttribute(Qt::WA_TranslucentBackground);
+            const bool opaque = property("udriveOpaquePopup").toBool();
+            if (opaque) {
+                popup->setPalette(view()->palette());
+                popup->setAutoFillBackground(true);
+                popup->setObjectName(QStringLiteral("udriveOpaqueComboPopup"));
+                popup->setStyleSheet(QStringLiteral("#udriveOpaqueComboPopup { background: %1; border: none; }")
+                    .arg(view()->palette().color(QPalette::Base).name()));
+            } else if (popup->objectName() == QLatin1String("udriveOpaqueComboPopup")) {
+                popup->setObjectName(QString());
+                popup->setStyleSheet(QString());
+            }
+            popup->setAttribute(Qt::WA_TranslucentBackground, !opaque);
         }
         QComboBox::showPopup();
         if (!customPopup)
@@ -40,7 +52,26 @@ private:
         if (!popup->isVisible())
             return;
         const QRect available = udrivePopupBounds(this);
-        popup->resize(qMin(width(), available.width()), qMin(popup->height(), available.height()));
+        int contentHeight = 0;
+        if (view()->model()) {
+            const int count = qMin(maxVisibleItems(), view()->model()->rowCount());
+            for (int i = 0; i < count; ++i) {
+                const int h = view()->sizeHintForRow(i);
+                contentHeight += (h > 0 ? h : 46);
+            }
+            if (contentHeight > 0) {
+                const QMargins pm = popup->layout() ? popup->layout()->contentsMargins() : QMargins();
+                const QMargins vm = view()->contentsMargins();
+                contentHeight += pm.top() + pm.bottom() + vm.top() + vm.bottom() + 10;
+            }
+        }
+        if (contentHeight <= 0)
+            contentHeight = view()->sizeHint().height();
+
+        const int desiredWidth = qMax(width(), qMax(view()->minimumWidth(), 236));
+        const int targetWidth = qMin(desiredWidth, available.width());
+        const int targetHeight = qMin(contentHeight, available.height());
+        popup->setFixedSize(targetWidth, targetHeight);
         const QPoint below = mapToGlobal(QPoint(0, height() + 4));
         const int left = layoutDirection() == Qt::RightToLeft
             ? mapToGlobal(QPoint(width(), 0)).x() - popup->width() : below.x();

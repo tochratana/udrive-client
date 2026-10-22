@@ -1347,7 +1347,7 @@ void SettingsDialog::updateUDriveAppearance()
         "QListView#driveWorkspacesView { border: none; background: %1; color: %2; padding: 4px; outline: none; }"
         "QStackedWidget#stack QPushButton#driveLearnWorkspaces { background: %12; border: none; border-radius: 16px; min-height: 18px; padding: 0 12px; color: %2; font-weight: 600; }"
         "QStackedWidget#stack QPushButton#driveLearnWorkspaces:hover { background: %6; color: %2; }"
-        "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled { border: 1px solid %5; border-radius: 14px; padding: 4px 12px; min-height: 20px; background: transparent; color: %2; font-weight: 400; }"
+        "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled { border: 1px solid %5; border-radius: 14px; padding: 4px 14px; min-height: 20px; background: transparent; color: %2; font-weight: 400; font-size: 13px; }"
         "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled:hover { background: %4; }"
         "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled:checked { background: %4; border-color: %11; color: %11; }"
         "QWidget#driveWorkspaceControls QLineEdit#driveWorkspaceSearch { border: 1px solid %5; border-radius: 5px; padding: 4px 10px; background: %12; color: %2; }"

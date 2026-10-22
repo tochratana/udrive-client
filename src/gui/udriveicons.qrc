@@ -4,6 +4,8 @@
         <file alias="chevron-dark.svg">icons/chevron-dark.svg</file>
         <file alias="chevron-primary.svg">icons/chevron-primary.svg</file>
         <file alias="chevron-disabled.svg">icons/chevron-disabled.svg</file>
+        <file alias="calendar-dark.svg">icons/calendar-dark.svg</file>
+        <file alias="calendar-light.svg">icons/calendar-light.svg</file>
         <file alias="nav-folder.svg">icons/nav-folder.svg</file>
         <file alias="nav-star.svg">icons/nav-star.svg</file>
         <file alias="nav-share.svg">icons/nav-share.svg</file>

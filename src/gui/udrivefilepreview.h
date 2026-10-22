@@ -22,6 +22,7 @@ class UDriveFilePreview : public QWidget
 public:
     enum class Kind { Image, Video, Audio, Text, External, Unsupported };
     static Kind kindForName(const QString &name);
+    static bool hasSuspiciousDoubleExtension(const QString &name);
     static qint64 maximumBytes(Kind kind);
     explicit UDriveFilePreview(QWidget *parent = nullptr);
     ~UDriveFilePreview() override;
