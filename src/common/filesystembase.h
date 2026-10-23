@@ -183,6 +183,7 @@ namespace FileSystem {
     /**
      * Ensures the file name length is allowed on all platforms and the file name does not contain illegal characters
      * reservedSize: The resulting path will be reservedSize < MAX and allows appending.
+     * Returns an empty string if the sanitized name is empty, a dot component, or contains NUL.
      */
     QString OCSYNC_EXPORT createPortableFileName(const QString &path, const QString &fileName, qsizetype reservedSize = 0);
 

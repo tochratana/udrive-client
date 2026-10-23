@@ -48,6 +48,74 @@ class TestRemoteDiscovery : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
+    void testDecodedRemoteNames_data()
+    {
+        QTest::addColumn<QByteArray>("encodedName");
+        QTest::addColumn<bool>("accepted");
+        QTest::addColumn<QString>("decodedName");
+        QTest::newRow("dot") << QByteArray(".") << false << QString();
+        QTest::newRow("dotdot") << QByteArray("..") << false << QString();
+        QTest::newRow("encoded-dot") << QByteArray("%2e") << false << QString();
+        QTest::newRow("encoded-dotdot") << QByteArray("%2E%2E") << false << QString();
+        QTest::newRow("mixed-dotdot") << QByteArray(".%2e") << false << QString();
+        QTest::newRow("encoded-trailing-slash") << QByteArray("%2F") << false << QString();
+        QTest::newRow("encoded-nul") << QByteArray("%00") << false << QString();
+        QTest::newRow("hidden-file") << QByteArray(".notes") << true << QStringLiteral(".notes");
+        QTest::newRow("literal-encoded-dots") << QByteArray("%252e%252e") << true << QStringLiteral("%2e%2e");
+        QTest::newRow("unicode") << QByteArray("%E8%B3%87%E6%96%99") << true << QStringLiteral("資料");
+    }
+
+    void testDecodedRemoteNames()
+    {
+        QFETCH(QByteArray, encodedName);
+        QFETCH(bool, accepted);
+        QFETCH(QString, decodedName);
+        FakeFolder folder({});
+        folder.remoteModifier().insert(accepted ? decodedName : QStringLiteral("entry"));
+        folder.localModifier().insert(QStringLiteral("keep"));
+        bool rewroteEntry = false;
+        folder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &req, QIODevice *) -> QNetworkReply * {
+            if (accepted || req.attribute(QNetworkRequest::CustomVerbAttribute).toByteArray() != "PROPFIND") return nullptr;
+            auto *reply = new FakePropfindReply(folder.remoteModifier(), op, req, this);
+            rewroteEntry |= reply->payload.contains("entry</d:href>");
+            reply->payload.replace("entry</d:href>", QByteArray(encodedName).append("</d:href>"));
+            return reply;
+        });
+        folder.syncEngine().setIgnoreHiddenFiles(false);
+        QSignalSpy errors(&folder.syncEngine(), &SyncEngine::syncError);
+        QCOMPARE(folder.applyLocalModificationsAndSync(), accepted);
+        QVERIFY(folder.currentLocalState().find(QStringLiteral("keep")));
+        if (accepted) {
+            QVERIFY(folder.currentLocalState().find(decodedName));
+            QVERIFY(errors.isEmpty());
+        } else {
+            QVERIFY(rewroteEntry);
+            QCOMPARE(errors.size(), 1);
+            QVERIFY(errors.first().first().toString().contains(QStringLiteral("invalid file name")));
+            QVERIFY(!folder.currentRemoteState().find(QStringLiteral("keep")));
+        }
+    }
+
+    void testInvalidSelfResponseFailsListing()
+    {
+        FakeFolder folder(FileInfo::A12_B12_C12_S12());
+        const auto oldLocalState = folder.currentLocalState();
+        const auto oldRemoteState = folder.currentRemoteState();
+        FileInfo emptyListing;
+        folder.setServerOverride([&](QNetworkAccessManager::Operation op, const QNetworkRequest &req, QIODevice *) -> QNetworkReply * {
+            if (req.attribute(QNetworkRequest::CustomVerbAttribute).toByteArray() != "PROPFIND") return nullptr;
+            auto *reply = new FakePropfindReply(emptyListing, op, req, this);
+            reply->payload.replace("</d:href>", "%2e%2e</d:href>");
+            return reply;
+        });
+        QSignalSpy errors(&folder.syncEngine(), &SyncEngine::syncError);
+        QVERIFY(!folder.applyLocalModificationsAndSync());
+        QCOMPARE(errors.size(), 1);
+        QVERIFY(errors.first().first().toString().contains(QStringLiteral("invalid file name")));
+        QCOMPARE(folder.currentLocalState(), oldLocalState);
+        QCOMPARE(folder.currentRemoteState(), oldRemoteState);
+    }
+
     void initTestCase_data()
     {
         QTest::addColumn<Vfs::Mode>("vfsMode");

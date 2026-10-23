@@ -1539,62 +1539,60 @@ Items, where deletion is allowed, will be deleted if they prevent a directory fr
     </message>
 </context>
 <context>
-    <name>OCC::LogBrowser</name>
-    <message>
-        <location filename="../src/gui/logbrowser.ui" line="14"/>
-        <source>Log Output</source>
-        <translation>Log Output</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/logbrowser.ui" line="53"/>
-        <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;b&gt;The logs contain sensitive information which you should not make publicly available&lt;/b&gt;&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
-        <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;b&gt;The logs contain sensitive information which you should not make publicly available&lt;/b&gt;&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/logbrowser.ui" line="71"/>
-        <source>The client can write debug logs to a temporary folder. These logs are very helpful for diagnosing problems.
-Since log files can get large, the client will start a new one for each sync run and compress older ones.</source>
-        <translation>The client can write debug logs to a temporary folder. These logs are very helpful for diagnosing problems.
-Since log files can get large, the client will start a new one for each sync run and compress older ones.</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/logbrowser.ui" line="116"/>
-        <source>Enable logging to temporary folder</source>
-        <translation>Enable logging to temporary folder</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/logbrowser.ui" line="84"/>
-        <source>If enabled, logs will be written to:</source>
-        <translation>If enabled, logs will be written to:</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/logbrowser.ui" line="91"/>
-        <source>C:/log</source>
-        <translation>C:/log</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/logbrowser.ui" line="123"/>
-        <source>Log Http traffic </source>
-        <translation>Log HTTP traffic </translation>
-    </message>
-    <message>
-        <location filename="../src/gui/logbrowser.ui" line="132"/>
-        <source>Log files to keep:</source>
-        <translation>Log files to keep:</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/logbrowser.ui" line="167"/>
-        <source>These settings persist across client restarts.
-Note that using any logging command line options will override the settings.</source>
-        <translation>These settings persist across client restarts.
-Note that using any logging command line options will override the settings.</translation>
-    </message>
-    <message>
-        <location filename="../src/gui/logbrowser.ui" line="178"/>
-        <source>Open folder</source>
-        <translation>Open folder</translation>
-    </message>
-</context>
+        <name>OCC::LogBrowser</name>
+        <message>
+            <source>Debug logging</source>
+            <translation>Debug logging</translation>
+        </message>
+        <message>
+            <source>Save diagnostic logs to help troubleshoot sync issues.</source>
+            <translation>Save diagnostic logs to help troubleshoot sync issues.</translation>
+        </message>
+        <message>
+            <source>Keep logs private</source>
+            <translation>Keep logs private</translation>
+        </message>
+        <message>
+            <source>Logs may contain sensitive information. Do not share them publicly.</source>
+            <translation>Logs may contain sensitive information. Do not share them publicly.</translation>
+        </message>
+        <message>
+            <source>Logging options</source>
+            <translation>Logging options</translation>
+        </message>
+        <message>
+            <source>Enable debug logging</source>
+            <translation>Enable debug logging</translation>
+        </message>
+        <message>
+            <source>Include HTTP traffic</source>
+            <translation>Include HTTP traffic</translation>
+        </message>
+        <message>
+            <source>Log files to keep</source>
+            <translation>Log files to keep</translation>
+        </message>
+        <message>
+            <source>A new file is created for each sync run. Older logs are compressed.</source>
+            <translation>A new file is created for each sync run. Older logs are compressed.</translation>
+        </message>
+        <message>
+            <source>Log folder</source>
+            <translation>Log folder</translation>
+        </message>
+        <message>
+            <source>Settings are saved automatically. Command-line logging options take priority.</source>
+            <translation>Settings are saved automatically. Command-line logging options take priority.</translation>
+        </message>
+        <message>
+            <source>Open folder</source>
+            <translation>Open folder</translation>
+        </message>
+        <message>
+            <source>Close</source>
+            <translation>Close</translation>
+        </message>
+    </context>
 <context>
     <name>OCC::Models</name>
     <message>
@@ -3577,4 +3575,30 @@ Please check the server&apos;s availability then run the wizard again.</translat
         <translation>Some settings were configured in newer versions of this client and use features that are not available in this version</translation>
     </message>
 </context>
+    <context>
+        <name>UDriveToast</name>
+        <message>
+            <source>Preference saved.</source>
+            <translation>Preference saved.</translation>
+        </message>
+        <message>
+            <source>Notification</source>
+            <translation>Notification</translation>
+        </message>
+        <message>
+            <source>Dismiss notification</source>
+            <translation>Dismiss notification</translation>
+        </message>
+    </context>
+    <context>
+        <name>OCC::UDriveShareDialog</name>
+        <message>
+            <source>Workspace member added.</source>
+            <translation>Workspace member added.</translation>
+        </message>
+        <message>
+            <source>Workspace member removed.</source>
+            <translation>Workspace member removed.</translation>
+        </message>
+    </context>
 </TS>

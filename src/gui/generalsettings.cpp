@@ -22,6 +22,7 @@
 #include "gui/settingsdialog.h"
 #include "gui/translations.h"
 #include "appearancewidget.h"
+#include "udrivetoast.h"
 #include "libsync/configfile.h"
 #include "libsync/theme.h"
 
@@ -49,10 +50,11 @@ GeneralSettings::GeneralSettings(QWidget *parent)
         _appearanceWidget->setObjectName(QStringLiteral("appearanceSection"));
         _ui->verticalLayout_5->insertWidget(0, _appearanceWidget);
 
-        connect(_appearanceWidget, &AppearanceWidget::themeChanged, this, [](ConfigFile::ThemeMode mode) {
+        connect(_appearanceWidget, &AppearanceWidget::themeChanged, this, [this](ConfigFile::ThemeMode mode) {
             ConfigFile cfg;
             cfg.setThemeMode(mode);
             Application::applyApplicationTheme(mode);
+            UDriveToast::preferenceSaved(this);
         });
 
         auto *languages = _ui->languageDropdown;
@@ -91,9 +93,8 @@ GeneralSettings::GeneralSettings(QWidget *parent)
             } else {
                 Translations::installLanguage(pickedLocale);
             }
-        } else {
-            showLanguageRestartNotice();
         }
+        showLanguageRestartNotice();
     });
 
     /* handle the hidden file checkbox */
@@ -101,7 +102,10 @@ GeneralSettings::GeneralSettings(QWidget *parent)
     /* the ignoreHiddenFiles flag is a folder specific setting, but for now, it is
      * handled globally. Save it to every folder that is defined.
      */
-    connect(_ui->syncHiddenFilesCheckBox, &QCheckBox::toggled, this, [](bool checked) { FolderMan::instance()->setIgnoreHiddenFiles(!checked); });
+    connect(_ui->syncHiddenFilesCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
+        FolderMan::instance()->setIgnoreHiddenFiles(!checked);
+        if (!_currentlyLoading) UDriveToast::preferenceSaved(this);
+    });
 
     _ui->crashreporterCheckBox->setVisible(Theme::instance()->withCrashReporter());
 
@@ -109,7 +113,9 @@ GeneralSettings::GeneralSettings(QWidget *parent)
     connect(_ui->moveToTrashCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
         ConfigFile().setMoveToTrash(checked);
         Q_EMIT syncOptionsChanged();
+        if (!_currentlyLoading) UDriveToast::preferenceSaved(this);
     });
+    connect(_ui->autostartCheckBox, &QAbstractButton::clicked, this, [this] { UDriveToast::preferenceSaved(this); });
 
     // OEM themes are not obliged to ship mono icons, so there
     // is no point in offering an option
@@ -122,6 +128,11 @@ GeneralSettings::GeneralSettings(QWidget *parent)
     });
 
     connect(_ui->about_pushButton, &QPushButton::clicked, this, &GeneralSettings::showAbout);
+
+    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+        _ui->copyrightLabel->setText(tr("Unity Workspace"));
+        _ui->about_pushButton->setText(tr("About %1").arg(Theme::instance()->appNameGUI()));
+    }
 
     if (!Theme::instance()->aboutShowCopyright()) {
         _ui->copyrightLabel->hide();
@@ -226,6 +237,7 @@ void GeneralSettings::loadMiscSettings()
 
 void GeneralSettings::showEvent(QShowEvent *event)
 {
+    QScopedValueRollback<bool> loading(_currentlyLoading, true);
     reloadConfig();
     if (_appearanceWidget) {
         _appearanceWidget->setThemeMode(ConfigFile().themeMode(), false);
@@ -266,6 +278,7 @@ void GeneralSettings::saveMiscSettings()
     // UDrive stores an explicit supported locale; upstream can also store its default entry.
     const QString pickedLocale = _ui->languageDropdown->currentData().toString();
     cfgFile.setUiLanguage(pickedLocale);
+    UDriveToast::preferenceSaved(this);
 }
 
 void GeneralSettings::slotToggleLaunchOnStartup(bool enable)
@@ -278,6 +291,7 @@ void GeneralSettings::slotToggleOptionalDesktopNotifications(bool enable)
 {
     ConfigFile cfgFile;
     cfgFile.setOptionalDesktopNotifications(enable);
+    if (!_currentlyLoading) UDriveToast::preferenceSaved(this);
 }
 
 void GeneralSettings::slotIgnoreFilesEditor()

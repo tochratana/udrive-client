@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "udriveadminwidget.h"
+#include "udrivetoast.h"
 #include "accountstate.h"
 #include "libsync/account.h"
 #include "common/utility.h"
@@ -300,7 +301,9 @@ UDriveAdminWidget::UDriveAdminWidget(AccountState *state, QWidget *parent)
         render();
     });
     connect(_api, &UDriveAdminApi::operationFinished, this, [this](bool success, const QString &message) {
-        _status->setText(message); _status->setVisible(!message.isEmpty());
+        const bool write = _reloadAfterWrite;
+        _status->setText(message); _status->setVisible(!write && !message.isEmpty());
+        if (write) UDriveToast::showMessage(this, message, success ? UDriveToast::Kind::Success : UDriveToast::Kind::Error);
         if (_refreshAfterAccess) { _refreshAfterAccess = false; if (success && isVisible() && _api->available()) refresh(); }
         else if (_reloadAfterWrite) { _reloadAfterWrite = false; if (success && isVisible() && _api->available()) refresh(); }
         updateActions();
@@ -620,7 +623,9 @@ void UDriveAdminWidget::editMembers()
             item->setData(Qt::UserRole, text(user, "id")); item->setToolTip(text(user, "id")); }
         notice->setText(QObject::tr("%1 members").arg(records.size()));
     });
-    connect(_api, &UDriveAdminApi::operationFinished, dialog, [notice](bool, const QString &message) { if (!message.isEmpty()) notice->setText(message); });
+    connect(_api, &UDriveAdminApi::operationFinished, dialog, [dialog](bool success, const QString &message) {
+        if (!message.isEmpty()) UDriveToast::showMessage(dialog, message, success ? UDriveToast::Kind::Success : UDriveToast::Kind::Error);
+    });
     connect(add, &QPushButton::clicked, dialog, [this, group, input] { _api->setGroupMember(group, input->currentData().toString(), true); });
     connect(remove, &QPushButton::clicked, dialog, [this, group, members] {
         if (members->currentItem()) _api->setGroupMember(group, members->currentItem()->data(Qt::UserRole).toString(), false);

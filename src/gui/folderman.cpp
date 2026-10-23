@@ -327,6 +327,10 @@ void FolderMan::loadSpacesAndCreateFolders(AccountState *accountState, bool useV
             folderDef.setPriority(space->sortPriority());
 
             QString localPath = findGoodPathForNewSyncFolder(localDir, space->defaultFolderName(), NewFolderType::SpacesFolder, space->accountId());
+            if (localPath.isEmpty()) {
+                _unsyncedSpaces[accountState->account()->uuid()].insert(space->id(), space);
+                continue;
+            }
             folderDef.setLocalPath(localPath);
             folderDef.setTargetPath({});
 
@@ -434,6 +438,10 @@ void FolderMan::onSpacesAdded(const QUuid &accountId, QList<GraphApi::Space *> s
 
             const QString localDir(accountState->account()->defaultSyncRoot());
             const QString folderName = findGoodPathForNewSyncFolder(localDir, newSpace->defaultFolderName(), NewFolderType::SpacesFolder, accountId);
+            if (folderName.isEmpty()) {
+                _unsyncedSpaces[accountId].insert(newSpace->id(), newSpace);
+                continue;
+            }
 
             // I'm recycling the routine used in the folder wizard to add a new space from gui for now. No I don't
             // like it but I am out of steam trying to collate all these barely different methods of creating a folder
@@ -706,7 +714,8 @@ void FolderMan::slotFolderSyncFinished(const SyncResult &)
 
 bool FolderMan::validateFolderDefinition(const FolderDefinition &folderDefinition)
 {
-    if (folderDefinition.id().isEmpty() || folderDefinition.journalPath().isEmpty() || !ensureFilesystemSupported(folderDefinition))
+    if (folderDefinition.id().isEmpty() || folderDefinition.journalPath().isEmpty()
+        || folderDefinition.localPath().isEmpty() || !QDir::isAbsolutePath(folderDefinition.localPath()) || !ensureFilesystemSupported(folderDefinition))
         return false;
     return true;
 }
@@ -1085,30 +1094,31 @@ QString FolderMan::findExistingFolderAndCheckValidity(const QString &path, NewFo
 QString FolderMan::findGoodPathForNewSyncFolder(
     const QString &basePath, const QString &newFolder, FolderMan::NewFolderType folderType, const QUuid &accountUuid) const
 {
+    if (basePath.isEmpty() || !QDir::isAbsolutePath(basePath)) return {};
+    const QString base = QDir::cleanPath(canonicalPath(basePath));
     // reserve extra characters to allow appending of a number
-    const QString normalisedPath = FileSystem::createPortableFileName(basePath, FileSystem::pathEscape(newFolder), std::string_view(" (100)").size());
+    const QString normalisedPath = FileSystem::createPortableFileName(base, newFolder, std::string_view(" (100)").size());
+    if (normalisedPath.isEmpty() || QFileInfo(normalisedPath).absolutePath().compare(base, Utility::fsCaseSensitivity()) != 0) return {};
 
     // If the parent folder is a sync folder or contained in one, we can't
     // possibly find a valid sync folder inside it.
     // Example: Someone syncs their home directory. Then ~/foobar is not
     // going to be an acceptable sync folder path for any value of foobar.
     if (folderForPath(QFileInfo(normalisedPath).canonicalPath())) {
-        // Any path with that parent is going to be unacceptable,
-        // so just keep it as-is.
-        return canonicalPath(normalisedPath);
+        return {};
     }
     // Count attempts and give up eventually
     {
         QString folder = normalisedPath;
         for (int attempt = 2; attempt <= 100; ++attempt) {
-            if (!QFileInfo::exists(folder) && checkPathValidity(folder, folderType, accountUuid).isEmpty()) {
+            if (!QFileInfo::exists(folder) && !QFileInfo(folder).isSymLink() && checkPathValidity(folder, folderType, accountUuid).isEmpty()) {
                 return canonicalPath(folder);
             }
             folder = normalisedPath + QStringLiteral(" (%1)").arg(attempt);
         }
     }
     // we failed to find a non existing path
-    return canonicalPath(normalisedPath);
+    return {};
 }
 
 bool FolderMan::ignoreHiddenFiles() const
@@ -1274,6 +1284,7 @@ void FolderMan::updateAccountFavorite(AccountState *state, bool addIfMissing)
 
 bool FolderMan::prepareFolder(const QString &folder)
 {
+    if (folder.isEmpty() || !QDir::isAbsolutePath(folder)) return false;
     if (!QFileInfo::exists(folder)) {
         if (!OC_ENSURE(QDir().mkpath(folder))) {
             return false;

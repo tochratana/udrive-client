@@ -112,6 +112,17 @@ public:
     void retranslate();
     void appendEntry(const QString &href, const QMap<QString, QString> &properties, const QUrl &root = {}, const QString &spaceId = {}, bool nested = false);
 
+    struct FileVersionItem {
+        QString href;
+        QUrl url;
+        qint64 size = -1;
+        QDateTime modified;
+        QString etag;
+    };
+    void showFileDetailsVersions(bool show = true, bool focus = false);
+    QList<FileVersionItem> parseVersionsMultistatus(const QByteArray &xml, const QUrl &requestUrl) const;
+    void setVersions(const QList<FileVersionItem> &versions, const QString &fileName, const QString &filePath, const QUrl &root, bool canRestore = true);
+
 Q_SIGNALS:
     void creationAvailabilityChanged();
 
@@ -171,6 +182,11 @@ private:
     void buildFileDetails();
     void updateFileDetails();
     void showFileDetailsActions(bool show, bool focus = false);
+    void showFileDetailsOverview(bool focus = false);
+    void loadVersionsForItem(const QModelIndex &index);
+    void confirmAndRestoreVersion(const FileVersionItem &version, const QString &fileName, const QString &filePath, const QUrl &root);
+    void downloadVersion(const FileVersionItem &version, const QString &fileName);
+    QUrl metaVersionsUrl(const QString &fileId) const;
     void showFileShares();
     void clearFileShares();
     void updateFileColumns();
@@ -192,6 +208,9 @@ private:
     QString localPath(const QString &remotePath, const QUrl &root = {}) const;
     bool canBrowse() const;
     void setMessage(const QString &message);
+    enum class Notice { Information, Success, Error };
+    void showNotice(const QString &message, Notice kind);
+    void showResult(const QString &message, bool success = true);
     void showWorkspaceCardMenu(const QModelIndex &index);
     void updateWorkspaceCardHeight();
     void setWorkspaceTableView(bool table, bool save = true);
@@ -304,6 +323,7 @@ private:
     QString _spaceName;
     QLabel *_message;
     QString _statusMessage;
+    bool _resultMessage = false;
     QCheckBox *_selectAll;
     QPushButton *_rootButton;
     QPushButton *_refreshButton;
@@ -327,6 +347,7 @@ private:
     QAction *_linkAction;
     QAction *_webAction;
     QAction *_shareAction;
+    QAction *_versionsAction = nullptr;
     QAction *_detailsAction = nullptr;
     QWidget *_fileDetails = nullptr;
     QStackedWidget *_detailsPages = nullptr;
@@ -334,6 +355,12 @@ private:
     QLabel *_detailsTitle = nullptr;
     QLabel *_detailsFileIcon = nullptr;
     QPointer<UDriveShareDialog> _detailsShares;
+    QWidget *_detailsVersionsPage = nullptr;
+    QLabel *_versionsStatusLabel = nullptr;
+    QScrollArea *_versionsScroll = nullptr;
+    QVBoxLayout *_versionsListLayout = nullptr;
+    QPushButton *_detailsVersionsHeader = nullptr;
+    QPointer<SimpleNetworkJob> _versionsJob;
     QLabel *_detailsName = nullptr;
     QLabel *_detailsIcon = nullptr;
     QLabel *_detailsLocation = nullptr;
@@ -443,6 +470,8 @@ Q_SIGNALS:
 
 private:
     bool canShare() const;
+    void setStatus(const QString &message);
+    void showResult(const QString &message, bool success = true);
     void cancelRecipientSearch();
     void searchRecipients();
     void selectRecipient(const QModelIndex &index);

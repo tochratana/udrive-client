@@ -245,6 +245,29 @@ private Q_SLOTS:
             QString(dirPath + QStringLiteral("/Bo____!b")));
     }
 
+    void testUnsafeFolderSuggestionsFailClosed()
+    {
+        auto dir = TestUtils::createTempDir();
+        QVERIFY(dir.isValid());
+        auto *manager = TestUtils::folderMan();
+        const auto type = FolderMan::NewFolderType::SpacesFolder;
+        const auto id = QUuid::createUuid();
+        for (const auto &name : {QString(), QStringLiteral(" "), QStringLiteral("."), QStringLiteral(".."), QStringLiteral(" .. "), QString(QChar::Null)}) {
+            QVERIFY2(manager->findGoodPathForNewSyncFolder(dir.path(), name, type, id).isEmpty(), qPrintable(name));
+        }
+        QDir base(dir.path());
+        QVERIFY(base.mkdir(QStringLiteral("occupied")));
+        for (int i = 2; i <= 100; ++i) {
+            QVERIFY(base.mkdir(QStringLiteral("occupied (%1)").arg(i)));
+        }
+        QVERIFY(manager->findGoodPathForNewSyncFolder(dir.path(), QStringLiteral("occupied"), type, id).isEmpty());
+        QCOMPARE(manager->findGoodPathForNewSyncFolder(dir.path(), QStringLiteral("資料"), type, id), base.filePath(QStringLiteral("資料")));
+#ifndef Q_OS_WIN
+        QVERIFY(QFile::link(base.filePath(QStringLiteral("missing")), base.filePath(QStringLiteral("dangling"))));
+        QCOMPARE(manager->findGoodPathForNewSyncFolder(dir.path(), QStringLiteral("dangling"), type, id), base.filePath(QStringLiteral("dangling (2)")));
+#endif
+    }
+
     void testSpacesSyncRootAndFolderCreation()
     {
         const QString someDeepPath = "/Some/Deep/Path";

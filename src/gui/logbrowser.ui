@@ -2,197 +2,122 @@
 <ui version="4.0">
  <class>OCC::LogBrowser</class>
  <widget class="QDialog" name="OCC::LogBrowser">
-  <property name="geometry">
-   <rect>
-    <x>0</x>
-    <y>0</y>
-    <width>600</width>
-    <height>399</height>
-   </rect>
-  </property>
-  <property name="windowTitle">
-   <string>Log Output</string>
-  </property>
+  <property name="geometry"><rect><x>0</x><y>0</y><width>560</width><height>610</height></rect></property>
+  <property name="minimumSize"><size><width>420</width><height>360</height></size></property>
+  <property name="windowTitle"><string>Debug logging</string></property>
   <layout class="QVBoxLayout" name="verticalLayout">
-   <item>
-    <layout class="QHBoxLayout" name="horizontalLayout_2">
-     <item>
-      <widget class="QLabel" name="warningIcon">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="minimumSize">
-        <size>
-         <width>64</width>
-         <height>64</height>
-        </size>
-       </property>
-       <property name="maximumSize">
-        <size>
-         <width>64</width>
-         <height>64</height>
-        </size>
-       </property>
-       <property name="text">
-        <string/>
-       </property>
-       <property name="pixmap">
-        <pixmap resource="../resources/client.qrc">:/client/resources/light/warning.svg</pixmap>
-       </property>
-       <property name="scaledContents">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QLabel" name="label_5">
-       <property name="text">
-        <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;b&gt;The logs contain sensitive information which you should not make publicly available&lt;/b&gt;&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-       </property>
-       <property name="wordWrap">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-    </layout>
-   </item>
-   <item>
-    <widget class="QLabel" name="label">
-     <property name="sizePolicy">
-      <sizepolicy hsizetype="Preferred" vsizetype="MinimumExpanding">
-       <horstretch>0</horstretch>
-       <verstretch>0</verstretch>
-      </sizepolicy>
-     </property>
-     <property name="text">
-      <string>The client can write debug logs to a temporary folder. These logs are very helpful for diagnosing problems.
-Since log files can get large, the client will start a new one for each sync run and compress older ones.</string>
-     </property>
-     <property name="wordWrap">
-      <bool>true</bool>
-     </property>
+   <property name="spacing"><number>18</number></property>
+   <property name="leftMargin"><number>24</number></property>
+   <property name="topMargin"><number>24</number></property>
+   <property name="rightMargin"><number>24</number></property>
+   <property name="bottomMargin"><number>20</number></property>
+   <item><widget class="QLabel" name="titleLabel">
+    <property name="text"><string>Debug logging</string></property>
+    <property name="wordWrap"><bool>true</bool></property>
+   </widget></item>
+   <item><widget class="QScrollArea" name="contentScroll">
+    <property name="frameShape"><enum>QFrame::NoFrame</enum></property>
+    <property name="widgetResizable"><bool>true</bool></property>
+    <property name="horizontalScrollBarPolicy"><enum>Qt::ScrollBarAlwaysOff</enum></property>
+    <widget class="QWidget" name="scrollContents">
+     <layout class="QVBoxLayout" name="contentLayout">
+      <property name="spacing"><number>18</number></property>
+      <property name="leftMargin"><number>0</number></property>
+      <property name="topMargin"><number>0</number></property>
+      <property name="rightMargin"><number>0</number></property>
+      <property name="bottomMargin"><number>0</number></property>
+      <item><widget class="QLabel" name="descriptionLabel">
+       <property name="text"><string>Save diagnostic logs to help troubleshoot sync issues.</string></property>
+       <property name="wordWrap"><bool>true</bool></property>
+      </widget></item>
+      <item><widget class="QFrame" name="privacyCard">
+       <layout class="QHBoxLayout" name="privacyLayout">
+        <property name="spacing"><number>12</number></property>
+        <property name="leftMargin"><number>14</number></property>
+        <property name="topMargin"><number>14</number></property>
+        <property name="rightMargin"><number>14</number></property>
+        <property name="bottomMargin"><number>14</number></property>
+        <item alignment="Qt::AlignTop"><widget class="QLabel" name="warningIcon">
+         <property name="minimumSize"><size><width>24</width><height>24</height></size></property>
+         <property name="maximumSize"><size><width>24</width><height>24</height></size></property>
+         <property name="text"><string notr="true"/></property>
+        </widget></item>
+        <item><layout class="QVBoxLayout" name="privacyTextLayout">
+         <property name="spacing"><number>4</number></property>
+         <item><widget class="QLabel" name="privacyTitle">
+          <property name="text"><string>Keep logs private</string></property>
+          <property name="wordWrap"><bool>true</bool></property>
+         </widget></item>
+         <item><widget class="QLabel" name="privacyDescription">
+          <property name="text"><string>Logs may contain sensitive information. Do not share them publicly.</string></property>
+          <property name="wordWrap"><bool>true</bool></property>
+         </widget></item>
+        </layout></item>
+       </layout>
+      </widget></item>
+      <item><widget class="QFrame" name="optionsCard">
+       <layout class="QVBoxLayout" name="optionsLayout">
+        <property name="spacing"><number>14</number></property>
+        <property name="leftMargin"><number>16</number></property>
+        <property name="topMargin"><number>16</number></property>
+        <property name="rightMargin"><number>16</number></property>
+        <property name="bottomMargin"><number>16</number></property>
+        <item><widget class="QLabel" name="optionsTitle">
+         <property name="text"><string>Logging options</string></property>
+        </widget></item>
+        <item><widget class="QCheckBox" name="enableLoggingButton">
+         <property name="text"><string>Enable debug logging</string></property>
+        </widget></item>
+        <item><widget class="QCheckBox" name="httpLogButton">
+         <property name="text"><string>Include HTTP traffic</string></property>
+        </widget></item>
+        <item><layout class="QHBoxLayout" name="retentionLayout">
+         <item><widget class="QLabel" name="retentionLabel">
+          <property name="text"><string>Log files to keep</string></property>
+          <property name="buddy"><cstring>spinBox_numberOflogsToKeep</cstring></property>
+         </widget></item>
+         <item><spacer name="retentionSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property></spacer></item>
+         <item><widget class="QSpinBox" name="spinBox_numberOflogsToKeep">
+          <property name="minimumSize"><size><width>84</width><height>32</height></size></property>
+          <property name="minimum"><number>5</number></property>
+         </widget></item>
+        </layout></item>
+        <item><widget class="QLabel" name="retentionDescription">
+         <property name="text"><string>A new file is created for each sync run. Older logs are compressed.</string></property>
+         <property name="wordWrap"><bool>true</bool></property>
+        </widget></item>
+       </layout>
+      </widget></item>
+      <item><layout class="QVBoxLayout" name="folderLayout">
+       <property name="spacing"><number>8</number></property>
+       <item><widget class="QLabel" name="folderLabel">
+        <property name="text"><string>Log folder</string></property>
+        <property name="buddy"><cstring>locationField</cstring></property>
+       </widget></item>
+       <item><widget class="QLineEdit" name="locationField">
+        <property name="readOnly"><bool>true</bool></property>
+       </widget></item>
+      </layout></item>
+      <item><widget class="QLabel" name="settingsNote">
+       <property name="text"><string>Settings are saved automatically. Command-line logging options take priority.</string></property>
+       <property name="wordWrap"><bool>true</bool></property>
+      </widget></item>
+      <item><spacer name="contentSpacer"><property name="orientation"><enum>Qt::Vertical</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property></spacer></item>
+     </layout>
     </widget>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="horizontalLayout">
-     <item>
-      <widget class="QLabel" name="label_2">
-       <property name="text">
-        <string>If enabled, logs will be written to:</string>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QLabel" name="locationLabel">
-       <property name="text">
-        <string>C:/log</string>
-       </property>
-       <property name="textInteractionFlags">
-        <set>Qt::LinksAccessibleByMouse|Qt::TextSelectableByMouse</set>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <spacer name="horizontalSpacer">
-       <property name="orientation">
-        <enum>Qt::Horizontal</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>40</width>
-         <height>20</height>
-        </size>
-       </property>
-      </spacer>
-     </item>
-    </layout>
-   </item>
-   <item>
-    <widget class="QCheckBox" name="enableLoggingButton">
-     <property name="text">
-      <string>Enable logging to temporary folder</string>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <widget class="QCheckBox" name="httpLogButton">
-     <property name="text">
-      <string>Log Http traffic </string>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="horizontalLayout_3">
-     <item>
-      <widget class="QLabel" name="label_4">
-       <property name="text">
-        <string>Log files to keep:</string>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QSpinBox" name="spinBox_numberOflogsToKeep">
-       <property name="minimum">
-        <number>5</number>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <spacer name="horizontalSpacer_2">
-       <property name="orientation">
-        <enum>Qt::Horizontal</enum>
-       </property>
-       <property name="sizeHint" stdset="0">
-        <size>
-         <width>40</width>
-         <height>20</height>
-        </size>
-       </property>
-      </spacer>
-     </item>
-    </layout>
-   </item>
-   <item>
-    <widget class="QLabel" name="label_3">
-     <property name="sizePolicy">
-      <sizepolicy hsizetype="Expanding" vsizetype="MinimumExpanding">
-       <horstretch>0</horstretch>
-       <verstretch>0</verstretch>
-      </sizepolicy>
-     </property>
-     <property name="text">
-      <string>These settings persist across client restarts.
-Note that using any logging command line options will override the settings.</string>
-     </property>
-     <property name="wordWrap">
-      <bool>true</bool>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <widget class="QPushButton" name="openFolderButton">
-     <property name="text">
-      <string>Open folder</string>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <widget class="QDialogButtonBox" name="buttonBox">
-     <property name="orientation">
-      <enum>Qt::Horizontal</enum>
-     </property>
-     <property name="standardButtons">
-      <set>QDialogButtonBox::Close</set>
-     </property>
-    </widget>
-   </item>
+   </widget></item>
+   <item><layout class="QHBoxLayout" name="footerLayout">
+    <item><widget class="QPushButton" name="openFolderButton">
+     <property name="text"><string>Open folder</string></property>
+    </widget></item>
+    <item><spacer name="footerSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property></spacer></item>
+    <item><widget class="QDialogButtonBox" name="buttonBox">
+     <property name="standardButtons"><set>QDialogButtonBox::Close</set></property>
+    </widget></item>
+   </layout></item>
   </layout>
  </widget>
- <resources>
-  <include location="../resources/client.qrc"/>
- </resources>
+ <tabstops><tabstop>enableLoggingButton</tabstop><tabstop>httpLogButton</tabstop><tabstop>spinBox_numberOflogsToKeep</tabstop><tabstop>locationField</tabstop><tabstop>openFolderButton</tabstop><tabstop>buttonBox</tabstop></tabstops>
+ <resources/>
  <connections/>
 </ui>

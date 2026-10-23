@@ -370,9 +370,16 @@ static void propertyMapToRemoteInfo(const QMap<QString, QString> &map, RemoteInf
 
 void DiscoverySingleDirectoryJob::directoryListingIteratedSlot(const QString &file, const QMap<QString, QString> &map)
 {
+    if (!_error.isEmpty()) return;
     if (!_ignoredFirst) {
         // The first entry is for the folder itself, we should process it differently.
         _ignoredFirst = true;
+        QString selfPath = _proFindJob->reply()->request().url().path();
+        if (selfPath.endsWith(QLatin1Char('/'))) selfPath.chop(1);
+        if (file != selfPath || file.contains(QChar::Null)) {
+            _error = tr("Server returned an invalid file name.");
+            return;
+        }
         if (auto it = Utility::optionalFind(map, QStringLiteral("permissions"))) {
             auto perm = RemotePermissions::fromServerString(it->value());
             Q_EMIT firstDirectoryPermissions(perm);
@@ -390,6 +397,12 @@ void DiscoverySingleDirectoryJob::directoryListingIteratedSlot(const QString &fi
         RemoteInfo result;
         int slash = file.lastIndexOf(QLatin1Char('/'));
         result.name = file.mid(slash + 1);
+        // The DAV parser has already percent-decoded this component. Fail the
+        // whole listing rather than treating invalid entries as remote deletes.
+        if (result.name.isEmpty() || result.name == QLatin1String(".") || result.name == QLatin1String("..") || result.name.contains(QChar::Null)) {
+            _error = tr("Server returned an invalid file name.");
+            return;
+        }
         result.size = -1;
         propertyMapToRemoteInfo(map, result);
         if (result.isDirectory)

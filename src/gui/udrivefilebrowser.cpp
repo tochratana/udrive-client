@@ -4,6 +4,7 @@
 #include "udriveworkspaceactions.h"
 #include "udrivecombobox.h"
 #include "udrivepopup.h"
+#include "udrivetoast.h"
 #include "udrivethumbnails.h"
 #include "udrivefilepreview.h"
 #include "creds/localdevelopment.h"
@@ -44,6 +45,7 @@
 #include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLockFile>
 #include <QPlainTextEdit>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -96,12 +98,87 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#ifdef Q_OS_UNIX
+#include <unistd.h>
+#endif
 
 namespace OCC {
 namespace {
+bool privatePreviewDirectory(const QString &path)
+{
+    const QFileInfo info(path);
+    if (!info.isDir() || info.isSymLink() || info.isJunction()) return false;
+#ifdef Q_OS_UNIX
+    if (info.ownerId() != geteuid() || (info.permissions() & (QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+            | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther))) return false;
+#endif
+    return true;
+}
+
+QString previewStorageRoot()
+{
+    const QString cache = Account::commonCacheDirectory();
+    if (cache.isEmpty()) return {};
+    const QString root = QDir(cache).filePath(QStringLiteral("preview-sessions"));
+    if (!QFileInfo::exists(root)) {
+        if (!QDir().mkpath(cache) || !QDir().mkdir(root)) return {};
+        if (!QFile::setPermissions(root, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner)) return {};
+    }
+    return privatePreviewDirectory(root) ? root : QString();
+}
+
+std::shared_ptr<QTemporaryDir> createPreviewStorage(const QString &prefix)
+{
+    // A session lock lives for the process lifetime, independently of account
+    // caches. Maintenance serializes session creation with orphan cleanup.
+    struct Session {
+        std::unique_ptr<QTemporaryDir> directory;
+        std::unique_ptr<QLockFile> lock;
+    };
+    static Session session;
+    if (!session.directory) {
+        const QString root = previewStorageRoot();
+        if (root.isEmpty()) return {};
+        QLockFile maintenance(root + QStringLiteral("/maintenance.lock"));
+        if (!maintenance.tryLock(1000)) return {};
+        auto directory = std::make_unique<QTemporaryDir>(root + QStringLiteral("/session-XXXXXX"));
+        if (!directory->isValid() || !privatePreviewDirectory(directory->path())) return {};
+        auto lock = std::make_unique<QLockFile>(directory->filePath(QStringLiteral("active.lock")));
+        lock->setStaleLockTime(0);
+        if (!lock->tryLock()) return {};
+        session.directory = std::move(directory);
+        session.lock = std::move(lock);
+    }
+    auto storage = std::make_shared<QTemporaryDir>(session.directory->filePath(prefix + QStringLiteral("-XXXXXX")));
+    return storage->isValid() ? storage : std::shared_ptr<QTemporaryDir>();
+}
+
+bool removePreviewDirectory(const QString &path)
+{
+    // Only called beneath a checked private session. Unlink links themselves;
+    // never traverse them or change their targets' permissions.
+    bool removed = true;
+    const QDir dir(path);
+    for (const auto &entry : dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System)) {
+        if (entry.isJunction()) {
+            removed &= QDir().rmdir(entry.absoluteFilePath());
+        } else if (entry.isSymLink()) {
+            removed &= QFile::remove(entry.absoluteFilePath());
+        } else if (entry.isDir()) {
+            removed &= removePreviewDirectory(entry.absoluteFilePath());
+        } else {
+            QFile file(entry.absoluteFilePath());
+            if (!file.remove()) {
+                removed &= file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner) && file.remove();
+            }
+        }
+    }
+    return removed && QDir().rmdir(path);
+}
+
 enum Roles { PathRole = Qt::UserRole + 1, DirectoryRole, SortRole, RootRole, SpaceRole,
     PermissionsRole, FavoriteRole, FavoriteKnownRole, EtagRole, LinkRole, RestorePathRole, ThumbnailRole, OpenedRole, TrashedRole,
-    ShareHiddenRole, ShareSharersRole, ShareUnavailableRole, LocationRole, SharePeopleRole, SharePermissionsLoadedRole, SharePublicLinksRole };
+    ShareHiddenRole, ShareSharersRole, ShareUnavailableRole, LocationRole, SharePeopleRole, SharePermissionsLoadedRole, SharePublicLinksRole, FileIdRole };
 
 QString fileSharingSummary(const QStringList &people, int publicLinks)
 {
@@ -112,6 +189,115 @@ QString fileSharingSummary(const QStringList &people, int publicLinks)
 }
 
 enum RowAction { RowFavorite, RowShare, RowLink, RowMore };
+
+class VersionItemWidget : public QWidget
+{
+public:
+    VersionItemWidget(const UDriveFileBrowser::FileVersionItem &version, bool isLast, bool canRestore,
+                      const std::function<void()> &onRestore,
+                      const std::function<void()> &onDownload,
+                      QWidget *parent = nullptr)
+        : QWidget(parent)
+        , _version(version)
+        , _isLast(isLast)
+    {
+        const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+        const QString textPrimary = dark ? QStringLiteral("#F9FAFB") : QStringLiteral("#111827");
+        const QString textSecondary = dark ? QStringLiteral("#9CA3AF") : QStringLiteral("#6B7280");
+        const QString hoverBg = dark ? QStringLiteral("rgba(255, 255, 255, 0.08)") : QStringLiteral("rgba(0, 0, 0, 0.05)");
+
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(28, 4, 8, 16);
+        layout->setSpacing(4);
+
+        const QString timeAgo = Utility::timeAgoInWords(_version.modified);
+        const QString sizeStr = _version.size >= 0 ? QLocale().formattedDataSize(_version.size) : QString();
+        auto *header = new QLabel(this);
+        header->setTextFormat(Qt::RichText);
+        if (!sizeStr.isEmpty()) {
+            header->setText(QStringLiteral("<span style='font-weight: 600; color: %1;'>%2</span> <span style='color: %3;'>- %4</span>")
+                .arg(textPrimary, timeAgo.toHtmlEscaped(), textSecondary, sizeStr.toHtmlEscaped()));
+        } else {
+            header->setText(QStringLiteral("<span style='font-weight: 600; color: %1;'>%2</span>").arg(textPrimary, timeAgo.toHtmlEscaped()));
+        }
+        header->setToolTip(_version.modified.isValid() ? _version.modified.toLocalTime().toString(Qt::ISODate) : QString());
+        layout->addWidget(header);
+
+        const auto makeButton = [this, textPrimary, hoverBg](UDriveIcons::Symbol sym, const QString &text, const std::function<void()> &clicked) {
+            auto *btn = new QPushButton(UDriveIcons::icon(sym), text, this);
+            btn->setCursor(Qt::PointingHandCursor);
+            btn->setIconSize(QSize(16, 16));
+            btn->setStyleSheet(QStringLiteral(
+                "QPushButton {"
+                "    background: transparent;"
+                "    border: none;"
+                "    border-radius: 4px;"
+                "    color: %1;"
+                "    font-size: 13px;"
+                "    font-weight: 500;"
+                "    padding: 3px 6px;"
+                "    text-align: left;"
+                "}"
+                "QPushButton:hover {"
+                "    background: %2;"
+                "}"
+                "QPushButton:disabled {"
+                "    opacity: 0.5;"
+                "    color: #9CA3AF;"
+                "}"
+            ).arg(textPrimary, hoverBg));
+            QObject::connect(btn, &QPushButton::clicked, btn, clicked);
+            return btn;
+        };
+
+        auto *restoreBtn = makeButton(UDriveIcons::Symbol::Restore, UDriveFileBrowser::tr("Restore"), onRestore);
+        restoreBtn->setObjectName(QStringLiteral("versionRestoreBtn"));
+        if (!canRestore) {
+            restoreBtn->setEnabled(false);
+            restoreBtn->setToolTip(UDriveFileBrowser::tr("You need edit permission to restore this file"));
+        } else {
+            restoreBtn->setToolTip(UDriveFileBrowser::tr("Restore this version to replace the active file"));
+        }
+        layout->addWidget(restoreBtn, 0, Qt::AlignLeft);
+
+        auto *downloadBtn = makeButton(UDriveIcons::Symbol::Download, UDriveFileBrowser::tr("Download"), onDownload);
+        downloadBtn->setObjectName(QStringLiteral("versionDownloadBtn"));
+        downloadBtn->setToolTip(UDriveFileBrowser::tr("Download and save this version locally"));
+        layout->addWidget(downloadBtn, 0, Qt::AlignLeft);
+    }
+
+    const UDriveFileBrowser::FileVersionItem &version() const { return _version; }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        QWidget::paintEvent(event);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+
+        const bool dark = palette().color(QPalette::Window).lightness() < 128;
+        const QColor lineColor = dark ? QColor(0x37, 0x41, 0x51) : QColor(0xE2, 0xE8, 0xF0);
+        const QColor nodeFill = dark ? QColor(0x4B, 0x55, 0x63) : QColor(0xD1, 0xD5, 0xDB);
+        const QColor nodeBorder = dark ? QColor(0x6B, 0x72, 0x80) : QColor(0x9C, 0xA3, 0xAF);
+
+        const int lineX = 14;
+        const int nodeY = 14;
+        const qreal radius = 4.0;
+
+        // Draw vertical track line
+        painter.setPen(QPen(lineColor, 2));
+        painter.drawLine(lineX, 0, lineX, _isLast ? qMin(height(), nodeY + 54) : height());
+
+        // Draw circular node dot
+        painter.setPen(QPen(nodeBorder, 1.5));
+        painter.setBrush(nodeFill);
+        painter.drawEllipse(QPointF(lineX, nodeY), radius, radius);
+    }
+
+private:
+    UDriveFileBrowser::FileVersionItem _version;
+    bool _isLast = false;
+};
 
 class FileDetailsActionButton : public QPushButton
 {
@@ -2162,7 +2348,7 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
     _statusLabel->setObjectName(QStringLiteral("shareStatusLabel"));
     _statusLabel->setTextFormat(Qt::PlainText);
     _statusLabel->setWordWrap(true);
-    _statusLabel->setStyleSheet(QStringLiteral("font-size: 12px; min-height: 16px;"));
+    _statusLabel->setStyleSheet(_sidebar ? QStringLiteral("font-size: 12px;") : QStringLiteral("font-size: 12px; min-height: 16px;"));
     peopleLayout->addWidget(_statusLabel);
 
     auto *accessSectionLabel = new QLabel(_target == Target::Workspace ? tr("Workspace members") : _sidebar ? tr("Shared with") : tr("People with access"), this);
@@ -2345,8 +2531,12 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
         _recipientLabel.clear();
         _recipientType = -1;
         _shareButton->setEnabled(false);
-        _statusLabel->setStyleSheet(QStringLiteral("font-size: 12px; min-height: 16px;"));
-        _statusLabel->setText(_sidebar ? tr("Enter at least 2 characters.") : tr("Type at least 2 characters to find a user or group."));
+        _statusLabel->setStyleSheet(_sidebar ? QStringLiteral("font-size: 12px;") : QStringLiteral("font-size: 12px; min-height: 16px;"));
+        if (!_sidebar) {
+            setStatus(tr("Type at least 2 characters to find a user or group."));
+        } else {
+            setStatus({});
+        }
         if (canShare() && _userInput->text().trimmed().size() >= 2)
             _recipientTimer->start();
     });
@@ -2368,7 +2558,9 @@ UDriveShareDialog::UDriveShareDialog(AccountState *accountState, const QString &
         });
         connect(_accountState, &QObject::destroyed, this, [this] { reject(); });
     }
-    _statusLabel->setText(_sidebar ? tr("Search by name or email.") : tr("Type at least 2 characters to find a user or group."));
+    if (!_sidebar) {
+        setStatus(tr("Type at least 2 characters to find a user or group."));
+    }
 
     if (_target == Target::Workspace) {
         _roleCombo->clear();
@@ -2411,7 +2603,7 @@ void UDriveShareDialog::searchRecipients()
 {
     const QString query = _userInput->text().trimmed();
     if (!canShare() || _sharing || query.size() < 2 || (_target == Target::Workspace && !_canInviteMembers)) return;
-    _statusLabel->setText(tr("Searching…"));
+    setStatus(tr("Searching…"));
     const JsonApiJob::UrlQuery args {
         { QStringLiteral("search"), query },
         { QStringLiteral("itemType"), _isFolder ? QStringLiteral("folder") : QStringLiteral("file") },
@@ -2429,7 +2621,7 @@ void UDriveShareDialog::searchRecipients()
         connect(reply, &QIODevice::readyRead, job, [this, job, reply] {
             if (reply->bytesAvailable() > 512 * 1024 && _recipientJob == job) {
                 cancelRecipientSearch();
-                _statusLabel->setText(tr("Could not search users and groups. Try again."));
+                setStatus(tr("Could not search users and groups. Try again."));
             }
         });
     });
@@ -2438,7 +2630,7 @@ void UDriveShareDialog::searchRecipients()
         _recipientJob.clear();
         const auto data = job->data().value(QStringLiteral("ocs")).toObject().value(QStringLiteral("data"));
         if (!job->ocsSuccess() || !data.isObject()) {
-            _statusLabel->setText(tr("Could not search users and groups. Try again."));
+            setStatus(tr("Could not search users and groups. Try again."));
             return;
         }
         QSet<QString> seen;
@@ -2475,9 +2667,9 @@ void UDriveShareDialog::searchRecipients()
             addRecipients(source, QStringLiteral("groups"), 1);
         }
         if (_recipientModel->rowCount() == 0) {
-            _statusLabel->setText(tr("No matching users or groups. Try another name or email."));
+            setStatus(tr("No matching users or groups. Try another name or email."));
         } else {
-            _statusLabel->setText(tr("Select a user or group, then click Share."));
+            setStatus(tr("Select a user or group, then click Share."));
             _recipientCompleter->setCompletionPrefix(QString());
             if (isVisible() && _userInput->hasFocus())
                 _recipientCompleter->complete(_userInput->rect().translated(0, 4));
@@ -2502,7 +2694,7 @@ void UDriveShareDialog::selectRecipient(const QModelIndex &index)
     _userInput->setText(label);
     _userInput->setFocus(Qt::PopupFocusReason);
     _shareButton->setEnabled(true);
-    _statusLabel->setText(tr("Selected: %1").arg(label));
+    setStatus(tr("Selected: %1").arg(label));
 }
 
 void UDriveShareDialog::sendShare()
@@ -2515,7 +2707,7 @@ void UDriveShareDialog::sendShare()
     _userInput->setEnabled(false);
     _roleCombo->setEnabled(false);
     _shareButton->setEnabled(false);
-    _statusLabel->setText(tr("Sharing with %1…").arg(user));
+    setStatus(tr("Sharing with %1…").arg(user));
     _statusLabel->setStyleSheet(QStringLiteral("color: #3B82F6; font-size: 12px;"));
 
     const int roleIndex = _roleCombo->currentIndex();
@@ -2548,12 +2740,12 @@ void UDriveShareDialog::sendShare()
         _shareButton->setEnabled(!_recipientId.isEmpty());
         if (!job->ocsSuccess()) {
             const QString err = job->ocsMessage().isEmpty() ? job->errorString() : job->ocsMessage();
-            _statusLabel->setText(tr("Failed to share: %1").arg(err));
+            showResult(tr("Failed to share: %1").arg(err), false);
             _statusLabel->setStyleSheet(QStringLiteral("color: #EF4444; font-size: 12px;"));
         } else {
             _modified = true;
             _userInput->clear();
-            _statusLabel->setText(tr("Successfully shared with %1").arg(user));
+            showResult(tr("Successfully shared with %1").arg(user));
             _statusLabel->setStyleSheet(QStringLiteral("color: #22C55E; font-size: 12px;"));
             fetchShares();
         }
@@ -2588,7 +2780,7 @@ void UDriveShareDialog::fetchShares()
         if (!job->ocsSuccess()) {
             const QString err = job->ocsMessage().isEmpty() ? job->errorString() : job->ocsMessage();
             if (!err.isEmpty()) {
-                _statusLabel->setText(tr("Could not load shares: %1").arg(err));
+                setStatus(tr("Could not load shares: %1").arg(err));
                 _statusLabel->setStyleSheet(QStringLiteral("color: #EF4444; font-size: 12px;"));
             }
             return;
@@ -3023,6 +3215,19 @@ void UDriveShareDialog::fetchShares()
     job->start();
 }
 
+void UDriveShareDialog::setStatus(const QString &message)
+{
+    _statusLabel->setText(message);
+    _statusLabel->setVisible(!message.isEmpty());
+}
+
+void UDriveShareDialog::showResult(const QString &message, bool success)
+{
+    _statusLabel->setText(message);
+    _statusLabel->hide();
+    UDriveToast::showMessage(this, message, success ? UDriveToast::Kind::Success : UDriveToast::Kind::Error);
+}
+
 void UDriveShareDialog::updatePersonPermissions(const QString &shareId, int permissions)
 {
     if (!canShare() || _sharing || _target != Target::File || !validName(shareId) || (permissions != 1 && permissions != 15)) return;
@@ -3032,10 +3237,12 @@ void UDriveShareDialog::updatePersonPermissions(const QString &shareId, int perm
     _roleCombo->setEnabled(false);
     _shareButton->setEnabled(false);
     _addLinkButton->setEnabled(false);
-    _statusLabel->setText(tr("Updating access…"));
+    if (!_sidebar) {
+        setStatus(tr("Updating access…"));
+    }
     const JsonApiJob::UrlQuery args{{QStringLiteral("permissions"), QString::number(permissions)}};
-    const QString id = QString::fromUtf8(QUrl::toPercentEncoding(shareId));
-    auto *job = new JsonApiJob(_accountState->account(), QStringLiteral("ocs/v1.php/apps/files_sharing/api/v1/shares/%1").arg(id), "PUT", args, {}, this);
+    // JsonApiJob takes a decoded path; QUrl encodes it when building the request.
+    auto *job = new JsonApiJob(_accountState->account(), QStringLiteral("ocs/v1.php/apps/files_sharing/api/v1/shares/%1").arg(shareId), "PUT", args, {}, this);
     connect(job, &JsonApiJob::finishedSignal, this, [this, job] {
         if (!canShare()) return;
         _sharing = false;
@@ -3045,7 +3252,7 @@ void UDriveShareDialog::updatePersonPermissions(const QString &shareId, int perm
         _shareButton->setEnabled(!_recipientId.isEmpty());
         _addLinkButton->setEnabled(true);
         if (job->ocsSuccess()) _modified = true;
-        _statusLabel->setText(job->ocsSuccess() ? tr("Access updated.") : tr("Could not update access: %1").arg(job->ocsMessage().isEmpty() ? job->errorString() : job->ocsMessage()));
+        showResult(job->ocsSuccess() ? tr("Access updated.") : tr("Could not update access: %1").arg(job->ocsMessage().isEmpty() ? job->errorString() : job->ocsMessage()), job->ocsSuccess());
         fetchShares();
     });
     job->start();
@@ -3056,22 +3263,23 @@ void UDriveShareDialog::revokeShare(const QString &shareId)
     if (!canShare() || !validName(shareId))
         return;
 
-    _statusLabel->setText(tr("Revoking access…"));
-    _statusLabel->setStyleSheet(QStringLiteral("color: #3B82F6; font-size: 12px;"));
+    if (!_sidebar) {
+        setStatus(tr("Revoking access…"));
+        _statusLabel->setStyleSheet(QStringLiteral("color: #3B82F6; font-size: 12px;"));
+    }
 
-    const QString encodedShareId = QString::fromUtf8(QUrl::toPercentEncoding(shareId));
-    auto *job = new JsonApiJob(_accountState->account(), QStringLiteral("ocs/v1.php/apps/files_sharing/api/v1/shares/%1").arg(encodedShareId), "DELETE", {}, {}, this);
+    auto *job = new JsonApiJob(_accountState->account(), QStringLiteral("ocs/v1.php/apps/files_sharing/api/v1/shares/%1").arg(shareId), "DELETE", {}, {}, this);
     connect(job, &JsonApiJob::finishedSignal, this, [this, job] {
         if (!canShare())
             return;
         if (job->ocsSuccess()) {
             _modified = true;
-            _statusLabel->setText(tr("Access removed."));
+            showResult(tr("Access removed."));
             _statusLabel->setStyleSheet(QStringLiteral("color: #22C55E; font-size: 12px;"));
             fetchShares();
         } else {
             const QString err = job->ocsMessage().isEmpty() ? job->errorString() : job->ocsMessage();
-            _statusLabel->setText(tr("Failed to revoke: %1").arg(err));
+            showResult(tr("Failed to revoke: %1").arg(err), false);
             _statusLabel->setStyleSheet(QStringLiteral("color: #EF4444; font-size: 12px;"));
         }
     });
@@ -3119,7 +3327,7 @@ void UDriveShareDialog::fetchWorkspaceMembers()
     _userInput->setEnabled(false);
     _roleCombo->setEnabled(false);
     _shareButton->setEnabled(false);
-    _statusLabel->setText(tr("Loading workspace members…"));
+    setStatus(tr("Loading workspace members…"));
     while (auto *item = _sharesLayout->takeAt(0)) {
         delete item->widget();
         delete item;
@@ -3130,7 +3338,7 @@ void UDriveShareDialog::fetchWorkspaceMembers()
         _workspaceJob.clear();
         if (!job->reply() || job->reply()->error() != QNetworkReply::NoError || job->httpStatusCode() != 200
             || !job->data().value(QStringLiteral("value")).isArray()) {
-            _statusLabel->setText(tr("Could not load workspace members. Close and try again."));
+            setStatus(tr("Could not load workspace members. Close and try again."));
             return;
         }
         const auto data = job->data();
@@ -3160,7 +3368,7 @@ void UDriveShareDialog::fetchWorkspaceMembers()
         _userInput->setEnabled(_canInviteMembers);
         _roleCombo->setEnabled(_canInviteMembers);
         _shareButton->setEnabled(_canInviteMembers && !_recipientId.isEmpty());
-        _statusLabel->setText(_canInviteMembers ? tr("Type at least 2 characters to find a user or group.")
+        setStatus(_canInviteMembers ? tr("Type at least 2 characters to find a user or group.")
                                                : tr("You can view members but cannot add them."));
         int count = 0;
         for (const auto &value : data.value(QStringLiteral("value")).toArray()) {
@@ -3210,7 +3418,7 @@ void UDriveShareDialog::inviteWorkspaceMember()
         || (_recipientType != 0 && _recipientType != 1) || role.isEmpty() || _roleCombo->findData(role) < 0) return;
     _sharing = true;
     _userInput->setEnabled(false); _roleCombo->setEnabled(false); _shareButton->setEnabled(false);
-    _statusLabel->setText(tr("Adding workspace member…"));
+    setStatus(tr("Adding workspace member…"));
     const QJsonObject recipient{{QStringLiteral("objectId"), _recipientId},
         {QStringLiteral("@libre.graph.recipient.type"), _recipientType == 1 ? QStringLiteral("group") : QStringLiteral("user")}};
     const QJsonObject body{{QStringLiteral("recipients"), QJsonArray{recipient}}, {QStringLiteral("roles"), QJsonArray{role}}};
@@ -3222,10 +3430,11 @@ void UDriveShareDialog::inviteWorkspaceMember()
             && (job->httpStatusCode() == 200 || job->httpStatusCode() == 201)) {
             _userInput->clear();
             fetchWorkspaceMembers();
+            showResult(tr("Workspace member added."));
         } else {
             _userInput->setEnabled(_canInviteMembers); _roleCombo->setEnabled(_canInviteMembers);
             _shareButton->setEnabled(_canInviteMembers && !_recipientId.isEmpty());
-            _statusLabel->setText(tr("Could not add workspace member. Try again."));
+            showResult(tr("Could not add workspace member. Try again."), false);
         }
     });
     job->start();
@@ -3237,17 +3446,18 @@ void UDriveShareDialog::removeWorkspaceMember(const QString &permissionId)
     _sharing = true;
     cancelRecipientSearch();
     _userInput->setEnabled(false); _roleCombo->setEnabled(false); _shareButton->setEnabled(false);
-    _statusLabel->setText(tr("Removing workspace member…"));
+    setStatus(tr("Removing workspace member…"));
     auto *job = workspaceRequest("DELETE", QStringLiteral("permissions/") + permissionId, {});
     connect(job, &SimpleNetworkJob::finishedSignal, this, [this, job] {
         if (_workspaceJob != job || !canShare()) return;
         _workspaceJob.clear(); _sharing = false;
         if (job->reply() && job->reply()->error() == QNetworkReply::NoError && job->httpStatusCode() == 204) {
             fetchWorkspaceMembers();
+            showResult(tr("Workspace member removed."));
         } else {
             _userInput->setEnabled(_canInviteMembers); _roleCombo->setEnabled(_canInviteMembers);
             _shareButton->setEnabled(_canInviteMembers && !_recipientId.isEmpty());
-            _statusLabel->setText(tr("Could not remove workspace member. Try again."));
+            showResult(tr("Could not remove workspace member. Try again."), false);
         }
     });
     job->start();
@@ -3257,7 +3467,7 @@ void UDriveShareDialog::copyLink()
 {
     if (_linkUrl.isValid() && !_linkUrl.isEmpty()) {
         QApplication::clipboard()->setText(_linkUrl.toString());
-        _statusLabel->setText(tr("Sign-in link copied to clipboard."));
+        showResult(tr("Sign-in link copied to clipboard."));
         _statusLabel->setStyleSheet(QStringLiteral("color: #22C55E; font-size: 12px;"));
     }
 }
@@ -3268,7 +3478,7 @@ void UDriveShareDialog::createPublicLink()
         return;
 
     _sharing = true;
-    _statusLabel->setText(tr("Creating public link…"));
+    setStatus(tr("Creating public link…"));
     _statusLabel->setStyleSheet(QStringLiteral("color: #3B82F6; font-size: 12px;"));
     if (_addLinkButton)
         _addLinkButton->setEnabled(false);
@@ -3303,7 +3513,7 @@ void UDriveShareDialog::createPublicLink()
 
         if (!job->ocsSuccess()) {
             const QString err = job->ocsMessage().isEmpty() ? job->errorString() : job->ocsMessage();
-            _statusLabel->setText(tr("Failed to create public link: %1").arg(err));
+            showResult(tr("Failed to create public link: %1").arg(err), false);
             _statusLabel->setStyleSheet(QStringLiteral("color: #EF4444; font-size: 12px;"));
         } else {
             _modified = true;
@@ -3313,9 +3523,9 @@ void UDriveShareDialog::createPublicLink()
             const bool isSafeUrl = parsedUrl.isValid() && (parsedUrl.scheme() == QLatin1String("https") || parsedUrl.scheme() == QLatin1String("http"));
             if (isSafeUrl) {
                 QApplication::clipboard()->setText(url);
-                _statusLabel->setText(tr("Public link created and copied to clipboard."));
+                showResult(tr("Public link created and copied to clipboard."));
             } else {
-                _statusLabel->setText(tr("Public link created."));
+                showResult(tr("Public link created."));
             }
             _statusLabel->setStyleSheet(QStringLiteral("color: #22C55E; font-size: 12px;"));
             fetchShares();
@@ -3568,7 +3778,7 @@ void UDriveShareDialog::editPublicLink(const QString &shareId, const QJsonObject
         dialog->setProperty("publicLinkSaving", false);
         cancelPublicLinkRequest();
         setPublicLinkBusy(false);
-        _statusLabel->setText(tr("Update cancelled."));
+        setStatus(tr("Update cancelled."));
         _statusLabel->setStyleSheet(QStringLiteral("font-size: 12px;"));
     });
     connect(this, &QDialog::finished, dialog, &QDialog::reject);
@@ -3606,12 +3816,13 @@ void UDriveShareDialog::updatePublicLink(const QString &shareId, const QString &
     setPublicLinkBusy(true);
     const QString previousStatus = _statusLabel->text();
     const QString previousStyle = _statusLabel->styleSheet();
-    _statusLabel->setText(tr("Updating public link…"));
-    _statusLabel->setStyleSheet(QStringLiteral("font-size: 12px;"));
+    if (!_sidebar) {
+        setStatus(tr("Updating public link…"));
+        _statusLabel->setStyleSheet(QStringLiteral("font-size: 12px;"));
+    }
     // The OCS endpoint accepts one changed setting per request.
     const JsonApiJob::UrlQuery args{{field, value}};
-    const QString encodedShareId = QString::fromUtf8(QUrl::toPercentEncoding(shareId));
-    auto *job = new JsonApiJob(_accountState->account(), QStringLiteral("ocs/v1.php/apps/files_sharing/api/v1/shares/%1").arg(encodedShareId), "PUT", args, {}, this);
+    auto *job = new JsonApiJob(_accountState->account(), QStringLiteral("ocs/v1.php/apps/files_sharing/api/v1/shares/%1").arg(shareId), "PUT", args, {}, this);
     _publicLinkJob = job;
     connect(job, &JsonApiJob::finishedSignal, this, [this, job, field, previousStatus, previousStyle, completion = std::move(completion)] {
         if (_publicLinkJob != job) return;
@@ -3621,17 +3832,17 @@ void UDriveShareDialog::updatePublicLink(const QString &shareId, const QString &
         if (!job->ocsSuccess()) {
             const QString err = publicLinkUpdateError(job);
             if (completion) {
-                _statusLabel->setText(previousStatus);
+                setStatus(previousStatus);
                 _statusLabel->setStyleSheet(previousStyle);
                 completion(false, err);
                 return;
             }
-            _statusLabel->setText(tr("Could not update link permissions. Try again."));
+            showResult(tr("Could not update link permissions. Try again."), false);
             _statusLabel->setToolTip(err);
             _statusLabel->setStyleSheet(QStringLiteral("color: #EF4444; font-size: 12px;"));
         } else {
             _modified = true;
-            _statusLabel->setText(field == QLatin1String("permissions") ? tr("Public link permissions updated.") : tr("Public link updated."));
+            showResult(field == QLatin1String("permissions") ? tr("Public link permissions updated.") : tr("Public link updated."));
             _statusLabel->setStyleSheet(QStringLiteral("color: #22C55E; font-size: 12px;"));
             if (completion) completion(true, {});
         }
@@ -3647,7 +3858,7 @@ void UDriveShareDialog::copyPublicLink(const QString &url)
         return;
 
     QApplication::clipboard()->setText(url);
-    _statusLabel->setText(tr("Public link copied to clipboard."));
+    showResult(tr("Public link copied to clipboard."));
     _statusLabel->setStyleSheet(QStringLiteral("color: #22C55E; font-size: 12px;"));
 }
 
@@ -3758,9 +3969,9 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _workspaceActions = new UDriveWorkspaceActions(_state, this);
     connect(_workspaceActions, &UDriveWorkspaceActions::permissionsChanged, this, &UDriveFileBrowser::updateActions);
     connect(_workspaceActions, &UDriveWorkspaceActions::busyChanged, this, &UDriveFileBrowser::updateActions);
-    connect(_workspaceActions, &UDriveWorkspaceActions::finished, this, [this](bool, const QString &message) {
+    connect(_workspaceActions, &UDriveWorkspaceActions::finished, this, [this](bool success, const QString &message) {
         if (canBrowse() && !message.isEmpty()) _state->account()->spacesManager()->refresh();
-        if (!message.isEmpty()) setMessage(message);
+        if (!message.isEmpty()) showResult(message, success);
         updateActions();
     });
     _sharesNotifier = new UDriveIncomingSharesNotifier(_state, this);
@@ -3770,6 +3981,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         }
     });
     if (_state) connect(_state, &AccountState::stateChanged, this, [this] {
+        if (!canBrowse() && isVisible()) UDriveToast::dismiss(this);
         if (!canBrowse()) for (auto *dialog : findChildren<QDialog *>()) if (dialog->property("udriveWorkspaceDialog").toBool()) dialog->close();
     });
     connect(_workspaceActions, &UDriveWorkspaceActions::descriptionLoaded, this, &UDriveFileBrowser::editWorkspaceDescription);
@@ -4443,6 +4655,12 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         updateFileDetails();
         showFileDetailsActions(false);
     });
+    _versionsAction = new QAction(UDriveIcons::icon(UDriveIcons::Symbol::Restore), tr("Version history"), this);
+    _versionsAction->setObjectName(QStringLiteral("driveMenuVersions"));
+    _versionsAction->setToolTip(tr("View and restore previous versions of this file"));
+    connect(_versionsAction, &QAction::triggered, this, [this] {
+        showFileDetailsVersions(true, true);
+    });
     _newFolderAction->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Folder));
     _uploadAction->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Upload));
     _shareAction->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Share));
@@ -4552,14 +4770,14 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         if (_emptyingTrash) {
             cancelOperation();
             refresh();
-            setMessage(tr("Empty trash stopped. Some items may already have been permanently deleted."));
+            showNotice(tr("Empty trash stopped. Some items may already have been permanently deleted."), Notice::Information);
         } else if (_uploading) {
             cancelOperation();
             refresh();
-            setMessage(tr("Upload canceled. Refresh to check the server."));
+            showNotice(tr("Upload canceled. Refresh to check the server."), Notice::Information);
         } else {
             cancelDownload();
-            setMessage(tr("Download canceled."));
+            showNotice(tr("Download canceled."), Notice::Information);
         }
     });
     connect(_newFolderAction, &QAction::triggered, this, [this] {
@@ -4569,7 +4787,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         bool ok = false;
         const QString name = UDriveInputDialog::getText(this, tr("New folder"), tr("Folder name"), {}, tr("OK"), &ok);
         if (guard && ok && _root == root && _path == path && !createFolder(name))
-            setMessage(tr("Enter a valid new folder name."));
+            showResult(tr("Enter a valid new folder name."), false);
     });
     connect(_uploadAction, &QAction::triggered, this, [this] {
         const QUrl root = _root;
@@ -4588,7 +4806,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         const QString name =
             UDriveInputDialog::getText(this, copy ? tr("Make a copy") : tr("Rename"), tr("New name"), item.data().toString(), tr("OK"), &ok);
         if (guard && ok && root == selectedRoot() && selectedItem().data(PathRole).toString() == oldPath && !(copy ? copySelected(name) : renameSelected(name)))
-            setMessage(tr("Choose a different, valid name."));
+            showResult(tr("Choose a different, valid name."), false);
     };
     connect(_renameAction, &QAction::triggered, this, [renameOrCopy] { renameOrCopy(false); });
     connect(_copyAction, &QAction::triggered, this, [renameOrCopy] { renameOrCopy(true); });
@@ -4624,7 +4842,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
             }
             const QString destFolder = dialog->selectedDestination();
             if (!moveSelected(destFolder)) {
-                setMessage(tr("Choose a valid destination folder. Existing files will not be overwritten."));
+                showResult(tr("Choose a valid destination folder. Existing files will not be overwritten."), false);
             }
         });
         dialog->open();
@@ -4638,7 +4856,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     connect(_linkAction, &QAction::triggered, this, [this] {
         if (_linkAction->isEnabled()) {
             QApplication::clipboard()->setText(selectedItem().data(LinkRole).toUrl().toString());
-            setMessage(tr("Sign-in link copied. Access permissions still apply."));
+            showResult(tr("Sign-in link copied. Access permissions still apply."));
         }
     });
     connect(_rootButton, &QPushButton::clicked, this, [this] { navigateToBreadcrumb({}, _root); });
@@ -4755,6 +4973,7 @@ void UDriveFileBrowser::setViewMode(ViewMode mode, bool save)
     if (save) {
         auto settings = ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"));
         settings->setValue(QStringLiteral("viewMode"), mode == ViewMode::Tiles ? QStringLiteral("tiles") : mode == ViewMode::Condensed ? QStringLiteral("condensed") : QStringLiteral("default"));
+        UDriveToast::preferenceSaved(this);
     }
     updateEmptyState();
     if (selected.isValid()) activeView()->scrollTo(selected);
@@ -4774,6 +4993,7 @@ void UDriveFileBrowser::addFileActions(QMenu *menu)
     menu->addActions({_renameAction, _copyAction, _moveAction, _deleteAction, _restoreAction, _permanentDeleteAction});
     menu->addSeparator();
     menu->addAction(_favoriteAction);
+    menu->addAction(_versionsAction);
     menu->addAction(_detailsAction);
     // Reuse the same availability rules as the buttons for every menu opening.
     connect(menu, &QMenu::aboutToShow, menu, [this, open, download] {
@@ -4784,6 +5004,10 @@ void UDriveFileBrowser::addFileActions(QMenu *menu)
         open->setVisible(_section != Section::Trash);
         download->setEnabled(_downloadButton->isEnabled());
         download->setVisible(_section != Section::Trash);
+        const auto item = selectedItem();
+        const bool singleFile = item.isValid() && !item.data(DirectoryRole).toBool();
+        _versionsAction->setVisible(_section != Section::Trash && !shares);
+        _versionsAction->setEnabled(canBrowse() && singleFile && !item.data(ShareUnavailableRole).toBool());
     });
 }
 
@@ -4850,7 +5074,7 @@ void UDriveFileBrowser::buildFileDetails()
     _detailsBack->setAutoRaise(true);
     _detailsBack->setCursor(Qt::PointingHandCursor);
     _detailsBack->setFixedSize(26, 26);
-    connect(_detailsBack, &QToolButton::clicked, this, [this] { showFileDetailsActions(false, true); });
+    connect(_detailsBack, &QToolButton::clicked, this, [this] { showFileDetailsOverview(true); });
     header->addWidget(_detailsBack);
     header->addStretch(1);
     _detailsTitle = new QLabel(tr("Actions"), panel);
@@ -5104,12 +5328,56 @@ void UDriveFileBrowser::buildFileDetails()
     actionButton(_favoriteAction, QStringLiteral("driveDetailsFavorite"));
     _detailsShare = actionButton(_shareAction, QStringLiteral("driveDetailsShare"));
     _detailsWeb = actionButton(_webAction, QStringLiteral("driveDetailsWeb"));
+    actionButton(_versionsAction, QStringLiteral("driveDetailsVersionsAction"));
     actionsLayout->addStretch(1);
     connect(actionsHeader, &QPushButton::clicked, this, [this] { showFileDetailsActions(true, true); });
 
     auto *sharesHeader = makeAccordionHeader(UDriveIcons::Symbol::Share, tr("Shares"), nullptr);
     sharesHeader->setObjectName(QStringLiteral("driveDetailsShares"));
     connect(sharesHeader, &QPushButton::clicked, this, [this] { _shareAction->trigger(); });
+
+    _detailsVersionsHeader = makeAccordionHeader(UDriveIcons::Symbol::Restore, tr("Versions"), nullptr);
+    _detailsVersionsHeader->setObjectName(QStringLiteral("driveDetailsVersions"));
+    connect(_detailsVersionsHeader, &QPushButton::clicked, this, [this] { showFileDetailsVersions(true, true); });
+
+    auto *versionsContainer = new QWidget(_detailsPages);
+    versionsContainer->setObjectName(QStringLiteral("driveDetailsVersionsPage"));
+    versionsContainer->setAccessibleName(tr("File versions"));
+    auto *versionsPageLayout = new QVBoxLayout(versionsContainer);
+    versionsPageLayout->setContentsMargins(0, 0, 0, 0);
+    versionsPageLayout->setSpacing(0);
+
+    auto *versionsTopDivider = new QFrame(versionsContainer);
+    versionsTopDivider->setFrameShape(QFrame::HLine);
+    versionsTopDivider->setFixedHeight(1);
+    versionsTopDivider->setStyleSheet(QStringLiteral("background: %1; border: none;").arg(borderColor));
+    versionsPageLayout->addWidget(versionsTopDivider);
+
+    _versionsStatusLabel = new QLabel(versionsContainer);
+    _versionsStatusLabel->setObjectName(QStringLiteral("driveVersionsStatus"));
+    _versionsStatusLabel->setAlignment(Qt::AlignCenter);
+    _versionsStatusLabel->setWordWrap(true);
+    _versionsStatusLabel->setStyleSheet(QStringLiteral("color: %1; font-size: 13px; padding: 32px 16px;").arg(textSecondary));
+    versionsPageLayout->addWidget(_versionsStatusLabel);
+
+    _versionsScroll = new QScrollArea(versionsContainer);
+    _versionsScroll->setObjectName(QStringLiteral("driveVersionsScroll"));
+    _versionsScroll->setWidgetResizable(true);
+    _versionsScroll->setFrameShape(QFrame::NoFrame);
+    _versionsScroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; border: none; }"));
+
+    auto *versionsList = new QWidget(_versionsScroll);
+    versionsList->setObjectName(QStringLiteral("driveVersionsList"));
+    versionsList->setStyleSheet(QStringLiteral("background: transparent;"));
+    _versionsListLayout = new QVBoxLayout(versionsList);
+    _versionsListLayout->setContentsMargins(0, 8, 0, 8);
+    _versionsListLayout->setSpacing(0);
+    _versionsListLayout->addStretch(1);
+    _versionsScroll->setWidget(versionsList);
+    versionsPageLayout->addWidget(_versionsScroll, 1);
+
+    _detailsPages->addWidget(versionsContainer);
+    _detailsVersionsPage = versionsContainer;
 
     auto *bottomBorder = new QFrame(panel);
     bottomBorder->setFrameShape(QFrame::HLine);
@@ -5124,21 +5392,390 @@ void UDriveFileBrowser::buildFileDetails()
     _fileDetails->hide();
 }
 
-void UDriveFileBrowser::showFileDetailsActions(bool show, bool focus)
+void UDriveFileBrowser::showFileDetailsOverview(bool focus)
 {
     if (!_detailsPages) return;
     clearFileShares();
-    _detailsTitle->setText(tr("Actions"));
-    _detailsPages->setCurrentIndex(show ? 1 : 0);
-    _detailsBack->setVisible(show);
-    _detailsTitle->setVisible(show);
-    _detailsFileIcon->setVisible(show);
-    _fileDetails->setAccessibleName(show ? tr("File actions") : tr("File details"));
+    if (_versionsJob) {
+        _versionsJob->abort();
+        _versionsJob.clear();
+    }
+    _detailsPages->setCurrentIndex(0);
+    _detailsBack->hide();
+    _detailsTitle->hide();
+    _detailsFileIcon->hide();
+    _fileDetails->setAccessibleName(tr("File details"));
     static_cast<QScrollArea *>(_fileDetails)->verticalScrollBar()->setValue(0);
     if (focus && _fileDetails->isVisible()) {
-        if (show) _detailsBack->setFocus(Qt::OtherFocusReason);
-        else _detailsPages->widget(0)->findChild<QPushButton *>(QStringLiteral("driveDetailsActions"))->setFocus(Qt::OtherFocusReason);
+        if (auto *actionsBtn = _detailsPages->widget(0)->findChild<QPushButton *>(QStringLiteral("driveDetailsActions")))
+            actionsBtn->setFocus(Qt::OtherFocusReason);
     }
+}
+
+void UDriveFileBrowser::showFileDetailsActions(bool show, bool focus)
+{
+    if (!_detailsPages) return;
+    if (!show) {
+        showFileDetailsOverview(focus);
+        return;
+    }
+    clearFileShares();
+    if (_versionsJob) {
+        _versionsJob->abort();
+        _versionsJob.clear();
+    }
+    _detailsTitle->setText(tr("Actions"));
+    _detailsPages->setCurrentIndex(1);
+    _detailsBack->show();
+    _detailsTitle->show();
+    _detailsFileIcon->show();
+    _fileDetails->setAccessibleName(tr("File actions"));
+    static_cast<QScrollArea *>(_fileDetails)->verticalScrollBar()->setValue(0);
+    if (focus && _fileDetails->isVisible()) {
+        _detailsBack->setFocus(Qt::OtherFocusReason);
+    }
+}
+
+void UDriveFileBrowser::showFileDetailsVersions(bool show, bool focus)
+{
+    if (!_detailsPages) return;
+    if (!show) {
+        showFileDetailsOverview(focus);
+        return;
+    }
+    clearFileShares();
+    _detailsRequested = true;
+    updateFileDetails();
+    _detailsTitle->setText(tr("Versions"));
+    _detailsPages->setCurrentWidget(_detailsVersionsPage);
+    _detailsBack->show();
+    _detailsTitle->show();
+    _detailsFileIcon->show();
+    _fileDetails->setAccessibleName(tr("File versions"));
+    static_cast<QScrollArea *>(_fileDetails)->verticalScrollBar()->setValue(0);
+    if (focus && _fileDetails->isVisible()) {
+        _detailsBack->setFocus(Qt::OtherFocusReason);
+    }
+    loadVersionsForItem(selectedItem());
+}
+
+QUrl UDriveFileBrowser::metaVersionsUrl(const QString &fileId) const
+{
+    if (!_state || !_state->account() || fileId.trimmed().isEmpty()) return {};
+    // SEC-03: Reject fileId containing path traversal or URI delimiter characters
+    if (fileId.contains(QLatin1Char('/')) || fileId.contains(QLatin1Char('\\')) || fileId.contains(QLatin1Char('?'))
+        || fileId.contains(QLatin1Char('#')) || fileId.contains(QStringLiteral(".."))) {
+        return {};
+    }
+    const QString encodedId = QString::fromUtf8(QUrl::toPercentEncoding(fileId.trimmed()));
+    const QString davPath = _state->account()->davPath();
+    if (davPath.contains(QStringLiteral("remote.php"))) {
+        return Utility::concatUrlPath(_state->account()->url(), QStringLiteral("remote.php/dav/meta/") + encodedId + QStringLiteral("/v/"));
+    }
+    return Utility::concatUrlPath(_state->account()->url(), QStringLiteral("dav/meta/") + encodedId + QStringLiteral("/v/"));
+}
+
+void UDriveFileBrowser::loadVersionsForItem(const QModelIndex &index)
+{
+    if (!index.isValid() || index.data(DirectoryRole).toBool()) {
+        if (_versionsStatusLabel) {
+            _versionsStatusLabel->setText(tr("Versions are only available for files."));
+            _versionsStatusLabel->show();
+        }
+        if (_versionsScroll) _versionsScroll->hide();
+        return;
+    }
+
+    if (_versionsJob) {
+        _versionsJob->abort();
+        _versionsJob.clear();
+    }
+
+    if (_versionsListLayout) {
+        while (_versionsListLayout->count() > 1) {
+            auto *item = _versionsListLayout->takeAt(0);
+            if (item->widget()) delete item->widget();
+            delete item;
+        }
+    }
+
+    if (_versionsStatusLabel) {
+        _versionsStatusLabel->setText(tr("Loading versions…"));
+        _versionsStatusLabel->show();
+    }
+    if (_versionsScroll) _versionsScroll->hide();
+
+    const QString fileId = index.data(FileIdRole).toString();
+    const QString filePath = index.data(PathRole).toString();
+    const QString fileName = index.data().toString();
+    const QUrl root = index.data(RootRole).toUrl();
+    const QString permissions = index.data(PermissionsRole).toString();
+    const bool canRestore = permissions.isEmpty() || permissions.contains(QLatin1Char('W')) || permissions.contains(QLatin1Char('V'));
+
+    const QUrl versionsUrl = metaVersionsUrl(fileId);
+    if (versionsUrl.isEmpty()) {
+        if (_versionsStatusLabel) {
+            _versionsStatusLabel->setText(tr("No previous versions available."));
+            _versionsStatusLabel->show();
+        }
+        return;
+    }
+
+    QNetworkRequest request(versionsUrl);
+    request.setRawHeader("Depth", "1");
+    request.setRawHeader("Content-Type", "text/xml");
+    auto *job = new SimpleNetworkJob(_state->account(), versionsUrl, QString(), "PROPFIND", nullptr, request, this);
+    _versionsJob = job;
+
+    connect(job, &AbstractNetworkJob::finishedSignal, this, [this, job, fileName, filePath, root, canRestore] {
+        if (_versionsJob != job) return;
+        _versionsJob.clear();
+
+        if (!job->reply() || job->reply()->error() != QNetworkReply::NoError
+            || job->httpStatusCode() < 200 || job->httpStatusCode() >= 300) {
+            if (_versionsStatusLabel) {
+                _versionsStatusLabel->setText(tr("No previous versions available."));
+                _versionsStatusLabel->show();
+            }
+            if (_versionsScroll) _versionsScroll->hide();
+            return;
+        }
+
+        const QByteArray xml = job->reply()->readAll();
+        const auto versions = parseVersionsMultistatus(xml, job->reply()->url());
+        setVersions(versions, fileName, filePath, root, canRestore);
+    });
+
+    job->start();
+}
+
+void UDriveFileBrowser::setVersions(const QList<FileVersionItem> &versions, const QString &fileName, const QString &filePath, const QUrl &root, bool canRestore)
+{
+    if (_versionsJob) {
+        _versionsJob->abort();
+        _versionsJob.clear();
+    }
+
+    if (!_versionsListLayout) return;
+    while (_versionsListLayout->count() > 1) {
+        auto *item = _versionsListLayout->takeAt(0);
+        if (item->widget()) delete item->widget();
+        delete item;
+    }
+
+    if (versions.isEmpty()) {
+        if (_versionsStatusLabel) {
+            _versionsStatusLabel->setText(tr("No previous versions available."));
+            _versionsStatusLabel->show();
+        }
+        if (_versionsScroll) _versionsScroll->hide();
+        return;
+    }
+
+    if (_versionsStatusLabel) _versionsStatusLabel->hide();
+    if (_versionsScroll) _versionsScroll->show();
+
+    for (int i = 0; i < versions.size(); ++i) {
+        const auto &ver = versions.at(i);
+        const bool isLast = (i == versions.size() - 1);
+        auto *widget = new VersionItemWidget(ver, isLast, canRestore,
+            [this, ver, fileName, filePath, root] {
+                confirmAndRestoreVersion(ver, fileName, filePath, root);
+            },
+            [this, ver, fileName] {
+                downloadVersion(ver, fileName);
+            },
+            _versionsScroll->widget());
+        _versionsListLayout->insertWidget(_versionsListLayout->count() - 1, widget);
+        widget->show();
+    }
+}
+
+QList<UDriveFileBrowser::FileVersionItem> UDriveFileBrowser::parseVersionsMultistatus(const QByteArray &xml, const QUrl &requestUrl) const
+{
+    QList<FileVersionItem> result;
+    QXmlStreamReader reader(xml);
+    while (!reader.atEnd()) {
+        reader.readNext();
+        if (reader.isStartElement() && reader.name() == QLatin1String("response")) {
+            QString href;
+            qint64 size = -1;
+            QDateTime modified;
+            QString etag;
+            bool isCollection = false;
+
+            while (!reader.atEnd()) {
+                reader.readNext();
+                if (reader.isEndElement() && reader.name() == QLatin1String("response")) break;
+                if (reader.isStartElement()) {
+                    const QString tag = reader.name().toString();
+                    if (tag == QLatin1String("href")) {
+                        href = reader.readElementText();
+                    } else if (tag == QLatin1String("collection")) {
+                        isCollection = true;
+                    } else if (tag == QLatin1String("getcontentlength") || tag == QLatin1String("size")) {
+                        size = reader.readElementText().toLongLong();
+                    } else if (tag == QLatin1String("getlastmodified")) {
+                        const QString dtStr = reader.readElementText();
+                        modified = QDateTime::fromString(dtStr, QStringLiteral("ddd, dd MMM yyyy HH:mm:ss 'GMT'"));
+                        if (!modified.isValid()) modified = QDateTime::fromString(dtStr, Qt::ISODate);
+                        if (modified.isValid()) modified.setTimeZone(QTimeZone::utc());
+                    } else if (tag == QLatin1String("getetag")) {
+                        etag = reader.readElementText();
+                    }
+                }
+            }
+
+            if (!isCollection && !href.isEmpty() && !href.endsWith(QLatin1Char('/'))) {
+                FileVersionItem item;
+                item.href = href;
+                const QUrl resolved = requestUrl.resolved(QUrl(href));
+                const bool validScheme = (resolved.scheme() == QStringLiteral("http") || resolved.scheme() == QStringLiteral("https"));
+                const bool sameOrigin = validScheme && (resolved.scheme() == requestUrl.scheme())
+                    && (resolved.host().compare(requestUrl.host(), Qt::CaseInsensitive) == 0)
+                    && (resolved.port(0) == requestUrl.port(0));
+                if (!sameOrigin) {
+                    continue;
+                }
+                item.url = resolved;
+                item.size = size;
+                item.modified = modified;
+                item.etag = etag;
+                result.append(item);
+            }
+        }
+    }
+
+    std::sort(result.begin(), result.end(), [](const FileVersionItem &a, const FileVersionItem &b) {
+        return a.modified > b.modified;
+    });
+
+    return result;
+}
+
+void UDriveFileBrowser::confirmAndRestoreVersion(const FileVersionItem &version, const QString &fileName, const QString &filePath, const QUrl &root)
+{
+    const QString timeStr = Utility::timeAgoInWords(version.modified);
+    auto *dialog = new QDialog(this);
+    dialog->setObjectName(QStringLiteral("restoreConfirmDialog"));
+    dialog->setWindowTitle(tr("Restore version"));
+    dialog->setModal(true);
+    dialog->setMinimumWidth(400);
+
+    const bool dark = palette().color(QPalette::Window).lightness() < 128;
+    const QString cardBg = dark ? QStringLiteral("#23272B") : QStringLiteral("#FFFFFF");
+    const QString textPrimary = dark ? QStringLiteral("#EDEEF0") : QStringLiteral("#1F2328");
+    const QString textSecondary = dark ? QStringLiteral("#939D97") : QStringLiteral("#656D76");
+
+    dialog->setStyleSheet(QStringLiteral(
+        "QDialog#restoreConfirmDialog { background-color: %1; border-radius: 12px; }"
+        "QLabel { background: transparent; }"
+    ).arg(cardBg));
+
+    auto *layout = new QVBoxLayout(dialog);
+    layout->setContentsMargins(24, 24, 24, 20);
+    layout->setSpacing(16);
+
+    auto *title = new QLabel(tr("Restore “%1”?").arg(fileName), dialog);
+    title->setObjectName(QStringLiteral("restoreConfirmTitle"));
+    title->setTextFormat(Qt::PlainText);
+    title->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 600; color: %1;").arg(textPrimary));
+    title->setWordWrap(true);
+    layout->addWidget(title);
+
+    auto *desc = new QLabel(tr("The current file will be replaced with the version from %1.")
+        .arg(timeStr), dialog);
+    desc->setObjectName(QStringLiteral("restoreConfirmDesc"));
+    desc->setTextFormat(Qt::PlainText);
+    desc->setStyleSheet(QStringLiteral("font-size: 13px; color: %1;").arg(textSecondary));
+    desc->setWordWrap(true);
+    layout->addWidget(desc);
+
+    auto *btnBox = new QDialogButtonBox(QDialogButtonBox::Cancel, dialog);
+    auto *restoreBtn = new QPushButton(UDriveIcons::icon(UDriveIcons::Symbol::Restore), tr("Restore"), dialog);
+    restoreBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #00856B; color: white; border: none; border-radius: 6px; padding: 6px 16px; font-weight: 600; font-size: 13px; }"
+        "QPushButton:hover { background: #00705A; }"
+    ));
+    btnBox->addButton(restoreBtn, QDialogButtonBox::AcceptRole);
+    connect(btnBox, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
+    connect(btnBox, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    layout->addWidget(btnBox);
+
+    connect(dialog, &QDialog::accepted, this, [this, version, fileName, filePath, root] {
+        const QUrl targetUrl = Utility::concatUrlPath(root.isEmpty() ? selectedRoot() : root, filePath);
+        if (version.url.scheme() != targetUrl.scheme() || version.url.host() != targetUrl.host() || version.url.port(0) != targetUrl.port(0)) {
+            showResult(tr("Security error: Version source and target do not match origin."), false);
+            return;
+        }
+        QNetworkRequest req(version.url);
+        req.setRawHeader("Destination", targetUrl.toEncoded());
+        req.setRawHeader("Overwrite", "T");
+
+        auto *job = new SimpleNetworkJob(_state->account(), version.url, QString(), "MOVE", nullptr, req, this);
+        connect(job, &AbstractNetworkJob::finishedSignal, this, [this, job, fileName] {
+            if (job->reply() && job->reply()->error() == QNetworkReply::NoError
+                && job->httpStatusCode() >= 200 && job->httpStatusCode() < 300) {
+                showResult(tr("Restored “%1” to selected version.").arg(fileName));
+                refresh();
+                if (_detailsIndex.isValid()) {
+                    loadVersionsForItem(_detailsIndex);
+                }
+            } else {
+                showResult(tr("Could not restore version."), false);
+            }
+        });
+        job->start();
+    });
+
+    dialog->open();
+}
+
+void UDriveFileBrowser::downloadVersion(const FileVersionItem &version, const QString &fileName)
+{
+    const QString extension = QFileInfo(fileName).suffix();
+    const QString base = QFileInfo(fileName).completeBaseName();
+    const QString dateStr = version.modified.toLocalTime().toString(QStringLiteral("yyyy-MM-dd_HH-mm"));
+    const QString defaultName = extension.isEmpty()
+        ? QStringLiteral("%1 (version %2)").arg(base, dateStr)
+        : QStringLiteral("%1 (version %2).%3").arg(base, dateStr, extension);
+
+    const QString targetPath = QFileDialog::getSaveFileName(this, tr("Download Version"), defaultName);
+    if (targetPath.isEmpty()) return;
+
+    setMessage(tr("Downloading version of “%1”…").arg(fileName));
+
+    auto saveFile = std::make_shared<QSaveFile>(targetPath);
+    auto writeError = std::make_shared<QString>();
+    auto *job = new SimpleNetworkJob(_state->account(), version.url, QString(), "GET", nullptr, QNetworkRequest(), this);
+    job->setTimeout(std::chrono::seconds(120));
+
+    job->addNewReplyHook([saveFile, writeError](QNetworkReply *reply) {
+        if (!saveFile->open(QIODevice::WriteOnly)) {
+            *writeError = saveFile->errorString();
+            return;
+        }
+        connect(reply, &QNetworkReply::readyRead, reply, [reply, saveFile, writeError] {
+            if (!writeError->isEmpty() || !saveFile->isOpen()) return;
+            const QByteArray chunk = reply->readAll();
+            if (saveFile->write(chunk) != chunk.size()) {
+                *writeError = saveFile->errorString();
+                reply->abort();
+            }
+        });
+    });
+
+    connect(job, &AbstractNetworkJob::finishedSignal, this, [this, job, targetPath, saveFile, writeError] {
+        if (job->reply() && job->reply()->error() == QNetworkReply::NoError
+            && job->httpStatusCode() >= 200 && job->httpStatusCode() < 300
+            && writeError->isEmpty() && saveFile->isOpen() && saveFile->commit()) {
+            showResult(tr("Downloaded “%1”.").arg(QFileInfo(targetPath).fileName()));
+        } else {
+            if (saveFile->isOpen()) saveFile->cancelWriting();
+            showResult(writeError->isEmpty() ? tr("Could not download version.") : tr("Could not write downloaded file: %1").arg(*writeError), false);
+        }
+    });
+    job->start();
 }
 
 void UDriveFileBrowser::clearFileShares()
@@ -5201,6 +5838,7 @@ void UDriveFileBrowser::updateFileDetails()
     const QPersistentModelIndex source = available ? _proxy->mapToSource(index) : QModelIndex();
     if (source != _detailsIndex) {
         auto job = _shareItemJob; _shareItemJob.clear(); if (job) job->abort();
+        if (_versionsJob) { _versionsJob->abort(); _versionsJob.clear(); }
         _detailsIndex = source;
         showFileDetailsActions(false);
         _detailsRequested = available && _section == Section::Shares;
@@ -5245,6 +5883,16 @@ void UDriveFileBrowser::updateFileDetails()
                               : (_spaceName.isEmpty() ? _path : _spaceName + QStringLiteral(" / ") + _path);
     }
     _detailsLocation->setText(loc);
+    if (_detailsVersionsHeader) {
+        _detailsVersionsHeader->setVisible(!isDir);
+    }
+    if (_detailsPages && _detailsPages->currentWidget() == _detailsVersionsPage) {
+        if (isDir) {
+            showFileDetailsOverview();
+        } else {
+            loadVersionsForItem(index);
+        }
+    }
 
     QString owner;
     if (_section == Section::Shares && _shareTab == ShareTab::WithMe) {
@@ -5340,7 +5988,10 @@ void UDriveFileBrowser::setSortMode(SortMode mode, bool save)
     _sortButton->setAccessibleName(tr("Sort by: %1").arg(action->text()));
     _sortButton->setToolTip(mode == SortMode::Recent ? tr("Files opened most recently in UDrive; unopened files follow by modified date.")
                                                   : tr("Sort by: %1").arg(action->text()));
-    if (save) ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"))->setValue(QStringLiteral("sortMode"), action->data());
+    if (save) {
+        ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"))->setValue(QStringLiteral("sortMode"), action->data());
+        UDriveToast::preferenceSaved(this);
+    }
     const auto selected = selectedItem();
     updateEmptyState();
     if (selected.isValid()) activeView()->scrollTo(selected);
@@ -5488,7 +6139,10 @@ void UDriveFileBrowser::setWorkspaceTableView(bool table, bool save)
     auto *selection = _workspacesView->selectionModel();
     selection->clearSelection();
     for (const auto &index : selected) selection->select(index, QItemSelectionModel::Select | QItemSelectionModel::Rows);
-    if (save) ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"))->setValue(QStringLiteral("workspaceViewMode"), table ? QStringLiteral("table") : QStringLiteral("tiles"));
+    if (save) {
+        ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"))->setValue(QStringLiteral("workspaceViewMode"), table ? QStringLiteral("table") : QStringLiteral("tiles"));
+        UDriveToast::preferenceSaved(this);
+    }
     updateWorkspaceCardHeight();
     if (isWorkspacesOverview()) activeView()->setFocus();
 }
@@ -5612,7 +6266,7 @@ void UDriveFileBrowser::workspaceAction(const QString &action, const QList<OpenA
         const QUrl url(drive.getWebUrl().isEmpty() ? drive.getRoot().getWebUrl() : drive.getWebUrl());
         if (url.scheme() != QStringLiteral("https") && url.scheme() != QStringLiteral("http")) return;
         if (action == QStringLiteral("web")) QDesktopServices::openUrl(url);
-        else { QApplication::clipboard()->setText(url.toString()); setMessage(tr("Link copied to clipboard.")); }
+        else { QApplication::clipboard()->setText(url.toString()); showResult(tr("Link copied to clipboard.")); }
     } else if (action == QStringLiteral("details")) {
         auto *dialog = new QDialog(this); dialog->setWindowTitle(tr("Details")); dialog->resize(500, 350); styleWorkspaceDialog(dialog);
         dialog->setObjectName(QStringLiteral("driveWorkspaceDetailsDialog"));
@@ -5645,10 +6299,10 @@ void UDriveFileBrowser::workspaceAction(const QString &action, const QList<OpenA
         QJsonObject payload;
         if (quota) {
             bool valid = false; const double gb = QLocale().toDouble(value, &valid);
-            if (!valid || !std::isfinite(gb) || gb < 0.001 || gb > 9000000) { setMessage(tr("Enter a quota between 0.001 and 9000000 GB.")); return; }
+            if (!valid || !std::isfinite(gb) || gb < 0.001 || gb > 9000000) { showResult(tr("Enter a quota between 0.001 and 9000000 GB."), false); return; }
             payload.insert(QStringLiteral("quota"), QJsonObject{{QStringLiteral("total"), qRound64(gb * 1000000000.0)}});
         } else if (rename) {
-            if (!validName(value.trimmed())) { setMessage(tr("Enter a valid workspace name.")); return; }
+            if (!validName(value.trimmed())) { showResult(tr("Enter a valid workspace name."), false); return; }
             payload.insert(QStringLiteral("name"), value.trimmed());
         } else payload.insert(QStringLiteral("description"), value);
         if (_workspaceActions->patch(drives, payload)) setMessage(tr("Working…"));
@@ -5681,7 +6335,7 @@ void UDriveFileBrowser::workspaceAction(const QString &action, const QList<OpenA
             QImageReader reader(file); const QSize size = reader.size();
             if (!size.isValid() || qint64(size.width()) * size.height() > 16000000 || QFileInfo(file).size() > 8 * 1024 * 1024
                 || !QList<QByteArray>{"png", "jpeg", "webp"}.contains(reader.format().toLower())) {
-                setMessage(tr("Choose a PNG, JPEG, or WebP image up to 8 MiB and 16 megapixels.")); return;
+                showResult(tr("Choose a PNG, JPEG, or WebP image up to 8 MiB and 16 megapixels."), false); return;
             }
             reader.setAutoTransform(true); image = reader.read();
             if (!image.isNull()) image = image.scaled(1024, 1024, Qt::KeepAspectRatio, Qt::SmoothTransformation);
@@ -5690,7 +6344,7 @@ void UDriveFileBrowser::workspaceAction(const QString &action, const QList<OpenA
             const QString emoji = UDriveInputDialog::getText(this, tr("Set icon"), tr("Enter one emoji:"), QString::fromUtf8("📁"), tr("Save"), &ok);
             if (!guard || !ok || !canBrowse()) return;
             QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, emoji);
-            if (emoji.size() > 32 || finder.toNextBoundary() != emoji.size()) { setMessage(tr("Enter one emoji.")); return; }
+            if (emoji.size() > 32 || finder.toNextBoundary() != emoji.size()) { showResult(tr("Enter one emoji."), false); return; }
             image = QImage(128, 128, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::transparent);
             QPainter painter(&image); QFont font = qApp->font();
 #ifdef Q_OS_MACOS
@@ -5698,7 +6352,7 @@ void UDriveFileBrowser::workspaceAction(const QString &action, const QList<OpenA
 #endif
             font.setPixelSize(92); painter.setFont(font); painter.drawText(image.rect(), Qt::AlignCenter, emoji);
         }
-        if (image.isNull()) { setMessage(tr("Could not read this image.")); return; }
+        if (image.isNull()) { showResult(tr("Could not read this image."), false); return; }
         QByteArray png; QBuffer buffer(&png); buffer.open(QIODevice::WriteOnly);
         if (image.save(&buffer, "PNG") && _workspaceActions->writeSpecial(drive, QStringLiteral("image"), png)) setMessage(tr("Working…"));
     }
@@ -6134,8 +6788,10 @@ void UDriveFileBrowser::updateSpaces()
         for (auto *space : spaces) {
             const bool personal = space->sortPriority() == 100;
             const bool shares = space->sortPriority() == 50;
+            // Shares aggregates received files; it has no storage-space trash bin.
             if (space->disabled() || (_section == Section::Personal && !personal)
-                || (_section == Section::Workspaces && (personal || shares)) || (_section == Section::Shares && !shares)) continue;
+                || (_section == Section::Workspaces && (personal || shares)) || (_section == Section::Shares && !shares)
+                || (_section == Section::Trash && shares)) continue;
             const auto symbol = personal ? UDriveIcons::Symbol::Folder : shares ? UDriveIcons::Symbol::Link : UDriveIcons::Symbol::Grid;
             _spaces->addItem(UDriveIcons::icon(symbol), space->displayName(), space->id());
             _spaces->setItemData(_spaces->count() - 1, space->webDavUrl(), Qt::UserRole + 1);
@@ -6377,7 +7033,8 @@ void UDriveFileBrowser::refresh()
     job->setTimeout(std::chrono::seconds(30));
     job->setProperties({"resourcetype", "getcontentlength", "getlastmodified", "getetag",
         "http://owncloud.org/ns:size", "http://owncloud.org/ns:permissions", "http://owncloud.org/ns:favorite", "http://owncloud.org/ns:privatelink",
-        "http://owncloud.org/ns:trashbin-original-filename", "http://owncloud.org/ns:trashbin-original-location", "http://owncloud.org/ns:trashbin-delete-datetime"});
+        "http://owncloud.org/ns:trashbin-original-filename", "http://owncloud.org/ns:trashbin-original-location", "http://owncloud.org/ns:trashbin-delete-datetime",
+        "http://owncloud.org/ns:fileid", "http://owncloud.org/ns:id"});
     connect(job, &PropfindJob::directoryListingIterated, this, [this, job](const QString &href, const QMap<QString, QString> &properties) {
         if (_listing == job) appendEntry(href, properties);
     });
@@ -6453,6 +7110,9 @@ void UDriveFileBrowser::appendEntry(const QString &href, const QMap<QString, QSt
     item->setData(properties.contains(QStringLiteral("favorite")), FavoriteKnownRole);
     item->setData(properties.value(QStringLiteral("getetag")), EtagRole);
     item->setData(QUrl(properties.value(QStringLiteral("privatelink"))), LinkRole);
+    QString fileId = properties.value(QStringLiteral("fileid"));
+    if (fileId.isEmpty()) fileId = properties.value(QStringLiteral("id"));
+    item->setData(fileId, FileIdRole);
     QString restorePath = properties.value(QStringLiteral("trashbin-original-location"));
     while (restorePath.startsWith(QLatin1Char('/'))) restorePath.remove(0, 1);
     item->setData(validPath(restorePath) ? restorePath : QString(), RestorePathRole);
@@ -6579,7 +7239,7 @@ void UDriveFileBrowser::updateActions()
         Q_EMIT creationAvailabilityChanged();
         return;
     }
-    _message->setVisible(!_uploading);
+    _message->setVisible(!_uploading && !_resultMessage);
     _heading->show(); _workspaceBulkActions->hide();
     _workspacesView->setEnabled(canBrowse());
     _viewButton->setEnabled(true);
@@ -6639,6 +7299,8 @@ void UDriveFileBrowser::updateActions()
                         (_webUrl.scheme() == QStringLiteral("https") || _webUrl.scheme() == QStringLiteral("http"));
     _webAction->setEnabled(index.isValid() && canBrowse() && !_listing && !_report && !_operation && !trash && hasWeb);
     _webAction->setVisible(!trash && !sharesOverview);
+    _versionsAction->setEnabled(valid && !trash && !directory && !sharesOverview);
+    _versionsAction->setVisible(!trash && !sharesOverview);
     _deleteAction->setVisible(!trash && !sharesOverview);
     _renameAction->setVisible(!trash);
     _copyAction->setVisible(!trash && !sharesOverview);
@@ -6722,9 +7384,26 @@ void UDriveFileBrowser::showNewMenu(const QPoint &position, int minimumWidth)
 
 void UDriveFileBrowser::setMessage(const QString &message)
 {
+    _resultMessage = false;
     _statusMessage = message;
     _workspaceNotice = isWorkspacesOverview();
     updateSelectionState();
+}
+
+void UDriveFileBrowser::showResult(const QString &message, bool success)
+{
+    showNotice(message, success ? Notice::Success : Notice::Error);
+}
+
+void UDriveFileBrowser::showNotice(const QString &message, Notice kind)
+{
+    _statusMessage = message;
+    _resultMessage = true;
+    _workspaceNotice = false;
+    updateSelectionState();
+    _message->hide();
+    UDriveToast::showMessage(this, message, kind == Notice::Error ? UDriveToast::Kind::Error
+        : kind == Notice::Success ? UDriveToast::Kind::Success : UDriveToast::Kind::Information);
 }
 
 int UDriveFileBrowser::selectedCount() const
@@ -7068,7 +7747,7 @@ void UDriveFileBrowser::refreshFavorites()
     QNetworkRequest request;
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/xml; charset=utf-8"));
     QByteArray body = "<?xml version=\"1.0\"?><oc:filter-files xmlns:d=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\">"
-        "<d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/><d:getetag/><oc:permissions/><oc:favorite/><oc:privatelink/><oc:spaceid/><oc:size/></d:prop>"
+        "<d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/><d:getetag/><oc:permissions/><oc:favorite/><oc:privatelink/><oc:spaceid/><oc:size/><oc:fileid/><oc:id/></d:prop>"
         "<oc:filter-rules><oc:favorite>1</oc:favorite></oc:filter-rules></oc:filter-files>";
     auto *job = new SimpleNetworkJob(_state->account(), _state->account()->davUrl(), {}, "REPORT", std::move(body), request, this);
     _report = job;
@@ -7204,6 +7883,7 @@ bool UDriveFileBrowser::runOperation(
         if (success && _root == viewRoot && _path == viewPath && _section == section) refresh();
         setMessage(result);
         updateActions();
+        showResult(result, success);
         Q_EMIT operationFinished(success, result);
     });
     setMessage(_uploading ? tr("Uploading…") : tr("Working…"));
@@ -7310,7 +7990,7 @@ bool UDriveFileBrowser::uploadFile(const QString &localFile)
     }
 
     auto *file = new QFile(localFile);
-    if (!file->open(QIODevice::ReadOnly)) { setMessage(file->errorString()); delete file; return false; }
+    if (!file->open(QIODevice::ReadOnly)) { showResult(file->errorString(), false); delete file; return false; }
     QNetworkRequest request;
     request.setRawHeader("If-None-Match", "*");
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/octet-stream"));
@@ -7351,7 +8031,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
     UploadDevice *firstDevice = creationWithUpload ? new UploadDevice(localFile, 0, firstChunk) : nullptr;
     if (firstDevice) {
         if (!firstDevice->open(QIODevice::ReadOnly)) {
-            setMessage(firstDevice->errorString());
+            showResult(firstDevice->errorString(), false);
             delete firstDevice;
             _uploading = false;
             stopUploadProgress();
@@ -7391,6 +8071,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
             if (_root == viewRoot && _path == viewPath && _section == section) refresh();
             setMessage(tr("File uploaded."));
             updateActions();
+            showResult(tr("File uploaded."), true);
             Q_EMIT operationFinished(true, tr("File uploaded."));
             return;
         }
@@ -7407,6 +8088,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
             setMessage(err);
             updateActions();
             delete device;
+            showResult(err, false);
             Q_EMIT operationFinished(false, err);
             return;
         }
@@ -7441,6 +8123,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
                 _cancelButton->hide();
                 setMessage(err);
                 updateActions();
+                showResult(err, false);
                 Q_EMIT operationFinished(false, err);
                 return;
             }
@@ -7468,6 +8151,7 @@ bool UDriveFileBrowser::uploadFileTus(const QString &localFile, const QString &r
             _cancelButton->hide();
             setMessage(err);
             updateActions();
+            showResult(err, false);
             Q_EMIT operationFinished(false, err);
             return;
         }
@@ -7554,7 +8238,7 @@ void UDriveFileBrowser::confirmEmptyTrash()
         const auto item = _model->index(row, 0);
         const QString path = item.data(PathRole).toString();
         if (!validPath(path) || paths.contains(path) || !item.data(TrashedRole).toBool()) {
-            setMessage(tr("Deleted files changed. Refresh and try again."));
+            showResult(tr("Deleted files changed. Refresh and try again."), false);
             return;
         }
         paths.insert(path);
@@ -7572,13 +8256,13 @@ void UDriveFileBrowser::confirmEmptyTrash()
         if (!canBrowse() || !isVisible() || _section != Section::Trash || trashRoot() != root
             || _state->account()->uuid() != accountId || _listing || _report || _operation || _download
             || _emptyingTrash || !_emptyStateReady || _model->rowCount() != rows.size()) {
-            setMessage(tr("Deleted files changed. Review them and confirm again."));
+            showResult(tr("Deleted files changed. Review them and confirm again."), false);
             return;
         }
         for (int i = 0; i < rows.size(); ++i) {
             if (!rows.at(i).isValid() || rows.at(i).data(PathRole).toString() != items.at(i).first
                 || rows.at(i).data(EtagRole).toString() != items.at(i).second) {
-                setMessage(tr("Deleted files changed. Review them and confirm again."));
+                showResult(tr("Deleted files changed. Review them and confirm again."), false);
                 return;
             }
         }
@@ -7650,12 +8334,16 @@ void UDriveFileBrowser::finishEmptyTrash(bool success, const QString &message)
     if (canBrowse() && _section == Section::Trash && trashRoot() == root && _state->account()->uuid() == accountId) {
         refresh();
         if (_listing) connect(_listing, &PropfindJob::finishedWithoutError, this, [this, root, accountId, message] {
-            if (canBrowse() && _section == Section::Trash && trashRoot() == root && _state->account()->uuid() == accountId)
+            if (canBrowse() && _section == Section::Trash && trashRoot() == root && _state->account()->uuid() == accountId) {
                 setMessage(message);
+                _resultMessage = true;
+                _message->hide();
+            }
         });
     }
     setMessage(message);
     updateActions();
+    showResult(message, success);
     Q_EMIT operationFinished(success, message);
 }
 
@@ -7688,7 +8376,7 @@ void UDriveFileBrowser::confirmDelete(bool permanent)
             || (permanent ? trashRoot() : selectedRoot()) != root || current.data(PathRole).toString() != path
             || current.data().toString() != name || current.data(EtagRole).toString() != etag
             || current.data(DirectoryRole).toBool() != directory) {
-            setMessage(tr("The selected item changed. Review it and confirm again."));
+            showResult(tr("The selected item changed. Review it and confirm again."), false);
             return;
         }
         QNetworkRequest request;
@@ -7773,8 +8461,8 @@ bool UDriveFileBrowser::previewSelectedPdf()
         return true;
     }
     _filePreviewKey = key;
-    _previewStorage = std::make_shared<QTemporaryDir>(QDir::tempPath() + QStringLiteral("/udrive-pdf-XXXXXX"));
-    if (!_previewStorage->isValid()) { _previewStorage.reset(); setMessage(tr("Could not create a temporary PDF preview.")); return true; }
+    _previewStorage = createPreviewStorage(QStringLiteral("pdf"));
+    if (!_previewStorage) { showResult(tr("Could not create a temporary PDF preview."), false); return true; }
     const QString destination = _previewStorage->filePath(QStringLiteral("preview.pdf"));
     if (!startDownload(destination, true)) _previewStorage.reset();
     return true;
@@ -7794,24 +8482,21 @@ QString UDriveFileBrowser::previewCacheKey(const QModelIndex &index) const
 
 void UDriveFileBrowser::cleanupOrphanedPreviews()
 {
-    const QDir tempDir(QDir::tempPath());
-    const QStringList filters{QStringLiteral("udrive-preview-*"), QStringLiteral("udrive-pdf-*")};
-    const QFileInfoList orphans = tempDir.entryInfoList(filters, QDir::Dirs | QDir::NoDotAndDotDot);
-    std::function<void(const QString &)> purge = [&purge](const QString &path) {
-        QDir dir(path);
-        const QFileInfoList entries = dir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden);
-        for (const auto &entry : entries) {
-            if (entry.isDir()) {
-                purge(entry.absoluteFilePath());
-            } else {
-                QFile::setPermissions(entry.absoluteFilePath(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-                QFile::remove(entry.absoluteFilePath());
-            }
-        }
-        dir.rmdir(path);
-    };
-    for (const auto &info : orphans) {
-        purge(info.absoluteFilePath());
+    const QString root = previewStorageRoot();
+    if (root.isEmpty()) return;
+    QLockFile maintenance(root + QStringLiteral("/maintenance.lock"));
+    if (!maintenance.tryLock()) return;
+    const QDir dir(root);
+    for (const auto &entry : dir.entryInfoList({QStringLiteral("session-*")}, QDir::Dirs | QDir::NoDotAndDotDot)) {
+        if (!privatePreviewDirectory(entry.absoluteFilePath())) continue;
+        const QString lockPath = QDir(entry.absoluteFilePath()).filePath(QStringLiteral("active.lock"));
+        const QFileInfo lockInfo(lockPath);
+        if (lockInfo.isSymLink() || lockInfo.isJunction()) continue;
+        QLockFile active(lockPath);
+        active.setStaleLockTime(0);
+        if (!active.tryLock()) continue;
+        active.unlock();
+        removePreviewDirectory(entry.absoluteFilePath());
     }
 }
 
@@ -7851,9 +8536,9 @@ bool UDriveFileBrowser::previewSelectedFile()
         showPreparedFile(file.path, name, root, path, file.storage);
         return true;
     }
-    _previewStorage = std::make_shared<QTemporaryDir>(QDir::tempPath() + QStringLiteral("/udrive-preview-XXXXXX"));
-    if (!_previewStorage->isValid()) {
-        _previewStorage.reset(); _filePreview->showError(tr("Could not create a temporary preview.")); return true;
+    _previewStorage = createPreviewStorage(QStringLiteral("preview"));
+    if (!_previewStorage) {
+        _filePreview->showError(tr("Could not create a temporary preview.")); return true;
     }
     // Keep the real extension for the media decoder and associated Office app.
     const QString suffix = QFileInfo(name).suffix().toLower();
@@ -7876,8 +8561,8 @@ void UDriveFileBrowser::showPreparedFile(const QString &path, const QString &nam
         const bool opened = QDesktopServices::openUrl(QUrl::fromLocalFile(path));
         if (!guard) return;
         _pages->setCurrentIndex(0);
-        if (opened) { recordOpened(root, remotePath); setMessage(storage ? tr("Opened a read-only copy. Sync this folder to edit files and upload changes automatically.") : tr("File opened.")); }
-        else setMessage(tr("No application could open this file. Install an application for this file type, or use Download."));
+        if (opened) { recordOpened(root, remotePath); showNotice(storage ? tr("Opened a read-only copy. Sync this folder to edit files and upload changes automatically.") : tr("File opened."), Notice::Information); }
+        else showResult(tr("No application could open this file. Install an application for this file type, or use Download."), false);
     } else {
         _pages->setCurrentWidget(_filePreview);
         _filePreview->openFile(path, name, std::move(storage));
@@ -7903,6 +8588,10 @@ void UDriveFileBrowser::hideEvent(QHideEvent *event)
     auto details = _shareItemJob;
     _shareItemJob.clear();
     if (details) details->abort();
+    if (_versionsJob) {
+        _versionsJob->abort();
+        _versionsJob.clear();
+    }
     _workspaceActions->cancel();
     for (auto *dialog : findChildren<QDialog *>()) if (dialog->property("udriveWorkspaceDialog").toBool()) dialog->close();
     _checkboxViewport.clear();
@@ -8077,7 +8766,8 @@ bool UDriveFileBrowser::startDownload(const QString &destination, bool preview, 
                 message = tr("Saved to %1, but no application could open this file. Choose a default application for this file type.").arg(QDir::toNativeSeparators(destination));
             }
         }
-        setMessage(message);
+        if (preview && success) setMessage(message);
+        else showResult(message, success);
         updateActions();
         Q_EMIT downloadFinished(success, destination);
     });

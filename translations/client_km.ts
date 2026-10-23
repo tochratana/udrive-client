@@ -1739,8 +1739,56 @@
     <context>
         <name>OCC::LogBrowser</name>
         <message>
+            <source>Debug logging</source>
+            <translation>កំណត់ហេតុបំបាត់កំហុស</translation>
+        </message>
+        <message>
+            <source>Save diagnostic logs to help troubleshoot sync issues.</source>
+            <translation>រក្សាទុកកំណត់ហេតុដើម្បីជួយដោះស្រាយបញ្ហាសមកាលកម្ម។</translation>
+        </message>
+        <message>
+            <source>Keep logs private</source>
+            <translation>រក្សាកំណត់ហេតុជាឯកជន</translation>
+        </message>
+        <message>
+            <source>Logs may contain sensitive information. Do not share them publicly.</source>
+            <translation>កំណត់ហេតុអាចមានព័ត៌មានរសើប។ សូមកុំចែករំលែកវាជាសាធារណៈ។</translation>
+        </message>
+        <message>
+            <source>Logging options</source>
+            <translation>ជម្រើសកំណត់ហេតុ</translation>
+        </message>
+        <message>
+            <source>Enable debug logging</source>
+            <translation>បើកកំណត់ហេតុបំបាត់កំហុស</translation>
+        </message>
+        <message>
+            <source>Include HTTP traffic</source>
+            <translation>រួមបញ្ចូលទិន្នន័យ HTTP</translation>
+        </message>
+        <message>
+            <source>Log files to keep</source>
+            <translation>ចំនួនឯកសារកំណត់ហេតុដែលត្រូវរក្សាទុក</translation>
+        </message>
+        <message>
+            <source>A new file is created for each sync run. Older logs are compressed.</source>
+            <translation>ឯកសារថ្មីត្រូវបានបង្កើតរាល់ពេលធ្វើសមកាលកម្ម។ កំណត់ហេតុចាស់ត្រូវបានបង្ហាប់។</translation>
+        </message>
+        <message>
+            <source>Log folder</source>
+            <translation>ថតកំណត់ហេតុ</translation>
+        </message>
+        <message>
+            <source>Settings are saved automatically. Command-line logging options take priority.</source>
+            <translation>ការកំណត់ត្រូវបានរក្សាទុកដោយស្វ័យប្រវត្តិ។ ជម្រើសកំណត់ហេតុតាមបន្ទាត់ពាក្យបញ្ជាមានអាទិភាព។</translation>
+        </message>
+        <message>
             <source>Open folder</source>
             <translation>បើកថត</translation>
+        </message>
+        <message>
+            <source>Close</source>
+            <translation>បិទ</translation>
         </message>
     </context>
     <context>
@@ -2126,6 +2174,14 @@
             <source>Could not remove workspace member. Try again.</source>
             <translation>មិនអាចដកសមាជិកចេញពីកន្លែងធ្វើការបានទេ។ សូមព្យាយាមម្ដងទៀត។</translation>
         </message>
+        <message>
+            <source>Workspace member added.</source>
+            <translation>បានបន្ថែមសមាជិកកន្លែងធ្វើការ។</translation>
+        </message>
+        <message>
+            <source>Workspace member removed.</source>
+            <translation>បានដកសមាជិកចេញពីកន្លែងធ្វើការ។</translation>
+        </message>
     </context>
     <context>
         <name>OCC::UDriveWorkspaceActions</name>
@@ -2239,6 +2295,21 @@
         <message>
             <source>Follows macOS &amp; OS settings</source>
             <translation>ធ្វើតាមការកំណត់របស់ macOS និងប្រព័ន្ធប្រតិបត្តិការ</translation>
+        </message>
+    </context>
+    <context>
+        <name>UDriveToast</name>
+        <message>
+            <source>Preference saved.</source>
+            <translation>បានរក្សាទុកការកំណត់។</translation>
+        </message>
+        <message>
+            <source>Notification</source>
+            <translation>ការជូនដំណឹង</translation>
+        </message>
+        <message>
+            <source>Dismiss notification</source>
+            <translation>បិទការជូនដំណឹង</translation>
         </message>
     </context>
 </TS>

@@ -31,6 +31,17 @@ class TestFileSystem : public QObject
     Q_OBJECT
 
 private Q_SLOTS:
+    void testPortableFileNameRejectsNavigation()
+    {
+        const QString base = QDir::tempPath();
+        for (const auto &name : {QString(), QStringLiteral("."), QStringLiteral(".."), QStringLiteral(" .. "), QString(QChar::Null)}) {
+            QVERIFY(OCC::FileSystem::createPortableFileName(base, name).isEmpty());
+        }
+        // The retained leaf must remain safe after the filename length limit.
+        QVERIFY(OCC::FileSystem::createPortableFileName(base, QStringLiteral("..suffix"), 243).isEmpty());
+        QCOMPARE(OCC::FileSystem::createPortableFileName(base, QStringLiteral("資料/notes")), base + QStringLiteral("/資料_notes"));
+    }
+
 #ifdef Q_OS_WIN
     void check_long_win_path()
     {

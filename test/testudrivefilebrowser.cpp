@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gui/udrivefilebrowser.h"
+#include "gui/aboutdialog.h"
+#include "gui/udrivetoast.h"
 #include "gui/udrivefilepreview.h"
 #include "gui/udriveworkspaceactions.h"
 #include "gui/udrivecombobox.h"
 #include "gui/settingsdialog.h"
 #include "gui/accountmanager.h"
 #include "gui/accountview.h"
+#include "gui/logbrowser.h"
 #include "gui/translations.h"
 #include <QTranslator>
 #include <QUrlQuery>
@@ -25,6 +28,7 @@
 #include <QProxyStyle>
 #include <QBuffer>
 #include <QStandardItemModel>
+#include "gui/generalsettings.h"
 #include "gui/udrivethumbnails.h"
 #include <QAbstractButton>
 #include <QScreen>
@@ -82,6 +86,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QLockFile>
 #include <QTreeView>
 #include <QTimer>
 #include <QAction>
@@ -177,6 +182,7 @@ public:
     QStringList shareDeletions;
     QList<QUrlQuery> sharePuts;
     int sharePutStatus = 200;
+    bool rejectUnknownShareId = false;
     QString sharePutMessage = QStringLiteral("Access denied");
     int sharePutDelay = 0;
     bool slowStarted = false;
@@ -338,9 +344,11 @@ public:
                             });
                             return;
                         }
+                        bool found = false;
                         for (int i = 0; i < existingShares.size(); ++i) {
                             auto obj = existingShares.at(i).toObject();
                             if (obj.value("id").toString() == shareId) {
+                                found = true;
                                 if (arguments.hasQueryItem("permissions")) obj.insert("permissions", arguments.queryItemValue("permissions").toInt());
                                 if (arguments.hasQueryItem("name")) obj.insert("name", arguments.queryItemValue("name"));
                                 if (arguments.hasQueryItem("expireDate")) obj.insert("expiration", arguments.queryItemValue("expireDate"));
@@ -348,6 +356,10 @@ public:
                                 existingShares.replace(i, obj);
                                 break;
                             }
+                        }
+                        if (rejectUnknownShareId && !found) {
+                            respond(socket, 200, "application/json", R"({"ocs":{"meta":{"statuscode":404,"message":"cannot find share"},"data":{}}})");
+                            return;
                         }
                         respond(socket, 200, "application/json", R"({"ocs":{"meta":{"statuscode":100},"data":{}}})");
                     } else if (parts.at(0) == "DELETE" && path.startsWith(QStringLiteral("/ocs/v1.php/apps/files_sharing/api/v1/shares/"))) {
@@ -509,6 +521,33 @@ public:
                         } else if (!exists(path)) respond(socket, 404, "text/plain", "Missing");
                         else { removed.insert(path); trash.insert(QStringLiteral("deleted-%1").arg(trash.size() + 1), path); respond(socket, 204, "text/plain", {}); }
                     } else if (parts.at(0) == "PROPFIND") {
+                        if (path.contains("/meta/")) {
+                            const QByteArray versionsXml =
+                                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+                                "<d:multistatus xmlns:d=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\">\n"
+                                "  <d:response>\n"
+                                "    <d:href>" + path.toUtf8() + "</d:href>\n"
+                                "    <d:propstat>\n"
+                                "      <d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop>\n"
+                                "      <d:status>HTTP/1.1 200 OK</d:status>\n"
+                                "    </d:propstat>\n"
+                                "  </d:response>\n"
+                                "  <d:response>\n"
+                                "    <d:href>" + path.toUtf8() + "/1728390000</d:href>\n"
+                                "    <d:propstat>\n"
+                                "      <d:prop>\n"
+                                "        <d:getcontentlength>72704</d:getcontentlength>\n"
+                                "        <d:getlastmodified>Thu, 08 Oct 2026 12:20:00 GMT</d:getlastmodified>\n"
+                                "        <d:getetag>&quot;etag-v1&quot;</d:getetag>\n"
+                                "        <d:resourcetype/>\n"
+                                "      </d:prop>\n"
+                                "      <d:status>HTTP/1.1 200 OK</d:status>\n"
+                                "    </d:propstat>\n"
+                                "  </d:response>\n"
+                                "</d:multistatus>";
+                            respond(socket, 207, "application/xml; charset=utf-8", versionsXml);
+                            return;
+                        }
                         if (headers.value("depth") == "0") {
                             const auto permissions = itemPermissions.value(path, readOnly ? QStringLiteral("S") : QStringLiteral("RDNVCKW"));
                             const auto href = itemPermissionHref.isEmpty() ? path : itemPermissionHref;
@@ -586,6 +625,7 @@ public:
                               "<oc:trashbin-original-filename>%7</oc:trashbin-original-filename><oc:trashbin-original-location>%8</oc:trashbin-original-location>"
                               "<oc:trashbin-delete-datetime>2026-10-09T08:00:00Z</oc:trashbin-delete-datetime>"
                               "<d:getcontentlength>%9</d:getcontentlength><oc:size>%9</oc:size><d:getlastmodified>%3</d:getlastmodified>"
+                              "<oc:fileid>file-123</oc:fileid><oc:id>file-123</oc:id>"
                               "</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>")
             .arg(href, folder ? QStringLiteral("<d:collection/>") : QString(),
                 modifiedDates.value(path, path.endsWith("denied.txt") ? QStringLiteral("invalid date") : QStringLiteral("Wed, 01 Oct 2025 10:00:00 GMT")),
@@ -745,6 +785,60 @@ private Q_SLOTS:
     {
         if (_localHttpWasSet) qputenv("UDRIVE_ALLOW_LOCAL_HTTP", _previousLocalHttp);
         else qunsetenv("UDRIVE_ALLOW_LOCAL_HTTP");
+    }
+
+    void loggingDialogLayout_data()
+    {
+        QTest::addColumn<QString>("locale");
+        QTest::addColumn<bool>("dark");
+        for (const QString &locale : {QStringLiteral("en_US"), QStringLiteral("km"), QStringLiteral("zh_CN")}) {
+            QTest::newRow(qPrintable(locale + "-light")) << locale << false;
+            QTest::newRow(qPrintable(locale + "-dark")) << locale << true;
+        }
+    }
+
+    void loggingDialogLayout()
+    {
+        QFETCH(QString, locale);
+        QFETCH(bool, dark);
+        const auto previousMode = ConfigFile().themeMode();
+        ConfigFile().setThemeMode(dark ? ConfigFile::ThemeMode::Dark : ConfigFile::ThemeMode::Light);
+        const auto restore = qScopeGuard([&] { ConfigFile().setThemeMode(previousMode); });
+        QTranslator translator;
+        QVERIFY(translator.load(Translations::translationsFilePrefix() + locale, Translations::translationsDirectoryPath()));
+        QVERIFY(qApp->installTranslator(&translator));
+        const auto removeTranslator = qScopeGuard([&] { qApp->removeTranslator(&translator); });
+        LogBrowser dialog(nullptr);
+        dialog.show();
+        QTest::qWait(50);
+        auto *path = dialog.findChild<QLineEdit *>("locationField");
+        auto *scroll = dialog.findChild<QScrollArea *>("contentScroll");
+        auto *close = dialog.findChild<QDialogButtonBox *>("buttonBox")->button(QDialogButtonBox::Close);
+        QVERIFY(path && path->isReadOnly());
+        const QString actualPath = path->text();
+        const QString longPath = QStringLiteral("/private/temporary/") + QString(400, QLatin1Char('a')) + QStringLiteral("/logs");
+        path->setText(longPath);
+        path->setCursorPosition(0);
+        QTest::qWait(10);
+        QVERIFY(dialog.width() <= 600);
+        QCOMPARE(scroll->horizontalScrollBar()->maximum(), 0);
+        path->selectAll();
+        QCOMPARE(path->selectedText(), longPath);
+        path->deselect();
+        path->setText(actualPath);
+        path->setCursorPosition(0);
+        if (qEnvironmentVariableIsSet("UDRIVE_LOGGING_TEST_CAPTURE"))
+            QVERIFY(dialog.grab().save(QStringLiteral("/tmp/udrive-logging-%1-%2.png").arg(locale, dark ? "dark" : "light")));
+        dialog.resize(440, 360);
+        QTest::qWait(30);
+        QVERIFY(close->isVisible());
+        QVERIFY(dialog.rect().contains(QRect(close->mapTo(&dialog, QPoint()), close->size())));
+        QCOMPARE(scroll->horizontalScrollBar()->maximum(), 0);
+        scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+        QTest::qWait(10);
+        QVERIFY(scroll->viewport()->rect().contains(QRect(path->mapTo(scroll->viewport(), QPoint()), path->size())));
+        QTest::keyClick(&dialog, Qt::Key_Escape);
+        QVERIFY(!dialog.isVisible());
     }
 
     void khmerFontRendering()
@@ -1992,6 +2086,18 @@ private Q_SLOTS:
                 QTest::qWait(50);
                 QVERIFY(firstSearch->grab().save("/tmp/udrive-search-dark.png"));
                 clearSearch->click();
+                const auto captureNewMenu = [&](const QString &theme) {
+                    window.openNewFileMenu();
+                    auto *menu = firstBrowser->findChild<QMenu *>("driveNewMenu");
+                    QVERIFY(menu);
+                    QTest::qWait(50);
+                    QVERIFY(menu->grab().save(QStringLiteral("/tmp/udrive-new-menu-%1.png").arg(theme)));
+                    menu->setActiveAction(menu->actions().first());
+                    QTest::qWait(30);
+                    QVERIFY(menu->grab().save(QStringLiteral("/tmp/udrive-new-menu-%1-hover.png").arg(theme)));
+                    menu->hide();
+                };
+                captureNewMenu(QStringLiteral("dark"));
                 window.openNewFileMenu();
                 if (auto *newMenu = firstBrowser->findChild<QMenu *>("driveNewMenu")) {
                     QTest::qWait(50);
@@ -2020,6 +2126,7 @@ private Q_SLOTS:
                 QTest::qWait(150);
                 QVERIFY(window.grab().save("/tmp/udrive-workspace-light.png"));
                 captureFileMenu(QStringLiteral("light"));
+                captureNewMenu(QStringLiteral("light"));
                 firstSearch->setText(QStringLiteral("Project"));
                 firstSearch->setFocus();
                 QTest::qWait(50);
@@ -2742,14 +2849,14 @@ private Q_SLOTS:
 
     void orphanPreviewSweepRemovesStaleAndReadOnlyDirectories()
     {
-        const QString tempRoot = QDir::tempPath();
-        const QString previewDirName = QStringLiteral("udrive-preview-test-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
-        const QString pdfDirName = QStringLiteral("udrive-pdf-test-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
-        QDir temp(tempRoot);
-        QVERIFY(temp.mkdir(previewDirName));
-        QVERIFY(temp.mkdir(pdfDirName));
-        const QString previewPath = temp.filePath(previewDirName);
-        const QString pdfPath = temp.filePath(pdfDirName);
+        UDriveFileBrowser::cleanupOrphanedPreviews();
+        const QString root = Account::commonCacheDirectory() + QStringLiteral("/preview-sessions");
+        QTemporaryDir stale(root + QStringLiteral("/session-test-XXXXXX"));
+        QVERIFY(stale.isValid());
+        const QString previewPath = stale.filePath(QStringLiteral("preview"));
+        const QString pdfPath = stale.filePath(QStringLiteral("pdf"));
+        QVERIFY(QDir().mkdir(previewPath));
+        QVERIFY(QDir().mkdir(pdfPath));
         QFile previewFile(previewPath + "/locked-doc.docx");
         QVERIFY(previewFile.open(QIODevice::WriteOnly));
         previewFile.write("locked content");
@@ -2765,6 +2872,61 @@ private Q_SLOTS:
         UDriveFileBrowser::cleanupOrphanedPreviews();
         QVERIFY(!QFileInfo::exists(previewPath));
         QVERIFY(!QFileInfo::exists(pdfPath));
+        QVERIFY(!QFileInfo::exists(stale.path()));
+    }
+
+    void orphanPreviewSweepPreservesForeignLinksAndActiveSessions()
+    {
+        UDriveFileBrowser::cleanupOrphanedPreviews();
+        const QString root = Account::commonCacheDirectory() + QStringLiteral("/preview-sessions");
+        QTemporaryDir outside;
+        QTemporaryDir legacy(QDir::tempPath() + QStringLiteral("/udrive-preview-test-XXXXXX"));
+        QTemporaryDir stale(root + QStringLiteral("/session-stale-XXXXXX"));
+        QTemporaryDir active(root + QStringLiteral("/session-active-XXXXXX"));
+        QVERIFY(outside.isValid() && legacy.isValid() && stale.isValid() && active.isValid());
+        QFile sentinel(outside.filePath(QStringLiteral("keep.txt")));
+        QVERIFY(sentinel.open(QIODevice::WriteOnly));
+        QCOMPARE(sentinel.write("keep"), 4);
+        sentinel.close();
+        QVERIFY(sentinel.setPermissions(QFileDevice::ReadOwner));
+        const auto permissions = sentinel.permissions();
+        QLockFile lock(active.filePath(QStringLiteral("active.lock")));
+        lock.setStaleLockTime(0);
+        QVERIFY(lock.tryLock());
+#ifndef Q_OS_WIN
+        const QString rootLink = root + QStringLiteral("/session-link");
+        QVERIFY(QFile::link(outside.path(), rootLink));
+        QVERIFY(QFile::link(outside.path(), stale.filePath(QStringLiteral("directory-link"))));
+        QVERIFY(QFile::link(sentinel.fileName(), stale.filePath(QStringLiteral("file-link"))));
+        QVERIFY(QFile::link(outside.path(), legacy.filePath(QStringLiteral("directory-link"))));
+#else
+        const QString rootLink = root + QStringLiteral("/session-junction");
+        auto junction = [&](const QString &path) {
+            return QProcess::execute(QStringLiteral("cmd.exe"), {QStringLiteral("/c"), QStringLiteral("mklink"), QStringLiteral("/J"),
+                QDir::toNativeSeparators(path), QDir::toNativeSeparators(outside.path())}) == 0;
+        };
+        QVERIFY(junction(rootLink));
+        QVERIFY(junction(stale.filePath(QStringLiteral("directory-junction"))));
+        QVERIFY(QFileInfo(rootLink).isJunction());
+#endif
+        UDriveFileBrowser::cleanupOrphanedPreviews();
+        QVERIFY(QFileInfo::exists(sentinel.fileName()));
+        QCOMPARE(sentinel.permissions(), permissions);
+        QVERIFY(sentinel.open(QIODevice::ReadOnly));
+        QCOMPARE(sentinel.readAll(), QByteArray("keep"));
+        QVERIFY(QFileInfo::exists(legacy.path()));
+        QVERIFY(QFileInfo::exists(active.path()));
+        QVERIFY(!QFileInfo::exists(stale.path()));
+#ifndef Q_OS_WIN
+        QVERIFY(QFileInfo(rootLink).isSymLink());
+        QVERIFY(QFile::remove(rootLink));
+#else
+        QVERIFY(QFileInfo(rootLink).isJunction());
+        QVERIFY(QDir().rmdir(rootLink));
+#endif
+        lock.unlock();
+        UDriveFileBrowser::cleanupOrphanedPreviews();
+        QVERIFY(!QFileInfo::exists(active.path()));
     }
 
     void previewCachesArePrivateToEachAccount()
@@ -2790,6 +2952,12 @@ private Q_SLOTS:
         const QString firstPath = firstFetched.first().at(1).toString();
         const QString secondPath = secondFetched.first().at(1).toString();
         QVERIFY(firstPath != secondPath);
+        {
+            UDriveFileBrowser anotherBrowser(&second);
+            UDriveFileBrowser::cleanupOrphanedPreviews();
+            QVERIFY(QFileInfo::exists(firstPath));
+            QVERIFY(QFileInfo::exists(secondPath));
+        }
         first.signOutByUi();
         QTRY_VERIFY(!QFileInfo::exists(firstPath));
         QVERIFY(QFileInfo::exists(secondPath));
@@ -3189,6 +3357,37 @@ private Q_SLOTS:
             QTRY_COMPARE(saved.count(), 1); QVERIFY(saved.first().at(0).toBool());
             QVERIFY(server.requests.contains(qMakePair(QByteArray("GET"), path)));
         }
+    }
+
+    void trashSelectorExcludesShares()
+    {
+        DriveServer server(true);
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        auto *tree = browser.findChild<QTreeView *>("driveFiles");
+        auto *spaces = browser.findChild<QComboBox *>("driveSpaces");
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+
+        browser.showShares();
+        QCOMPARE(spaces->currentText(), QStringLiteral("Shares"));
+        browser.showTrash();
+        QCOMPARE(spaces->count(), 2);
+        QCOMPARE(spaces->findText("Shares"), -1);
+        QVERIFY(spaces->findText("Personal") >= 0);
+        QVERIFY(spaces->findText("Team files") >= 0);
+        QTRY_VERIFY(server.requests.contains({"PROPFIND", "/dav/spaces/trash-bin/personal"}));
+        spaces->setCurrentIndex(spaces->findText("Team files"));
+        QTRY_VERIFY(server.requests.contains({"PROPFIND", "/dav/spaces/trash-bin/team"}));
+        for (const auto &request : server.requests) {
+            if (request.first == "PROPFIND" && request.second.startsWith("/dav/spaces/trash-bin/")) {
+                QVERIFY(request.second == "/dav/spaces/trash-bin/personal" || request.second == "/dav/spaces/trash-bin/team");
+            }
+        }
+        browser.showShares();
+        QCOMPARE(spaces->currentText(), QStringLiteral("Shares"));
     }
 
     void manageFilesFavoritesAndTrash()
@@ -3898,6 +4097,233 @@ private Q_SLOTS:
         QCOMPARE(model->index(projectsRow, 1).data().toString(), QLocale().formattedDataSize(1048576));
     }
 
+    void testFileVersionsDisplayAndActions()
+    {
+        auto *account = new Account(QUuid::createUuid(), QStringLiteral("test"), QUrl(QStringLiteral("http://localhost")));
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveFileBrowser browser(&state);
+        browser.resize(1000, 650);
+        browser.show();
+        auto *tree = browser.findChild<QTreeView *>(QStringLiteral("driveFiles"));
+        QVERIFY(tree);
+
+        // 1. Verify XML parsing of WebDAV versions multistatus
+        const QByteArray xml =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+            "<d:multistatus xmlns:d=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\">\n"
+            "  <d:response>\n"
+            "    <d:href>/dav/meta/file-123/v/</d:href>\n"
+            "    <d:propstat>\n"
+            "      <d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop>\n"
+            "      <d:status>HTTP/1.1 200 OK</d:status>\n"
+            "    </d:propstat>\n"
+            "  </d:response>\n"
+            "  <d:response>\n"
+            "    <d:href>/dav/meta/file-123/v/1728390000</d:href>\n"
+            "    <d:propstat>\n"
+            "      <d:prop>\n"
+            "        <d:getcontentlength>72704</d:getcontentlength>\n"
+            "        <d:getlastmodified>Thu, 08 Oct 2026 12:20:00 GMT</d:getlastmodified>\n"
+            "        <d:getetag>&quot;etag-v1&quot;</d:getetag>\n"
+            "        <d:resourcetype/>\n"
+            "      </d:prop>\n"
+            "      <d:status>HTTP/1.1 200 OK</d:status>\n"
+            "    </d:propstat>\n"
+            "  </d:response>\n"
+            "  <d:response>\n"
+            "    <d:href>/dav/meta/file-123/v/1726000000</d:href>\n"
+            "    <d:propstat>\n"
+            "      <d:prop>\n"
+            "        <d:getcontentlength>69632</d:getcontentlength>\n"
+            "        <d:getlastmodified>Wed, 10 Sep 2026 09:15:00 GMT</d:getlastmodified>\n"
+            "        <d:getetag>&quot;etag-v2&quot;</d:getetag>\n"
+            "        <d:resourcetype/>\n"
+            "      </d:prop>\n"
+            "      <d:status>HTTP/1.1 200 OK</d:status>\n"
+            "    </d:propstat>\n"
+            "  </d:response>\n"
+            "</d:multistatus>";
+
+        const auto versions = browser.parseVersionsMultistatus(xml, QUrl(QStringLiteral("http://localhost/dav/meta/file-123/v/")));
+        QCOMPARE(versions.size(), 2);
+        // Sorted newest first
+        QCOMPARE(versions.at(0).size, 72704);
+        QCOMPARE(versions.at(0).href, QStringLiteral("/dav/meta/file-123/v/1728390000"));
+        QCOMPARE(versions.at(1).size, 69632);
+        QCOMPARE(versions.at(1).href, QStringLiteral("/dav/meta/file-123/v/1726000000"));
+
+        // SEC-01 test: Malicious external origin must be rejected
+        const QByteArray evilXml =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+            "<d:multistatus xmlns:d=\"DAV:\">\n"
+            "  <d:response>\n"
+            "    <d:href>https://evil.com/dav/meta/file-123/v/999</d:href>\n"
+            "    <d:propstat>\n"
+            "      <d:prop><d:getcontentlength>123</d:getcontentlength><d:getlastmodified>Thu, 08 Oct 2026 12:20:00 GMT</d:getlastmodified></d:prop>\n"
+            "      <d:status>HTTP/1.1 200 OK</d:status>\n"
+            "    </d:propstat>\n"
+            "  </d:response>\n"
+            "</d:multistatus>";
+        const auto evilVersions = browser.parseVersionsMultistatus(evilXml, QUrl(QStringLiteral("http://localhost/dav/meta/file-123/v/")));
+        QCOMPARE(evilVersions.size(), 0);
+
+        // 2. Append file entry with fileid
+        QMap<QString, QString> fileProps{
+            {QStringLiteral("resourcetype"), QString()},
+            {QStringLiteral("getcontentlength"), QStringLiteral("72704")},
+            {QStringLiteral("getlastmodified"), QStringLiteral("Thu, 08 Oct 2026 12:20:00 GMT")},
+            {QStringLiteral("permissions"), QStringLiteral("RDNVW")},
+            {QStringLiteral("fileid"), QStringLiteral("file-123")},
+            {QStringLiteral("id"), QStringLiteral("file-123")}
+        };
+        browser.appendEntry(QStringLiteral("/dav/personal/Project_Flowchart.xlsx"), fileProps, QUrl(QStringLiteral("http://localhost/dav/personal")));
+
+        // Select the file and open details
+        auto *model = tree->model();
+        QCOMPARE(model->rowCount(), 1);
+        tree->selectionModel()->select(model->index(0, 0), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+
+        auto *detailsAct = browser.findChild<QAction *>(QStringLiteral("driveDetailsAction"));
+        QVERIFY(detailsAct);
+        detailsAct->trigger();
+
+        auto *versionsBtn = browser.findChild<QPushButton *>(QStringLiteral("driveDetailsVersions"));
+        QVERIFY(versionsBtn);
+        QVERIFY(!versionsBtn->isHidden());
+
+        // 3. Switch to Versions page
+        browser.showFileDetailsVersions(true, true);
+
+        auto *pages = browser.findChild<QStackedWidget *>(QStringLiteral("driveDetailsPages"));
+        auto *title = browser.findChild<QLabel *>(QStringLiteral("driveDetailsTitle"));
+        auto *back = browser.findChild<QToolButton *>(QStringLiteral("driveDetailsBack"));
+        QVERIFY(pages && title && back);
+        QCOMPARE(title->text(), QStringLiteral("Versions"));
+        QVERIFY(back->isVisible());
+
+        // 4. Test clicking back returns to Overview
+        QTest::mouseClick(back, Qt::LeftButton);
+        QCOMPARE(pages->currentIndex(), 0);
+        QVERIFY(!back->isVisible());
+
+        // 5. Append a folder and verify Versions button is hidden for folders
+        QMap<QString, QString> folderProps{
+            {QStringLiteral("resourcetype"), QStringLiteral("collection")},
+            {QStringLiteral("permissions"), QStringLiteral("RDNVCKW")}
+        };
+        browser.appendEntry(QStringLiteral("/dav/personal/FolderA"), folderProps, QUrl(QStringLiteral("http://localhost/dav/personal")));
+        int folderRow = (model->index(0, 0).data().toString() == QStringLiteral("FolderA")) ? 0 : 1;
+        tree->selectionModel()->select(model->index(folderRow, 0), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        QVERIFY(versionsBtn->isHidden());
+
+        // 6. Populate versions into the panel and test widgets
+        int fileRow = (folderRow == 0) ? 1 : 0;
+        tree->selectionModel()->select(model->index(fileRow, 0), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        browser.showFileDetailsVersions(true, true);
+        browser.setVersions(versions, QStringLiteral("Project_Flowchart.xlsx"), QStringLiteral("Project_Flowchart.xlsx"), QUrl(), true);
+
+        auto *restoreBtn = browser.findChild<QPushButton *>(QStringLiteral("versionRestoreBtn"));
+        auto *downloadBtn = browser.findChild<QPushButton *>(QStringLiteral("versionDownloadBtn"));
+        QVERIFY(restoreBtn);
+        QVERIFY(downloadBtn);
+        QVERIFY(restoreBtn->isVisible());
+        QVERIFY(restoreBtn->isEnabled());
+        QVERIFY(downloadBtn->isVisible());
+
+        // SEC-04 test: Read-only files must disable the Restore button
+        browser.setVersions(versions, QStringLiteral("Project_Flowchart.xlsx"), QStringLiteral("Project_Flowchart.xlsx"), QUrl(), false);
+        restoreBtn = browser.findChild<QPushButton *>(QStringLiteral("versionRestoreBtn"));
+        QVERIFY(restoreBtn);
+        QVERIFY(!restoreBtn->isEnabled());
+
+        // Reset to canRestore = true for visual rendering
+        browser.setVersions(versions, QStringLiteral("Project_Flowchart.xlsx"), QStringLiteral("Project_Flowchart.xlsx"), QUrl(), true);
+
+        // Save screenshot of the versions view for user verification
+        auto *fileDetails = browser.findChild<QWidget *>(QStringLiteral("driveDetailsPages"))->parentWidget();
+        if (fileDetails) {
+            const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+            QPixmap pix(fileDetails->size());
+            pix.fill(dark ? QColor(0x18, 0x1A, 0x1F) : Qt::white);
+            QPainter p(&pix);
+            fileDetails->render(&p);
+            p.end();
+            pix.save(QStringLiteral("/Users/tochratana/.gemini/antigravity/brain/00705d74-3dbe-4bb0-962c-114a4aadd1a1/versions-panel.png"));
+        }
+    }
+
+    void testAboutDialogStyling()
+    {
+        AboutDialog dialog;
+        dialog.resize(900, 650);
+        dialog.show();
+        QTest::qWait(50);
+
+        auto *card = dialog.findChild<QFrame *>(QStringLiteral("aboutCard"));
+        QVERIFY(card);
+        auto *name = dialog.findChild<QLabel *>(QStringLiteral("aboutAppName"));
+        QVERIFY(name);
+        QCOMPARE(name->text(), QStringLiteral("UDrive"));
+
+        auto *badge = dialog.findChild<QLabel *>(QStringLiteral("aboutVersionBadge"));
+        QVERIFY(badge);
+
+        auto *pages = dialog.findChild<QStackedWidget *>(QStringLiteral("aboutPages"));
+        QVERIFY(pages);
+        QCOMPARE(pages->currentIndex(), 0);
+
+        auto *tabDiag = dialog.findChild<QPushButton *>(QStringLiteral("tabBtnDiag"));
+        QVERIFY(tabDiag);
+        QTest::mouseClick(tabDiag, Qt::LeftButton);
+        QCOMPARE(pages->currentIndex(), 1);
+
+        auto *copyBtn = dialog.findChild<QPushButton *>(QStringLiteral("aboutCopyDiagBtn"));
+        QVERIFY(copyBtn);
+
+        const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+        // 1. Capture Diagnostics tab
+        QPixmap diagPix(dialog.size());
+        diagPix.fill(dark ? QColor(0x18, 0x1A, 0x1F) : Qt::white);
+        QPainter pDiag(&diagPix);
+        dialog.render(&pDiag);
+        pDiag.end();
+        diagPix.save(QStringLiteral("/Users/tochratana/.gemini/antigravity/brain/00705d74-3dbe-4bb0-962c-114a4aadd1a1/about-dialog-diag.png"));
+
+        // 2. Switch back to Overview for the Overview screenshot
+        auto *tabAbout = dialog.findChild<QPushButton *>(QStringLiteral("tabBtnAbout"));
+        QVERIFY(tabAbout);
+        QTest::mouseClick(tabAbout, Qt::LeftButton);
+        QCOMPARE(pages->currentIndex(), 0);
+
+        QPixmap pix(dialog.size());
+        pix.fill(dark ? QColor(0x18, 0x1A, 0x1F) : Qt::white);
+        QPainter p(&pix);
+        dialog.render(&p);
+        p.end();
+        pix.save(QStringLiteral("/Users/tochratana/.gemini/antigravity/brain/00705d74-3dbe-4bb0-962c-114a4aadd1a1/about-dialog.png"));
+
+        // Verify GeneralSettings footer labels
+        GeneralSettings genSettings;
+        genSettings.resize(800, 600);
+        genSettings.show();
+        QTest::qWait(50);
+        auto *copyLbl = genSettings.findChild<QLabel *>(QStringLiteral("copyrightLabel"));
+        QVERIFY(copyLbl);
+        QCOMPARE(copyLbl->text(), QStringLiteral("Unity Workspace"));
+        auto *aboutBtn = genSettings.findChild<QPushButton *>(QStringLiteral("about_pushButton"));
+        QVERIFY(aboutBtn);
+        QCOMPARE(aboutBtn->text(), QStringLiteral("About UDrive"));
+
+        QPixmap genPix(genSettings.size());
+        genPix.fill(dark ? QColor(0x18, 0x1A, 0x1F) : Qt::white);
+        QPainter pGen(&genPix);
+        genSettings.render(&pGen);
+        pGen.end();
+        genPix.save(QStringLiteral("/Users/tochratana/.gemini/antigravity/brain/00705d74-3dbe-4bb0-962c-114a4aadd1a1/general-settings.png"));
+    }
+
     void emptyTrash_data()
     {
         QTest::addColumn<QString>("scenario");
@@ -4565,6 +4991,164 @@ private Q_SLOTS:
             QVERIFY(next->findChild<QLineEdit *>("shareUserInput")->text().isEmpty());
             QTRY_VERIFY(server.shareQueries.last().queryItemValue("path", QUrl::FullyDecoded) == QStringLiteral("/denied.txt"));
         }
+    }
+
+    void actionResultToasts_data()
+    {
+        QTest::addColumn<bool>("dark");
+        QTest::newRow("light") << false;
+        QTest::newRow("dark") << true;
+    }
+
+    void actionResultToasts()
+    {
+        QFETCH(bool, dark);
+        const QPalette previous = qApp->palette();
+        const auto restore = qScopeGuard([&] { qApp->setPalette(previous); });
+        auto palette = previous;
+        palette.setColor(QPalette::Window, QColor(dark ? "#292929" : "#FFFFFF"));
+        palette.setColor(QPalette::WindowText, QColor(dark ? "#EDEEF0" : "#202923"));
+        qApp->setPalette(palette);
+        DriveServer server;
+        server.existingShares = {QJsonObject{{"id", "person-1"}, {"share_type", 0}, {"share_with_displayname", "Alice"}, {"permissions", 1}}};
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        QWidget window;
+        auto *layout = new QVBoxLayout(&window);
+        auto *browser = new UDriveFileBrowser(&state, &window);
+        layout->addWidget(browser);
+        window.resize(1180, 820);
+        window.show();
+        auto *tree = browser->findChild<QTreeView *>("driveFiles");
+        QTRY_COMPARE(tree->model()->rowCount(), 7);
+        QVERIFY(!window.findChild<QFrame *>("udriveToast"));
+        browser->findChild<QAction *>("driveViewCondensed")->trigger();
+        QPointer<QFrame> notice = window.findChild<QFrame *>("udriveToast");
+        QVERIFY(notice && notice->isVisible());
+        QCOMPARE(notice->findChild<QLabel *>("udriveToastMessage")->text(), QStringLiteral("Preference saved."));
+        QVERIFY(window.contentsRect().contains(notice->geometry()));
+        QVERIFY(window.grab().save(dark ? "/tmp/udrive-toast-dark.png" : "/tmp/udrive-toast-light.png"));
+        QVERIFY(notice->grab().save(dark ? "/tmp/udrive-toast-dark-detail.png" : "/tmp/udrive-toast-light-detail.png"));
+        notice->findChild<QToolButton *>("udriveToastClose")->click();
+        QTRY_VERIFY(!window.findChild<QFrame *>("udriveToast"));
+        QVERIFY(select(tree, "a&b.txt").isValid());
+        browser->findChild<QAction *>("driveShareAction")->trigger();
+        auto *panel = browser->findChild<UDriveShareDialog *>();
+        QVERIFY(panel);
+        QTRY_VERIFY(panel->findChild<QComboBox *>("sharePersonRoleCombo"));
+        auto *input = panel->findChild<QLineEdit *>("shareUserInput");
+        input->setFocus();
+        auto *role = panel->findChild<QComboBox *>("sharePersonRoleCombo");
+        role->setCurrentIndex(1);
+        Q_EMIT role->activated(1);
+        QTRY_COMPARE(server.shareQueries.size(), 2);
+        notice = window.findChild<QFrame *>("udriveToast");
+        QVERIFY(notice && notice->isVisible());
+        QCOMPARE(notice->property("noticeKind").toString(), QStringLiteral("success"));
+        QCOMPARE(notice->findChild<QLabel *>("udriveToastMessage")->text(), QStringLiteral("Access updated."));
+        QVERIFY(panel->findChild<QLabel *>("shareStatusLabel")->isHidden());
+        QVERIFY(!notice->isAncestorOf(QApplication::focusWidget()));
+        window.resize(800, 650);
+        QTRY_VERIFY(window.contentsRect().contains(notice->geometry()));
+        server.sharePutStatus = 403;
+        role = panel->findChild<QComboBox *>("sharePersonRoleCombo");
+        role->setCurrentIndex(0);
+        Q_EMIT role->activated(0);
+        QTRY_COMPARE(server.shareQueries.size(), 3);
+        notice = window.findChild<QFrame *>("udriveToast");
+        QVERIFY(notice && notice->isVisible());
+        QCOMPARE(notice->property("noticeKind").toString(), QStringLiteral("error"));
+        QVERIFY(notice->findChild<QLabel *>("udriveToastMessage")->text().contains("Could not update access"));
+        browser->hide();
+        QTRY_VERIFY(!notice || !notice->isVisible());
+    }
+
+    void toastTimeoutAndPlainText()
+    {
+        QWidget window;
+        QVBoxLayout layout(&window);
+        QLineEdit input;
+        layout.addWidget(&input);
+        window.resize(500, 300);
+        window.show();
+        input.setFocus();
+        QTRY_COMPARE(QApplication::focusWidget(), &input);
+        QTest::mouseMove(&window, QPoint(5, 5));
+        const QString message = QStringLiteral("Saved <b>Report.txt</b> & notes.");
+        UDriveToast::showMessage(&window, message);
+        QPointer<QFrame> notice = window.findChild<QFrame *>("udriveToast");
+        QVERIFY(notice);
+        auto *text = notice->findChild<QLabel *>("udriveToastMessage");
+        QCOMPARE(text->text(), message);
+        QCOMPARE(text->textFormat(), Qt::PlainText);
+        QCOMPARE(QApplication::focusWidget(), &input);
+
+        // Capture Success Toast (matching user scenario: Public link copied to clipboard)
+        UDriveToast::showMessage(&window, QStringLiteral("Public link copied to clipboard."), UDriveToast::Kind::Success);
+        notice = window.findChild<QFrame *>("udriveToast");
+        QVERIFY(notice);
+        QTest::qWait(50);
+        notice->grab().save(QStringLiteral("/Users/tochratana/.gemini/antigravity/brain/00705d74-3dbe-4bb0-962c-114a4aadd1a1/toast-centered.png"));
+
+        UDriveToast::dismiss(&window);
+        UDriveToast::showMessage(&window, message);
+        notice = window.findChild<QFrame *>("udriveToast");
+        QVERIFY(notice);
+        QTRY_VERIFY_WITH_TIMEOUT(!notice, 7500);
+        UDriveToast::showMessage(&window, QStringLiteral("Could not save."), UDriveToast::Kind::Error);
+        notice = window.findChild<QFrame *>("udriveToast");
+        QTest::qWait(6500);
+        QVERIFY(notice && notice->isVisible());
+        notice->findChild<QToolButton *>("udriveToastClose")->click();
+        QTRY_VERIFY(!notice);
+    }
+
+    void shareIdsRemainIntact_data()
+    {
+        QTest::addColumn<QString>("shareId");
+        QTest::addColumn<int>("shareType");
+        for (int type : {0, 3}) {
+            for (const auto &id : {QStringLiteral("person-1"), QStringLiteral("storage:space:share"),
+                     QStringLiteral("literal%3Aid"), QStringLiteral("share?query#fragment")}) {
+                QTest::newRow(qPrintable(QString::number(type) + QLatin1Char(':') + id)) << id << type;
+            }
+        }
+    }
+
+    void shareIdsRemainIntact()
+    {
+        QFETCH(QString, shareId);
+        QFETCH(int, shareType);
+        DriveServer server;
+        server.rejectUnknownShareId = true;
+        server.existingShares = {QJsonObject{{"id", shareId}, {"share_type", shareType},
+            {"share_with_displayname", "Alice"}, {"permissions", 1}, {"url", server.url("/s/test-link").toString()}}};
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account);
+        UDriveShareDialog panel(&state, "Report.pdf", false, "/Report.pdf", {}, "personal", nullptr,
+            UDriveShareDialog::Target::File, UDriveShareDialog::Presentation::Sidebar);
+        panel.show();
+        const auto roleName = shareType == 3 ? "publicLinkRoleCombo" : "sharePersonRoleCombo";
+        QTRY_VERIFY(panel.findChild<QComboBox *>(roleName));
+        auto *role = panel.findChild<QComboBox *>(roleName);
+        role->setCurrentIndex(1);
+        Q_EMIT role->activated(1);
+        QTRY_COMPARE(server.sharePuts.size(), 1);
+        QTRY_COMPARE(server.shareQueries.size(), 2);
+        QCOMPARE(server.existingShares.first().toObject().value("permissions").toInt(), 15);
+        QTRY_COMPARE(panel.findChild<QComboBox *>(roleName)->currentData().toInt(), 15);
+        const QString endpoint = QStringLiteral("/ocs/v1.php/apps/files_sharing/api/v1/shares/") + shareId;
+        QVERIFY(server.requests.contains({"PUT", endpoint}));
+        if (shareType == 3) panel.findChild<QAction *>("publicLinkDelete")->trigger();
+        else panel.findChild<QPushButton *>("shareRemovePerson")->click();
+        QTRY_COMPARE(server.shareDeletions.size(), 1);
+        QCOMPARE(server.shareDeletions.first(), shareId);
+        QTRY_VERIFY(server.existingShares.isEmpty());
+        QVERIFY(server.requests.contains({"DELETE", endpoint}));
     }
 
     void sharePermissionFailureRestoresRole()
@@ -6218,13 +6802,17 @@ private Q_SLOTS:
         server.workspaceMutationDelay = 150;
         QTimer::singleShot(0, &browser, [&] { auto *input = browser.findChild<UDriveInputDialog *>(); QVERIFY(input); input->findChild<QLineEdit *>()->setText(QStringLiteral("2.5")); input->accept(); });
         quota->trigger(); QVERIFY(!quota->isEnabled()); QVERIFY(!table->isEnabled()); QVERIFY(!browser.findChild<QLineEdit *>("driveWorkspaceSearch")->isEnabled());
-        QTRY_VERIFY(count->text().contains(QStringLiteral("saved")));
+        QTRY_VERIFY(browser.findChild<QLabel *>("udriveToastMessage")
+            && browser.findChild<QLabel *>("udriveToastMessage")->text() == QStringLiteral("Workspace changes saved."));
         QCOMPARE(QJsonDocument::fromJson(server.requestBodies.value("PATCH /graph/v1.0/drives/alpha")).object().value("quota").toObject().value("total").toInteger(), 2500000000LL);
         QTRY_VERIFY(table->isEnabled());
         table->selectionModel()->select(table->model()->index(0, 0), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
         server.workspaceMutationStatus = 403;
         QTimer::singleShot(0, &browser, [&] { auto *input = browser.findChild<UDriveInputDialog *>(); QVERIFY(input); input->findChild<QLineEdit *>()->setText(QStringLiteral("3")); input->accept(); });
-        quota->trigger(); QTRY_VERIFY(count->text().contains(QStringLiteral("Permission denied"))); QVERIFY(table->isEnabled());
+        quota->trigger();
+        QTRY_VERIFY(browser.findChild<QLabel *>("udriveToastMessage")
+            && browser.findChild<QLabel *>("udriveToastMessage")->text().contains(QStringLiteral("Permission denied")));
+        QVERIFY(table->isEnabled());
         QCOMPARE(server.extraDrives.first().toObject().value("quota").toObject().value("total").toInteger(), 2500000000LL);
         QVERIFY(server.authenticated);
     }

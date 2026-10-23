@@ -15,6 +15,8 @@
 #ifndef MIRALL_GENERALSETTINGS_H
 #define MIRALL_GENERALSETTINGS_H
 
+#include "owncloudguilib.h"
+
 #include <QMap>
 #include <QWidget>
 #include <QPointer>
@@ -34,7 +36,7 @@ namespace Ui {
  * @brief The GeneralSettings class
  * @ingroup gui
  */
-class GeneralSettings : public QWidget
+class OWNCLOUDGUI_EXPORT GeneralSettings : public QWidget
 {
     Q_OBJECT
 

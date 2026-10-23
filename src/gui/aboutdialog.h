@@ -13,8 +13,12 @@
  */
 #pragma once
 
+#include "owncloudguilib.h"
+
 #include <QDialog>
 
+class QLabel;
+class QPushButton;
 
 namespace OCC {
 
@@ -22,13 +26,13 @@ namespace Ui {
     class AboutDialog;
 }
 
-class AboutDialog : public QDialog
+class OWNCLOUDGUI_EXPORT AboutDialog : public QDialog
 {
     Q_OBJECT
 
 public:
     explicit AboutDialog(QWidget *parent = nullptr);
-    ~AboutDialog();
+    ~AboutDialog() override;
 
 private:
     void openBrowser(const QString &s);
@@ -36,7 +40,10 @@ private:
     void setupUpdaterWidget();
 
 private:
-    Ui::AboutDialog *ui;
+    Ui::AboutDialog *ui = nullptr;
+    QWidget *_updaterWidget = nullptr;
+    QLabel *_updateStateLabel = nullptr;
+    QPushButton *_restartButton = nullptr;
 };
 
-}
+} // namespace OCC

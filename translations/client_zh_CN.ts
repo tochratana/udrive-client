@@ -1739,8 +1739,56 @@
     <context>
         <name>OCC::LogBrowser</name>
         <message>
+            <source>Debug logging</source>
+            <translation>调试日志</translation>
+        </message>
+        <message>
+            <source>Save diagnostic logs to help troubleshoot sync issues.</source>
+            <translation>保存诊断日志，帮助排查同步问题。</translation>
+        </message>
+        <message>
+            <source>Keep logs private</source>
+            <translation>保护日志隐私</translation>
+        </message>
+        <message>
+            <source>Logs may contain sensitive information. Do not share them publicly.</source>
+            <translation>日志可能包含敏感信息，请勿公开分享。</translation>
+        </message>
+        <message>
+            <source>Logging options</source>
+            <translation>日志选项</translation>
+        </message>
+        <message>
+            <source>Enable debug logging</source>
+            <translation>启用调试日志</translation>
+        </message>
+        <message>
+            <source>Include HTTP traffic</source>
+            <translation>包含 HTTP 流量</translation>
+        </message>
+        <message>
+            <source>Log files to keep</source>
+            <translation>保留的日志文件数</translation>
+        </message>
+        <message>
+            <source>A new file is created for each sync run. Older logs are compressed.</source>
+            <translation>每次同步都会创建新文件，旧日志将被压缩。</translation>
+        </message>
+        <message>
+            <source>Log folder</source>
+            <translation>日志文件夹</translation>
+        </message>
+        <message>
+            <source>Settings are saved automatically. Command-line logging options take priority.</source>
+            <translation>设置会自动保存，命令行日志选项优先。</translation>
+        </message>
+        <message>
             <source>Open folder</source>
             <translation>打开文件夹</translation>
+        </message>
+        <message>
+            <source>Close</source>
+            <translation>关闭</translation>
         </message>
     </context>
     <context>
@@ -2126,6 +2174,14 @@
             <source>Could not remove workspace member. Try again.</source>
             <translation>无法移除工作区成员。请重试。</translation>
         </message>
+        <message>
+            <source>Workspace member added.</source>
+            <translation>已添加工作空间成员。</translation>
+        </message>
+        <message>
+            <source>Workspace member removed.</source>
+            <translation>已移除工作空间成员。</translation>
+        </message>
     </context>
     <context>
         <name>OCC::UDriveWorkspaceActions</name>
@@ -2239,6 +2295,21 @@
         <message>
             <source>Follows macOS &amp; OS settings</source>
             <translation>跟随 macOS 及操作系统设置</translation>
+        </message>
+    </context>
+    <context>
+        <name>UDriveToast</name>
+        <message>
+            <source>Preference saved.</source>
+            <translation>偏好设置已保存。</translation>
+        </message>
+        <message>
+            <source>Notification</source>
+            <translation>通知</translation>
+        </message>
+        <message>
+            <source>Dismiss notification</source>
+            <translation>关闭通知</translation>
         </message>
     </context>
 </TS>

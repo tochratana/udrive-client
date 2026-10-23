@@ -583,6 +583,11 @@ QString FileSystem::createPortableFileName(const QString &path, const QString &f
     // remove eventual trailing whitespace after the resize
     tmp = tmp.trimmed();
 
+    // Reject names that would select the base directory or its parent after
+    // normalization, including names that became dots after truncation.
+    if (tmp.isEmpty() || tmp == QLatin1String(".") || tmp == QLatin1String("..") || tmp.contains(QChar::Null)) {
+        return {};
+    }
     return QDir::cleanPath(path + QLatin1Char('/') + tmp);
 }
 

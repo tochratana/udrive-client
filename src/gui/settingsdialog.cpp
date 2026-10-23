@@ -1198,7 +1198,7 @@ void SettingsDialog::openNewFileMenu()
         return;
     }
     const QRectF bounds = button->mapRectToScene(button->boundingRect());
-    const QPoint position(qRound(bounds.left()), qRound(bounds.bottom()) + 4);
+    const QPoint position(qRound(bounds.left()), qRound(bounds.bottom()) + 8);
     files->showNewMenu(_ui->quickWidget->mapToGlobal(position), qRound(bounds.width()));
 }
 
@@ -1307,6 +1307,11 @@ void SettingsDialog::updateUDriveAppearance()
         "QStackedWidget#stack QMenu::item:selected { background: %4; color: %2; }"
         "QStackedWidget#stack QMenu::item:disabled { color: %5; }"
         "QStackedWidget#stack QMenu::separator { height: 1px; background: %3; margin: 5px 6px; }"
+        "QStackedWidget#stack QMenu#driveNewMenu { padding: 8px; border-radius: 12px; }"
+        "QStackedWidget#stack QMenu#driveNewMenu::item { min-height: 22px; padding: 7px 18px 7px 12px; margin: 1px 0; border-radius: 8px; font-size: 14px; font-weight: 500; }"
+        "QStackedWidget#stack QMenu#driveNewMenu::icon { left: 10px; }"
+        "QStackedWidget#stack QMenu#driveNewMenu::item:selected { background: %4; color: %11; }"
+        "QStackedWidget#stack QMenu#driveNewMenu::item:disabled { color: %5; }"
         "QCheckBox#driveSelectAll, QCheckBox#driveWorkspaceSelectAll, QCheckBox#driveWorkspaceHeaderSelectAll { color: %2; spacing: 8px; padding-right: 4px; }"
         "QCheckBox#driveSelectAll:disabled, QCheckBox#driveWorkspaceSelectAll:disabled, QCheckBox#driveWorkspaceHeaderSelectAll:disabled { color: %5; }"
         "QCheckBox#driveSelectAll::indicator, QCheckBox#driveWorkspaceSelectAll::indicator, QCheckBox#driveWorkspaceHeaderSelectAll::indicator { width: 18px; height: 18px; border: 1px solid #858585; border-radius: 4px; background: transparent; }"

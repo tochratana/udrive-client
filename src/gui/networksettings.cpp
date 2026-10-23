@@ -13,6 +13,7 @@
  */
 
 #include "networksettings.h"
+#include "udrivetoast.h"
 #include "networkinformation.h"
 #include "ui_networksettings.h"
 
@@ -224,6 +225,8 @@ void NetworkSettings::saveProxySettings()
     for (auto account : AccountManager::instance()->accounts()) {
         account->freshConnectionAttempt();
     }
+    if (!_ui->manualProxyRadioButton->isChecked() || !_ui->hostLineEdit->text().isEmpty())
+        UDriveToast::preferenceSaved(this);
 }
 
 void NetworkSettings::saveMeteredSettings()
@@ -231,6 +234,7 @@ void NetworkSettings::saveMeteredSettings()
     bool pauseSyncWhenMetered = _ui->pauseSyncWhenMeteredCheckbox->isChecked();
     ConfigFile().setPauseSyncWhenMetered(pauseSyncWhenMetered);
     FolderMan::instance()->scheduler()->setPauseSyncWhenMetered(pauseSyncWhenMetered);
+    UDriveToast::preferenceSaved(this);
 }
 
 void NetworkSettings::checkEmptyProxyHost()

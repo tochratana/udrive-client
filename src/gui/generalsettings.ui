@@ -236,7 +236,7 @@
          <cursorShape>ArrowCursor</cursorShape>
         </property>
         <property name="text">
-         <string notr="true">Copyright ownCloud GmbH (A Kiteworks Company)</string>
+         <string notr="true">Unity Workspace</string>
         </property>
         <property name="textInteractionFlags">
          <set>Qt::LinksAccessibleByMouse|Qt::TextSelectableByMouse</set>
@@ -246,7 +246,7 @@
       <item>
        <widget class="QPushButton" name="about_pushButton">
         <property name="text">
-         <string>About</string>
+         <string>About UDrive</string>
         </property>
        </widget>
       </item>

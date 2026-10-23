@@ -52,6 +52,7 @@ enum class Symbol {
     Cloud,
     Disable,
     Help,
+    Info,
     Bell,
     Calendar,
     Lock,
@@ -141,6 +142,11 @@ public:
             painter->drawEllipse(QRectF(3, 3, 18, 18));
             painter->drawPoint(QPointF(12, 17));
             line({{9, 9}, {9, 8}, {11, 7}, {14, 7}, {15, 9}, {14, 11}, {12, 12}, {12, 13}});
+            break;
+        case Symbol::Info:
+            painter->drawEllipse(QRectF(3, 3, 18, 18));
+            painter->drawPoint(QPointF(12, 8));
+            line({{12, 11}, {12, 17}});
             break;
         case Symbol::Play: {
             QPainterPath tri;
