@@ -22,6 +22,7 @@
 #include "networkjobs/checkserverjobfactory.h"
 #include "oauthhtmlpage.h"
 #include "theme.h"
+#include "libsync/configfile.h"
 
 #include <QDesktopServices>
 #include <QJsonArray>
@@ -152,6 +153,7 @@ void OAuth::httpReplyAndClose(QPointer<QTcpSocket> socket, bool success, const Q
 
 void OAuth::finalize(const QString &accessToken, const QString &refreshToken, const QUrl &messageUrl)
 {
+    _boundTokenEndpoint = _tokenEndpoint;
     const QString brand = Theme::instance()->appNameGUI();
     const QString loginSuccessfulTitle = tr("Successfully signed in");
     const QString loginSuccessfulHtml = tr("Now, explore %1 on desktop.").arg(brand);
@@ -418,8 +420,19 @@ void OAuth::fetchWellKnown()
         QJsonParseError err = {};
         QJsonObject data = QJsonDocument::fromJson(reply->readAll(), &err).object();
         if (err.error == QJsonParseError::NoError) {
-            _authEndpoint = QUrl::fromEncoded(data[QStringLiteral("authorization_endpoint")].toString().toUtf8());
-            _tokenEndpoint = QUrl::fromEncoded(data[QStringLiteral("token_endpoint")].toString().toUtf8());
+            const QUrl newAuth = QUrl::fromEncoded(data[QStringLiteral("authorization_endpoint")].toString().toUtf8());
+            const QUrl newToken = QUrl::fromEncoded(data[QStringLiteral("token_endpoint")].toString().toUtf8());
+            if (_isRefreshingToken && !_boundTokenEndpoint.isEmpty() && !newToken.isEmpty()
+                && newToken.host().compare(_boundTokenEndpoint.host(), Qt::CaseInsensitive) != 0) {
+                qCWarning(lcOauth) << "Refusing to update token endpoint during refresh: host changed from"
+                                   << _boundTokenEndpoint.host() << "to" << newToken.host();
+            } else {
+                _authEndpoint = newAuth;
+                _tokenEndpoint = newToken;
+                if (!_isRefreshingToken && !_tokenEndpoint.isEmpty() && _boundTokenEndpoint.isEmpty()) {
+                    _boundTokenEndpoint = _tokenEndpoint;
+                }
+            }
             _redirectUrl = QStringLiteral("http://127.0.0.1");
 
             const auto authMethods = data.value(QStringLiteral("token_endpoint_auth_methods_supported")).toArray();
@@ -495,6 +508,21 @@ AccountBasedOAuth::AccountBasedOAuth(Account *account, const OpenIdConfig& openI
     : OAuth(account->url(), account->davUser(), openIdConfig, account->accessManager(), parent)
     , _account(account)
 {
+    if (account) {
+        auto settings = ConfigFile::settingsWithGroup(QStringLiteral("Accounts"));
+        settings->beginGroup(account->groupIndex());
+        const QString saved = settings->value(QStringLiteral("auth_token_endpoint")).toString();
+        if (!saved.isEmpty()) {
+            _boundTokenEndpoint = QUrl(saved);
+        }
+        connect(this, &OAuth::result, this, [this](OAuth::Result res, const QString &, const QString &) {
+            if (res == OAuth::LoggedIn && _account && !_boundTokenEndpoint.isEmpty()) {
+                auto s = ConfigFile::settingsWithGroup(QStringLiteral("Accounts"));
+                s->beginGroup(_account->groupIndex());
+                s->setValue(QStringLiteral("auth_token_endpoint"), _boundTokenEndpoint.toString());
+            }
+        });
+    }
 }
 
 void AccountBasedOAuth::startAuthentication()
@@ -520,11 +548,13 @@ void AccountBasedOAuth::fetchWellKnown()
         } else {
             qCDebug(lcOauth) << "CheckServerJob failed, error:" << checkServerJob->errorMessage();
             if (_isRefreshingToken) {
-                Q_EMIT refreshError(checkServerJob->reply()->error(), checkServerJob->errorMessage());
+                _isRefreshingToken = false;
+                Q_EMIT refreshError(checkServerJob->reply() ? checkServerJob->reply()->error() : QNetworkReply::UnknownNetworkError, checkServerJob->errorMessage());
             } else {
                 Q_EMIT result(Error);
             }
         }
+        checkServerJob->deleteLater();
     });
 }
 
@@ -535,19 +565,34 @@ void AccountBasedOAuth::refreshAuthentication(const QString &refreshToken)
         return;
     }
 
-    // I don't see where this ever gets set to false - seems to rely on a one shot run before creating a new instance where the value
-    // is initialized to false. hm.
     _isRefreshingToken = true;
 
-
-    // make this a real function -
     auto refresh = [this, refreshToken] {
+        if (!_boundTokenEndpoint.isEmpty() && !_tokenEndpoint.isEmpty()
+            && _tokenEndpoint.host().compare(_boundTokenEndpoint.host(), Qt::CaseInsensitive) != 0) {
+            qCWarning(lcOauth) << "Refusing to refresh token: token endpoint host changed from"
+                               << _boundTokenEndpoint.host() << "to" << _tokenEndpoint.host();
+            _isRefreshingToken = false;
+            Q_EMIT refreshError(QNetworkReply::ProtocolInvalidOperationError, tr("Authorization server changed"));
+            return;
+        }
+        if (_boundTokenEndpoint.isEmpty() && !_tokenEndpoint.isEmpty()) {
+            _boundTokenEndpoint = _tokenEndpoint;
+            if (_account) {
+                auto settings = ConfigFile::settingsWithGroup(QStringLiteral("Accounts"));
+                settings->beginGroup(_account->groupIndex());
+                settings->setValue(QStringLiteral("auth_token_endpoint"), _boundTokenEndpoint.toString());
+            }
+        }
+
         auto reply = postTokenRequest({{QStringLiteral("grant_type"), QStringLiteral("refresh_token")}, {QStringLiteral("refresh_token"), refreshToken}});
         if (!reply) {
+            _isRefreshingToken = false;
             Q_EMIT refreshError(QNetworkReply::ProtocolInvalidOperationError, tr("Authentication endpoint requires HTTPS"));
             return;
         }
         connect(reply, &QNetworkReply::finished, this, [reply, refreshToken, this]() {
+            _isRefreshingToken = false;
             const auto jsonData = reply->readAll();
             QJsonParseError jsonParseError;
             const auto data = QJsonDocument::fromJson(jsonData, &jsonParseError).object().toVariantMap();
@@ -587,7 +632,7 @@ void AccountBasedOAuth::refreshAuthentication(const QString &refreshToken)
         });
     };
 
-    connect(this, &OAuth::fetchWellKnownFinished, this, refresh);
+    connect(this, &OAuth::fetchWellKnownFinished, this, refresh, Qt::SingleShotConnection);
 
     fetchWellKnown();
 }

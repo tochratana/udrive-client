@@ -13,6 +13,7 @@
  */
 
 #include "webfingerlookupadapter.h"
+#include "creds/localdevelopment.h"
 
 #include "abstractcorejob.h"
 #include "common/utility.h"
@@ -94,7 +95,16 @@ WebFingerLookupResult WebFingerLookupAdapter::getResult()
             continue;
         }
 
-        result.urls.append(QUrl::fromUserInput(href));
+        const QUrl url = QUrl::fromUserInput(href);
+        if (!url.isValid() || url.host().isEmpty()) {
+            continue;
+        }
+        if (url.scheme() != QStringLiteral("https") && !LocalDevelopment::allowsHttp(url)) {
+            qCWarning(lcWebFingerLookupAdapter) << "Rejected non-HTTPS WebFinger instance URL:" << url;
+            continue;
+        }
+
+        result.urls.append(url);
     }
     if (result.urls.isEmpty())
         result.error = tr("WebFinger lookup returned no links");

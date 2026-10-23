@@ -200,7 +200,13 @@ void PropagateUploadFileTUS::slotChunkFinished()
         return;
     }
 
+    const bool hasOffset = job->reply()->hasRawHeader(uploadOffset());
     const qint64 offset = job->reply()->rawHeader(uploadOffset()).toLongLong();
+    if (!hasOffset && _item->_size > 0) {
+        qCWarning(lcPropagateUploadTUS) << "Missing Upload-Offset header in TUS reply";
+        abortWithError(SyncFileItem::NormalError, tr("Server did not report an upload offset."));
+        return;
+    }
     propagator()->reportProgress(*_item, offset);
     _currentOffset = offset;
     // first response after a POST request
@@ -208,8 +214,7 @@ void PropagateUploadFileTUS::slotChunkFinished()
         _location = job->reply()->header(QNetworkRequest::LocationHeader).toUrl();
     }
 
-
-    _finished = offset == _item->_size;
+    _finished = hasOffset && (offset == _item->_size);
 
     // Check if the file still exists
     const QString fullFilePath(propagator()->fullLocalPath(_item->_file));
@@ -263,6 +268,10 @@ void PropagateUploadFileTUS::slotChunkFinished()
             _finished = true;
             _item->_remotePerm = RemotePermissions::fromServerString(map.value(QStringLiteral("permissions")));
             finalize(Utility::normalizeEtag(map.value(QStringLiteral("getetag"))), map.value(QStringLiteral("fileid")).toUtf8());
+        });
+        connect(check, &PropfindJob::finishedWithError, this, [this] {
+            qCWarning(lcPropagateUploadTUS) << "Propfind to fetch metadata after TUS upload failed";
+            abortWithError(SyncFileItem::NormalError, tr("Could not verify uploaded file metadata."));
         });
         check->start();
         return;

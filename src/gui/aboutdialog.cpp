@@ -455,7 +455,7 @@ void AboutDialog::openBrowser(const QString &s)
 
 void AboutDialog::openBrowserFromUrl(const QUrl &s)
 {
-    openBrowser(s.toString());
+    Utility::openBrowser(s, this);
 }
 
 void AboutDialog::setupUpdaterWidget()

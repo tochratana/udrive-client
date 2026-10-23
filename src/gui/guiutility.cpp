@@ -45,6 +45,10 @@ using namespace OCC;
 
 bool Utility::openBrowser(const QUrl &url, QWidget *errorWidgetParent)
 {
+    if (!url.isValid() || (url.scheme() != QLatin1String("https") && url.scheme() != QLatin1String("http"))) {
+        qCWarning(lcGuiUtility) << "Refusing to open browser for invalid or non-http(s) URL scheme:" << url;
+        return false;
+    }
     if (!QDesktopServices::openUrl(url)) {
         if (errorWidgetParent) {
             QMessageBox::warning(

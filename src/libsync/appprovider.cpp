@@ -85,6 +85,12 @@ bool AppProvider::open(Account *account, const QString &localPath, const QByteAr
         QObject::connect(job, &JsonJob::finishedSignal, [account, job, localPath] {
             if (job->httpStatusCode() == 200) {
                 const auto url = QUrl(job->data().value(QStringLiteral("uri")).toString());
+                if (!url.isValid() || (url.scheme() != QLatin1String("https") && url.scheme() != QLatin1String("http"))) {
+                    qCWarning(lcAppProvider) << "Refusing to open invalid or non-http(s) app-provider URL:" << url;
+                    Q_EMIT account->appProviderErrorOccured(
+                        QCoreApplication::translate("AppProvider", "Invalid web URL returned for %1.").arg(localPath));
+                    return;
+                }
                 const auto result = QDesktopServices::openUrl(url);
                 qCDebug(lcAppProvider) << "start browser" << url << result;
             } else {

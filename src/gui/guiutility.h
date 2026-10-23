@@ -33,13 +33,13 @@ namespace Utility {
      *
      * If launching the browser fails, display a message.
      */
-    bool openBrowser(const QUrl &url, QWidget *errorWidgetParent);
+    OWNCLOUDGUI_EXPORT bool openBrowser(const QUrl &url, QWidget *errorWidgetParent);
 
     /** Start composing a new email message.
      *
      * If launching the email program fails, display a message.
      */
-    bool openEmailComposer(const QString &subject, const QString &body,
+    OWNCLOUDGUI_EXPORT bool openEmailComposer(const QString &subject, const QString &body,
         QWidget *errorWidgetParent);
 
     /** Translated text for "making items always available locally" */

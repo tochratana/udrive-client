@@ -99,12 +99,21 @@ protected:
         // Redirects are validated by the account machinery, never internally
         // forwarded by QNAM to another transport without rechecking policy.
         req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+        const bool isAccountHost = _cred && _cred->_account
+            && req.url().host().compare(_cred->_account->url().host(), Qt::CaseInsensitive) == 0;
         if (!req.attribute(DontAddCredentialsAttribute).toBool()) {
-            // A retried request may still carry the old injected header.
-            // Always replace it, including when logout cleared our token.
-            req.setRawHeader("Authorization", QByteArray());
-            if (_cred && !_cred->_accessToken.isEmpty()) {
-                req.setRawHeader("Authorization", "Bearer " + _cred->_accessToken.toUtf8());
+            if (isAccountHost) {
+                // A retried request may still carry the old injected header.
+                // Always replace it, including when logout cleared our token.
+                req.setRawHeader("Authorization", QByteArray());
+                if (_cred && !_cred->_accessToken.isEmpty()) {
+                    req.setRawHeader("Authorization", "Bearer " + _cred->_accessToken.toUtf8());
+                }
+            } else {
+                // Do not send account bearer tokens to external download hosts (e.g. S3, CDNs)
+                if (req.rawHeader("Authorization").startsWith("Bearer ")) {
+                    req.setRawHeader("Authorization", QByteArray());
+                }
             }
         }
         return AccessManager::createRequest(op, req, outgoingData);

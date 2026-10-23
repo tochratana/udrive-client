@@ -4,6 +4,7 @@
 #include "accountstate.h"
 #include "libsync/account.h"
 #include "common/utility.h"
+#include "guiutility.h"
 #include "udrivecombobox.h"
 #include "udriveicons.h"
 #include "udrivepopup.h"
@@ -202,7 +203,7 @@ UDriveAdminWidget::UDriveAdminWidget(AccountState *state, QWidget *parent)
     headingRow->addWidget(web); layout->addLayout(headingRow);
     connect(web, &QPushButton::clicked, this, [this] {
         if (_state && _state->account() && _api->available())
-            QDesktopServices::openUrl(Utility::concatUrlPath(_state->account()->url(), QStringLiteral("admin-settings")));
+            Utility::openBrowser(Utility::concatUrlPath(_state->account()->url(), QStringLiteral("admin-settings")), this);
     });
     layout->addWidget(label(tr("Manage your server’s users, groups, and workspaces."), this));
     _tabs = new QTabBar(this); _tabs->setObjectName(QStringLiteral("driveAdminTabs")); _tabs->setExpanding(false); _tabs->setDrawBase(false);

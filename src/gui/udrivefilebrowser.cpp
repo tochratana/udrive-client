@@ -29,6 +29,7 @@
 #include "libsync/networkjobs.h"
 #include "libsync/networkjobs/jsonjob.h"
 #include "common/utility.h"
+#include "guiutility.h"
 
 #include <QComboBox>
 #include <QCompleter>
@@ -4027,8 +4028,8 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _learnWorkspacesButton->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Help));
     _learnWorkspacesButton->setIconSize(QSize(16, 16));
     _learnWorkspacesButton->hide();
-    connect(_learnWorkspacesButton, &QPushButton::clicked, this, [] {
-        QDesktopServices::openUrl(QUrl(QStringLiteral("https://unity-workspace.com/docs")));
+    connect(_learnWorkspacesButton, &QPushButton::clicked, this, [this] {
+        Utility::openBrowser(QUrl(QStringLiteral("https://unity-workspace.com/docs")), this);
     });
     headingRow->addWidget(_learnWorkspacesButton);
     _sharesNav = new QWidget(this);
@@ -4865,8 +4866,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         QUrl targetUrl = item.isValid() ? item.data(LinkRole).toUrl() : QUrl();
         if (targetUrl.scheme() != QStringLiteral("https") && targetUrl.scheme() != QStringLiteral("http"))
             targetUrl = _webUrl;
-        if (targetUrl.scheme() == QStringLiteral("https") || targetUrl.scheme() == QStringLiteral("http"))
-            QDesktopServices::openUrl(targetUrl);
+        Utility::openBrowser(targetUrl, this);
     });
     connect(FolderMan::instance(), &FolderMan::folderListChanged, this, &UDriveFileBrowser::updateActions);
     connect(FolderMan::instance(), &FolderMan::folderSyncStateChange, this, &UDriveFileBrowser::updateActions);
@@ -5751,12 +5751,22 @@ void UDriveFileBrowser::downloadVersion(const FileVersionItem &version, const QS
     job->setTimeout(std::chrono::seconds(120));
 
     job->addNewReplyHook([saveFile, writeError](QNetworkReply *reply) {
-        if (!saveFile->open(QIODevice::WriteOnly)) {
-            *writeError = saveFile->errorString();
-            return;
+        if (saveFile->isOpen()) {
+            saveFile->cancelWriting();
         }
+        writeError->clear();
+
         connect(reply, &QNetworkReply::readyRead, reply, [reply, saveFile, writeError] {
-            if (!writeError->isEmpty() || !saveFile->isOpen()) return;
+            if (!writeError->isEmpty()) return;
+            const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (status != 0 && (status < 200 || status >= 300)) return;
+            if (!saveFile->isOpen()) {
+                if (!saveFile->open(QIODevice::WriteOnly)) {
+                    *writeError = saveFile->errorString();
+                    reply->abort();
+                    return;
+                }
+            }
             const QByteArray chunk = reply->readAll();
             if (saveFile->write(chunk) != chunk.size()) {
                 *writeError = saveFile->errorString();
@@ -5768,12 +5778,20 @@ void UDriveFileBrowser::downloadVersion(const FileVersionItem &version, const QS
     connect(job, &AbstractNetworkJob::finishedSignal, this, [this, job, targetPath, saveFile, writeError] {
         if (job->reply() && job->reply()->error() == QNetworkReply::NoError
             && job->httpStatusCode() >= 200 && job->httpStatusCode() < 300
-            && writeError->isEmpty() && saveFile->isOpen() && saveFile->commit()) {
-            showResult(tr("Downloaded “%1”.").arg(QFileInfo(targetPath).fileName()));
-        } else {
-            if (saveFile->isOpen()) saveFile->cancelWriting();
-            showResult(writeError->isEmpty() ? tr("Could not download version.") : tr("Could not write downloaded file: %1").arg(*writeError), false);
+            && writeError->isEmpty()) {
+            if (!saveFile->isOpen()) {
+                // If the downloaded file is 0 bytes, readyRead was never emitted; open it now so commit succeeds.
+                if (!saveFile->open(QIODevice::WriteOnly)) {
+                    *writeError = saveFile->errorString();
+                }
+            }
+            if (writeError->isEmpty() && saveFile->commit()) {
+                showResult(tr("Downloaded “%1”.").arg(QFileInfo(targetPath).fileName()));
+                return;
+            }
         }
+        if (saveFile->isOpen()) saveFile->cancelWriting();
+        showResult(writeError->isEmpty() ? tr("Could not download version.") : tr("Could not write downloaded file: %1").arg(*writeError), false);
     });
     job->start();
 }
@@ -6265,7 +6283,7 @@ void UDriveFileBrowser::workspaceAction(const QString &action, const QList<OpenA
     } else if (action == QStringLiteral("web") || action == QStringLiteral("link")) {
         const QUrl url(drive.getWebUrl().isEmpty() ? drive.getRoot().getWebUrl() : drive.getWebUrl());
         if (url.scheme() != QStringLiteral("https") && url.scheme() != QStringLiteral("http")) return;
-        if (action == QStringLiteral("web")) QDesktopServices::openUrl(url);
+        if (action == QStringLiteral("web")) Utility::openBrowser(url, this);
         else { QApplication::clipboard()->setText(url.toString()); showResult(tr("Link copied to clipboard.")); }
     } else if (action == QStringLiteral("details")) {
         auto *dialog = new QDialog(this); dialog->setWindowTitle(tr("Details")); dialog->resize(500, 350); styleWorkspaceDialog(dialog);

@@ -91,6 +91,9 @@ Q_SIGNALS:
 protected:
 
     QUrl _serverUrl;
+    QUrl _boundTokenEndpoint;
+    QUrl _authEndpoint;
+    QUrl _tokenEndpoint;
     QString _davUser;
     OpenIdConfig _openIdConfig;
     QNetworkAccessManager *_networkAccessManager;
@@ -126,8 +129,6 @@ private:
 
     bool _wellKnownFinished = false;
 
-    QUrl _authEndpoint;
-    QUrl _tokenEndpoint;
     QString _redirectUrl;
     QByteArray _pkceCodeVerifier;
     QByteArray _state;
