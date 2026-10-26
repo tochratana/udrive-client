@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Hannah von Reth <hannah.vonreth@owncloud.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -14,6 +17,7 @@
 
 #include "space.h"
 
+#include "common/utility.h"
 #include "libsync/graphapi/spacesmanager.h"
 #include "libsync/networkjobs.h"
 #include "libsync/networkjobs/resources.h"
@@ -34,6 +38,7 @@ const auto personalC = QLatin1String("personal");
 // in play they most definitely are not. This concept could theoretically extend to other folders so we need to index
 // space id against account id for many operations.
 const auto sharesIdC = QLatin1String("a0ca6a90-a365-4782-871e-d44447bbc668$a0ca6a90-a365-4782-871e-d44447bbc668");
+
 }
 
 Space::Space(SpacesManager *spacesManager, const OpenAPI::OAIDrive &drive, const bool hasManyPersonalSpaces)
@@ -58,18 +63,15 @@ QUuid Space::accountId() const
 
 bool Space::setDrive(const OpenAPI::OAIDrive &drive)
 {
-
     // first config naturally has an empty drive - reality check that updated drives are always valid
     Q_ASSERT(drive.isValid());
 
-    QString curTag = _drive.getRoot().getETag();
-    QString newTag = drive.getRoot().getETag();
-    Q_ASSERT(!newTag.isEmpty());
-    // the tag should change when the space is edited on the server. I verified that it changes on space rename as well
-    // as on changing the space image so we may have further wrinkles if there is an error in logic server side, but for now
-    // we want to reduce updates to "only when something changed" else everything is auto-refreshed periodically (eg every 30s)
-    if (curTag == newTag)
+    // Workspace metadata (including subtitles, permissions and special-file URLs)
+    // can change without a new root-directory ETag.
+    if (_drive.asJsonObject() == drive.asJsonObject()) {
+        _image->update(); // Retry a failed image fetch on the next catalog refresh.
         return false;
+    }
 
     _drive = drive;
     _image->update();
@@ -199,31 +201,95 @@ QUrl SpaceImage::qmlImageUrl() const
 // see the FolderItemUpdater for the example ick.
 void SpaceImage::update()
 {
-    const auto &special = _space->getSpecialItems();
-    const auto img = std::find_if(special.cbegin(), special.cend(), [](const auto &it) { return it.getSpecialFolder().getName() == QLatin1String("image"); });
-    if (img != special.cend())
-    {
-        // issue 12057: verified the image etag does change when the space's icon has been updated via the web interface
-        // check the etag before updating the members and creating the job. This should eliminate *many* pointless resource jobs which
-        // will exacerbate whatever is making the app crash when the space tries to clean up it's child jobs and one is already gone
-        QString newEtag = Utility::normalizeEtag(img->getETag());
-        if (_etag == newEtag)
-            return;
-
-        _etag = newEtag;
-        _url = QUrl(img->getWebDavUrl());
-
-        // todo DC-150: this job should run in the spaces manager, then just set the image on this spaceImage object. We don't need all these deps floating
-        // around at every level and we *definitely* don't want the spaces manager to hand out the account to whoever wants it
-        auto job = _space->_spaceManager->account()->resourcesCache()->makeGetJob(_url, this);
-
-        QObject::connect(job, &SimpleNetworkJob::finishedSignal, _space, [job, this] {
-            if (job->httpStatusCode() == 200) {
-                _image = job->asIcon();
-                job->deleteLater();
-                emit imageChanged();
-            }
-        });
-        job->start();
+    if (!_space || !_space->_spaceManager) {
+        return;
     }
+
+    const auto &special = _space->getSpecialItems();
+    const auto img = std::find_if(special.cbegin(), special.cend(), [](const auto &it) {
+        return it.getSpecialFolder().getName() == QLatin1String("image");
+    });
+
+    if (img == special.cend()) {
+        if (!_image.isNull() || !_etag.isEmpty() || !_url.isEmpty()) {
+            ++_generation; // Ignore any download still in flight for the removed image.
+            _image = QIcon();
+            _etag.clear();
+            _url.clear();
+            _loading = false;
+            emit imageChanged();
+        }
+        return;
+    }
+
+    // Determine the new ETag / signature for this image
+    QString newEtag = Utility::normalizeEtag(img->getETag());
+    if (newEtag.isEmpty()) {
+        newEtag = img->getId() + QLatin1Char(':') + img->getName();
+    }
+
+    auto *account = _space->_spaceManager->account();
+    if (!account || !account->resourcesCache()) {
+        return;
+    }
+
+    QUrl downloadUrl;
+    if (!img->getWebDavUrl().isEmpty()) {
+        downloadUrl = QUrl(img->getWebDavUrl());
+        if (downloadUrl.isRelative()) {
+            downloadUrl = Utility::concatUrlPath(account->url(), img->getWebDavUrl());
+        }
+    }
+
+    if (!downloadUrl.isValid() || downloadUrl.isEmpty()) {
+        QUrl baseDav = _space->webDavUrl();
+        if (!baseDav.isValid() || baseDav.isEmpty() || baseDav.isRelative()) {
+            const QString rootDavStr = _space->_drive.getRoot().getWebDavUrl().isEmpty()
+                ? (QStringLiteral("dav/spaces/") + _space->id())
+                : _space->_drive.getRoot().getWebDavUrl();
+            baseDav = Utility::concatUrlPath(account->url(), rootDavStr);
+        }
+
+        const QString imageName = img->getName().isEmpty() ? QStringLiteral("image.png") : img->getName();
+        const QString relativePath = imageName.startsWith(QLatin1String(".space/"))
+            ? imageName
+            : (QStringLiteral(".space/") + imageName);
+        downloadUrl = Utility::concatUrlPath(baseDav, relativePath);
+    }
+
+    if (!downloadUrl.isValid() || downloadUrl.isEmpty()) {
+        return;
+    }
+
+    if (_etag == newEtag && _url == downloadUrl && (_loading || !_image.isNull())) {
+        return;
+    }
+
+    const auto generation = ++_generation;
+    _etag = newEtag;
+    _url = downloadUrl;
+    _loading = true;
+
+    auto job = account->resourcesCache()->makeGetJob(_url, this);
+    // The catalog already supplies the revision; do not reuse cached bytes for a
+    // URL whose contents changed under a new image ETag.
+    job->setCacheLoadControl(QNetworkRequest::AlwaysNetwork);
+
+    QObject::connect(job, &SimpleNetworkJob::finishedSignal, this, [job, this, generation] {
+        job->deleteLater();
+        if (generation != _generation) return;
+        _loading = false;
+        if (job->httpStatusCode() == 200) {
+            const QIcon icon = job->asIcon();
+            if (!icon.isNull()) {
+                _image = icon;
+                emit imageChanged();
+            } else {
+                _etag.clear();
+            }
+        } else {
+            _etag.clear();
+        }
+    });
+    job->start();
 }

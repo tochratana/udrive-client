@@ -1,8 +1,8 @@
 <div align="center">
 
-  <img src="branding/theme/universal/udrive-icon.png" alt="UDrive logo" width="128" />
+  <img src="branding/theme/universal/udrive-icon.png" alt="Udrive logo" width="128" />
 
-  <h1>UDrive — Desktop Client</h1>
+  <h1>Udrive — Desktop Client</h1>
 
   <p><strong>File synchronization and cloud browsing for Unity Workspace</strong></p>
 
@@ -28,6 +28,7 @@
   - [Build tools and configuration](#build-tools-and-configuration)
   - [macOS customer releases](#macos-customer-releases)
 - [Implementation notes and current limits](#implementation-notes-and-current-limits)
+- [Production checks](#production-checks)
 - [Reporting issues and contributing](#reporting-issues-and-contributing)
 - [License](#license)
 
@@ -35,10 +36,10 @@
 
 ## Overview
 
-UDrive is the Unity Workspace desktop client, customized from the
+Udrive is the Unity Workspace desktop client, customized from the
 [ownCloud Desktop Client](https://github.com/owncloud/client). It combines the
-existing sync engine with a UDrive file browser, branding and navigation that
-follow the UDrive web interface.
+existing sync engine with a Udrive file browser, branding and navigation that
+follow the Udrive web interface.
 
 This is a **C++/Qt application** built with CMake and KDE Craft. Python runs the
 build tooling; the application itself is written in C++ and QML.
@@ -57,46 +58,53 @@ build tooling; the application itself is written in C++ and QML.
   files opened in the desktop app; Newest and Oldest use modified dates.
 - Create folders, upload, download, rename, copy, move, favorite, delete and
   restore files, subject to the server's permissions.
+- Share with users/groups, manage available recipient access and public links,
+  and inspect or restore earlier file versions when supported by the server.
 - Permanently delete items from Deleted files after an explicit confirmation
   tied to the original account, space, item and listed revision.
 - Show authenticated image thumbnails when the server provides previews.
-- Preview PDFs inside UDrive on macOS, with page navigation, fit modes and zoom.
+- Preview images and text/code files; play audio/video when the build includes
+  Qt Multimedia and the necessary codecs.
+- Preview PDFs inside Udrive on macOS and through the Windows implementation,
+  with page navigation, continuous scrolling, fit modes and zoom. Windows
+  runtime behavior still requires verification on Windows.
 - Connect multiple accounts with separate file views, requests, thumbnail caches
   and recent-file histories.
 - Manage synchronization, view activity and open the selected space online.
 - Use light or dark appearance and three UI languages: English, Khmer and
   Simplified Chinese.
 
-Language changes take effect after fully quitting and reopening UDrive. Some
-upstream diagnostics and system dialogs can still use English.
+Selecting a language updates the interface immediately. Udrive also asks you
+to restart so existing views can apply any remaining changes. Some upstream
+diagnostics and system dialogs can still use English.
 
 ## Platform and download status
 
 | Platform             | Current status in this fork                                                                                                                             |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | macOS, Apple Silicon | Local development and release tooling are available. A customer installer requires the publisher's signing certificate, notarization, and clean-Mac verification. |
-| Windows, x64         | Existing build and packaging workflow is configured. The customized UDrive build has not yet been built and tested on Windows in this development work. |
-| Linux, x64           | Existing build workflow is configured. The customized UDrive build has not yet been verified on Linux in this development work.                         |
-| macOS, Intel         | Not verified for the current UDrive customization. Requires a separate compatible build.                                                                |
+| Windows, x64         | Existing build and packaging workflow is configured. The customized Udrive build has not yet been built and tested on Windows in this development work. |
+| Linux, x64           | Existing build workflow is configured. The customized Udrive build has not yet been verified on Linux in this development work.                         |
+| macOS, Intel         | Not verified for the current Udrive customization. Requires a separate compatible build.                                                                |
 
-This README does not provide a published UDrive installer. Upstream ownCloud
-downloads contain the upstream product, not this customized UDrive client.
+This README does not provide a published Udrive installer. Upstream ownCloud
+downloads contain the upstream product, not this customized Udrive client.
 
 A Mac `.app` or `.dmg` cannot run on Windows. Windows users need a separate
-Windows installer. In-app PDF preview currently depends on macOS CoreGraphics;
-other platforms retain the existing external-open/download behavior.
+Windows installer. In-app PDF preview uses CoreGraphics on macOS and Windows
+Data PDF on Windows. Linux users can download PDFs for external viewing.
 
 ## Connecting to your server
 
-1. Start UDrive and choose **Add account**.
+1. Start Udrive and choose **Add account**.
 2. Enter your compatible ownCloud Infinite Scale server's HTTPS address.
    For Unity Workspace, the production address is
    `https://drive.unity-workspace.com`.
-3. Complete sign-in in the browser and return to UDrive.
+3. Complete sign-in in the browser and return to Udrive.
 4. Use the file browser, or open **Sync** to manage local synchronized folders.
 
 On macOS, Finder shows one shortcut for each account, named
-`UDrive (Account name)`. Accounts with the same name receive a short identifier
+`Udrive (Account name)`. Accounts with the same name receive a short identifier
 to distinguish them. Synchronized spaces are inside that account's
 folder. Existing download locations stay unchanged; new accounts receive a
 default folder name containing the account name. You can choose a
@@ -105,7 +113,7 @@ different download location in the sign-in wizard's advanced settings.
 The server and identity provider must be reachable from the user's computer.
 For Keycloak, register the desktop client's configured client ID and allow its
 loopback callback. The OAuth `redirect_uri` returns to the desktop client; it is
-not the UDrive website address. Sign-in uses Authorization Code with S256 PKCE.
+not the Udrive website address. Sign-in uses Authorization Code with S256 PKCE.
 
 The upstream 7.1.x client targets ownCloud Infinite Scale. Support for PHP
 ownCloud Server 10 was removed in 7.1.0; see [CHANGELOG.md](CHANGELOG.md).
@@ -165,7 +173,7 @@ provide the project's dependency set.
 For a fresh clone, follow the [KDE Craft setup guide](https://community.kde.org/Craft)
 and the repository's [reference build workflow](.github/workflows/main.yml.disabled). Configure
 Craft's `owncloud/owncloud-client` package with `srcDir` pointing to this checkout
-so it compiles the UDrive fork. The workflow contains dependency, build, test
+so it compiles the Udrive fork. The workflow contains dependency, build, test
 and packaging stages for the configured platform targets. The upstream workflows
 remain disabled in this fork; the separate Windows installer
 workflow below can run manually or for changes to its build files. Local builds
@@ -212,17 +220,20 @@ on a Windows machine.
 
 ## Implementation notes and current limits
 
-- Files that are not available in a local sync folder offer **Download and open**.
-  Choose where to save the file; after the download succeeds, UDrive opens it in
-  the computer's default application. Changes to that separate downloaded copy
-  are not automatically uploaded. This works for images and documents on Windows,
-  macOS and Linux. Files in a local sync folder open directly.
-- Global search, bulk selection and full sharing-permission management are not
-  implemented in this desktop browser. Use **Open on Web** from an item's menu
-  or visit the UDrive website for web-only features.
-- Image previews use a bounded, per-account memory cache and two shared
-  request/decode slots. Previews are not stored on disk.
-- macOS PDF preview supports files up to 100 MiB. A supervised helper applies a
+- Remote files use temporary preview copies for supported formats. Remote
+  Office documents open as read-only copies in the associated application;
+  synchronized originals remain editable. Explicit downloads save a separate
+  copy to the chosen destination. Previewing or downloading alone does not
+  configure automatic uploads of edits.
+- Search filters the current listing. Multiple file selection is available,
+  but most ordinary file actions require a single selected item. Workspace
+  bulk operations have separate permission checks.
+- Sharing includes recipient access and public-link controls where permitted
+  by the server. Use **Open on Web** for server features without a desktop UI.
+- Thumbnails use a bounded, per-account memory cache and two shared
+  request/decode slots. Full-file previews can use temporary disk storage;
+  their cache is separate from the thumbnail cache.
+- PDF preview supports files up to 100 MiB. A supervised helper applies a
   five-second render timeout and a 4096-pixel raster bound. This is a killable
   process boundary, not an OS sandbox or a hard memory limit. PDF text search,
   annotations and printing are not implemented.
@@ -230,16 +241,44 @@ on a Windows machine.
   Ambiguous failures are not replayed automatically. Refresh the listing after
   an unconfirmed operation to inspect the server's state.
 
+## Production checks
+
+From the repository root, run the packaging policies without building:
+
+```bash
+python3 admin/check_production.py --policies-only
+```
+
+For the complete local check, first configure a CMake test build with the
+project's dependencies and `BUILD_TESTING=ON`, then run:
+
+```bash
+python3 admin/check_production.py --build-dir /absolute/path/to/test-build
+```
+
+The command checks packaging policies, rejects a disabled or incomplete test
+configuration, checks whitespace, rebuilds the app/tests, and runs the full
+registered CTest suite. It uses the CMake/CTest tools recorded in the build
+cache; `--cmake`, `--ctest`, and `--jobs` can override tool paths/build concurrency.
+Python 3.9 or later is required when configuring tests.
+
+GUI tests need the target platform's desktop services. Some UI tests rely on
+native window behavior and cannot be certified by an offscreen run. A passing
+local check still requires the platform installation, live-server acceptance,
+signing, and package verification described in the release guides. The
+`production-policies.yml` workflow runs the policy-only check; it does not
+certify an application build or publish a release.
+
 ## Reporting issues and contributing
 
-Report UDrive-specific issues and propose changes in this fork's repository.
+Report Udrive-specific issues and propose changes in this fork's repository.
 Include the platform, build version, reproduction steps and relevant sanitized
 diagnostics. Do not include passwords, access/refresh tokens or private file
 contents in reports.
 
 For upstream history, contributors and changes, see
 [ownCloud/client](https://github.com/owncloud/client) and
-[CHANGELOG.md](CHANGELOG.md). UDrive retains the upstream copyright and license
+[CHANGELOG.md](CHANGELOG.md). Udrive retains the upstream copyright and license
 notices.
 
 ## License

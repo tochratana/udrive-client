@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Fabian Müller <fmueller@owncloud.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -40,7 +43,7 @@ namespace Translations {
      */
     OWNCLOUDGUI_EXPORT QString translationsDirectoryPath();
 
-    /** Canonical locale for the three UDrive UI languages; unknown locales use English. */
+    /** Canonical locale for the three Udrive UI languages; unknown locales use English. */
     OWNCLOUDGUI_EXPORT QString udriveLocale(QString locale);
 
     /**

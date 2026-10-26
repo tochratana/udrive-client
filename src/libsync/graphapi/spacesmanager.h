@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Hannah von Reth <hannah.vonreth@owncloud.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -70,6 +73,8 @@ namespace GraphApi {
         QHash<QString, Space *> _spaces;
         QList<OpenAPI::OAIDrive> _disabledDrives;
         bool _ready = false;
+        bool _refreshInProgress = false;
+        bool _refreshPending = false;
     };
 
 }

@@ -228,7 +228,7 @@
     <context>
         <name>OCC::GeneralSettings</name>
         <message><source>Language saved</source><translation>语言已保存</translation></message>
-        <message><source>Restart UDrive to apply your new language.</source><translation>请重启 UDrive 以应用新语言。</translation></message>
+        <message><source>Restart Udrive to apply your new language.</source><translation>请重启 Udrive 以应用新语言。</translation></message>
         <message><source>OK</source><translation>确定</translation></message>
         <message>
             <source>Form</source>
@@ -505,8 +505,8 @@
             <translation>设置</translation>
         </message>
         <message>
-            <source>Choose how UDrive works on this computer.</source>
-            <translation>设置 UDrive 在此电脑上的工作方式。</translation>
+            <source>Choose how Udrive works on this computer.</source>
+            <translation>设置 Udrive 在此电脑上的工作方式。</translation>
         </message>
         <message>
             <source>%1 - %2</source>
@@ -591,7 +591,7 @@
         <message><source>Oldest</source><translation>最旧</translation></message>
         <message><source>Largest</source><translation>最大</translation></message>
         <message><source>Smallest</source><translation>最小</translation></message>
-        <message><source>Files opened most recently in UDrive; unopened files follow by modified date.</source><translation>按在 UDrive 中最近打开的时间排序；未打开的文件按修改时间排列。</translation></message>
+        <message><source>Files opened most recently in Udrive; unopened files follow by modified date.</source><translation>按在 Udrive 中最近打开的时间排序；未打开的文件按修改时间排列。</translation></message>
         <message><source>Change file view</source><translation>切换文件视图</translation></message>
         <message><source>Condensed table view</source><translation>紧凑列表视图</translation></message>
         <message><source>Default table view</source><translation>默认列表视图</translation></message>
@@ -868,8 +868,8 @@
             <translation>打开文件</translation>
         </message>
         <message>
-            <source>Preview this PDF inside UDrive.</source>
-            <translation>在 UDrive 内预览此 PDF。</translation>
+            <source>Preview this PDF inside Udrive.</source>
+            <translation>在 Udrive 内预览此 PDF。</translation>
         </message>
         <message>
             <source>Download this file to open it on your computer.</source>
@@ -1002,8 +1002,8 @@
             <translation>服务器返回 HTTP %1。</translation>
         </message>
         <message>
-            <source>PDF opened in UDrive.</source>
-            <translation>PDF 已在 UDrive 中打开。</translation>
+            <source>PDF opened in Udrive.</source>
+            <translation>PDF 已在 Udrive 中打开。</translation>
         </message>
         <message>
             <source>Saved to %1</source>
@@ -1466,8 +1466,8 @@
     <context>
         <name>UDriveSidebar</name>
         <message>
-            <source>UDrive navigation</source>
-            <translation>UDrive 导航</translation>
+            <source>Udrive navigation</source>
+            <translation>Udrive 导航</translation>
         </message>
         <message>
             <source>+  New</source>
@@ -1506,8 +1506,8 @@
             <translation>同步</translation>
         </message>
         <message>
-            <source>Quit UDrive</source>
-            <translation>退出 UDrive</translation>
+            <source>Quit Udrive</source>
+            <translation>退出 Udrive</translation>
         </message>
         <message>
             <source>Storage</source>

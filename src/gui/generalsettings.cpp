@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Daniel Molkentin <danimo@owncloud.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -45,7 +48,7 @@ GeneralSettings::GeneralSettings(QWidget *parent)
 {
     _ui->setupUi(this);
 
-    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+    if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive")) {
         _appearanceWidget = new AppearanceWidget(this);
         _appearanceWidget->setObjectName(QStringLiteral("appearanceSection"));
         _ui->verticalLayout_5->insertWidget(0, _appearanceWidget);
@@ -87,7 +90,7 @@ GeneralSettings::GeneralSettings(QWidget *parent)
         saveMiscSettings();
 
         const QString pickedLocale = _ui->languageDropdown->currentData().toString();
-        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+        if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive")) {
             if (auto *app = Application::instance()) {
                 app->applyLanguage(pickedLocale);
             } else {
@@ -129,7 +132,7 @@ GeneralSettings::GeneralSettings(QWidget *parent)
 
     connect(_ui->about_pushButton, &QPushButton::clicked, this, &GeneralSettings::showAbout);
 
-    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+    if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive")) {
         _ui->copyrightLabel->setText(tr("Unity Workspace"));
         _ui->about_pushButton->setText(tr("About %1").arg(Theme::instance()->appNameGUI()));
     }
@@ -141,7 +144,7 @@ GeneralSettings::GeneralSettings(QWidget *parent)
 
 void GeneralSettings::showLanguageRestartNotice()
 {
-    if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive")) {
+    if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive")) {
         QMessageBox::warning(this, tr("Warning"), tr("Language changes require a restart of this application to take effect."), QMessageBox::Ok);
         return;
     }
@@ -185,7 +188,7 @@ void GeneralSettings::showLanguageRestartNotice()
     title->setWordWrap(true);
     title->setAlignment(Qt::AlignCenter);
     copy->addWidget(title);
-    auto *message = new QLabel(tr("Restart UDrive to apply your new language."), dialog);
+    auto *message = new QLabel(tr("Restart Udrive to apply your new language."), dialog);
     message->setObjectName(QStringLiteral("languageRestartMessage"));
     message->setTextFormat(Qt::PlainText);
     message->setWordWrap(true);
@@ -229,7 +232,7 @@ void GeneralSettings::loadMiscSettings()
     loadLanguageNamesIntoDropdown();
 
     QString locale = cfgFile.uiLanguage();
-    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive"))
+    if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive"))
         locale = Translations::udriveLocale(locale.isEmpty() ? QLocale::system().uiLanguages().value(0, QLocale::system().name()) : locale);
     const auto index = _ui->languageDropdown->findData(locale);
     _ui->languageDropdown->setCurrentIndex(index < 0 ? 0 : index);
@@ -254,7 +257,7 @@ void GeneralSettings::changeEvent(QEvent *event)
         loadLanguageNamesIntoDropdown();
         ConfigFile cfg;
         QString locale = cfg.uiLanguage();
-        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive"))
+        if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive"))
             locale = Translations::udriveLocale(locale.isEmpty() ? QLocale::system().uiLanguages().value(0, QLocale::system().name()) : locale);
         const auto index = _ui->languageDropdown->findData(locale);
         _ui->languageDropdown->setCurrentIndex(index < 0 ? 0 : index);
@@ -275,7 +278,7 @@ void GeneralSettings::saveMiscSettings()
     Theme::instance()->setSystrayUseMonoIcons(isChecked);
     cfgFile.setCrashReporter(_ui->crashreporterCheckBox->isChecked());
 
-    // UDrive stores an explicit supported locale; upstream can also store its default entry.
+    // Udrive stores an explicit supported locale; upstream can also store its default entry.
     const QString pickedLocale = _ui->languageDropdown->currentData().toString();
     cfgFile.setUiLanguage(pickedLocale);
     UDriveToast::preferenceSaved(this);
@@ -326,7 +329,7 @@ void GeneralSettings::loadLanguageNamesIntoDropdown()
     // allow method to be called more than once
     _ui->languageDropdown->clear();
 
-    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+    if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive")) {
         _ui->languageDropdown->setProperty("udriveCombo", true);
         // Keep native language names recognizable regardless of the active translation.
         _ui->languageDropdown->addItem(QStringLiteral("English"), QStringLiteral("en_US"));

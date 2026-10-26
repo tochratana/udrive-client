@@ -33,7 +33,7 @@ generate_export_header(owncloudResources
 )
 
 # Handle Translations, pick all client_* files from trans directory.
-if(APPLICATION_NAME STREQUAL "UDrive")
+if(APPLICATION_NAME STREQUAL "Udrive")
     set(client_translations
         ${CMAKE_SOURCE_DIR}/translations/client_en_US.ts
         ${CMAKE_SOURCE_DIR}/translations/client_km.ts

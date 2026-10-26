@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Hannah von Reth <hannah.vonreth@owncloud.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -113,7 +116,7 @@ AboutDialog::AboutDialog(QWidget *parent)
     titleRow->addWidget(versionBadge);
     titleRow->addStretch(1);
 
-    auto *onlineBtn = new QPushButton(tr("Open UDrive online"), card);
+    auto *onlineBtn = new QPushButton(tr("Open Udrive online"), card);
     onlineBtn->setObjectName(QStringLiteral("aboutOnlineBtn"));
     onlineBtn->setCursor(Qt::PointingHandCursor);
     onlineBtn->setStyleSheet(QStringLiteral(
@@ -138,7 +141,7 @@ AboutDialog::AboutDialog(QWidget *parent)
 
     headerCol->addLayout(titleRow);
 
-    auto *taglineLabel = new QLabel(tr("UDrive brings your Unity Workspace files to your desktop."), card);
+    auto *taglineLabel = new QLabel(tr("Udrive brings your Unity Workspace files to your desktop."), card);
     taglineLabel->setObjectName(QStringLiteral("aboutTagline"));
     taglineLabel->setStyleSheet(QStringLiteral(
         "font-size: 13px; color: %1;"
@@ -339,7 +342,7 @@ AboutDialog::AboutDialog(QWidget *parent)
     const QString osVer = QStringLiteral("%1 (%2)").arg(QSysInfo::prettyProductName(), Utility::currentCpuArch());
     const QString qpaVer = qGuiApp ? qGuiApp->platformName() : QStringLiteral("cocoa");
 
-    leftCol->addWidget(makeSpecItem(tr("UDrive Version"), versionDisplay));
+    leftCol->addWidget(makeSpecItem(tr("Udrive Version"), versionDisplay));
     leftCol->addWidget(makeSpecItem(tr("Qt Framework"), qtVer));
     leftCol->addWidget(makeSpecItem(tr("SSL Library"), sslVer));
 

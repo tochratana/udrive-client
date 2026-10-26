@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Hannah von Reth <hannah.vonreth@owncloud.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -22,6 +25,8 @@
 #include <QList>
 #include <QtQmlIntegration>
 
+class TestUDriveFileBrowser;
+
 namespace OCC {
 namespace GraphApi {
     class SpacesManager;
@@ -42,16 +47,18 @@ namespace GraphApi {
 
         [[nodiscard]] QUrl qmlImageUrl() const;
 
+        void update();
+
     Q_SIGNALS:
         void imageChanged();
 
     private:
-        void update();
-
+        quint64 _generation = 0;
         QUrl _url;
         QString _etag;
         QIcon _image;
         Space *_space = nullptr;
+        bool _loading = false;
 
         friend class Space;
     };
@@ -115,6 +122,7 @@ namespace GraphApi {
 
         friend class SpacesManager;
         friend class SpaceImage;
+        friend class ::TestUDriveFileBrowser;
     };
 
 } // OCC

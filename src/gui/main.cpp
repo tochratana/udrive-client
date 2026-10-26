@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  *
  * Copyright (C) by Duncan Mac-Vicar P. <duncan@kde.org>
  *
@@ -256,7 +259,7 @@ int main(int argc, char **argv)
 
         // Create the (Q)Application instance:
         QApplication app(argc, argv);
-        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+        if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive")) {
             Resources::loadUDriveFonts();
             Application::applyApplicationTheme(ConfigFile().themeMode());
         }

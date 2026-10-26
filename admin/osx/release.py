@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Build and distribute UDrive locally; never edit the running development app."""
+"""Build and distribute Udrive locally; never edit the running development app."""
 
 import argparse
 from datetime import datetime
@@ -19,6 +19,8 @@ from urllib.parse import quote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 BUNDLE_ID = "com.unity-workspace.udrive"
+PRODUCT_NAME = "Udrive"
+APP_BUNDLE = PRODUCT_NAME + ".app"
 PDF_HELPER = "udrive-pdf-renderer"
 MACHO_MAGICS = {bytes.fromhex(s) for s in (
     "feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca")}
@@ -208,7 +210,9 @@ def validate_bundle(app):
     with (app / "Contents/Info.plist").open("rb") as source:
         info = plistlib.load(source)
     if info.get("CFBundleIdentifier") != BUNDLE_ID or info.get("CFBundleExecutable") != "udrive":
-        raise ReleaseError("Unexpected app identity. UDrive releases must retain " + BUNDLE_ID)
+        raise ReleaseError("Unexpected app identity. Udrive releases must retain " + BUNDLE_ID)
+    if info.get("CFBundleName") != PRODUCT_NAME or info.get("CFBundleDisplayName") != PRODUCT_NAME:
+        raise ReleaseError("The application display name must be " + PRODUCT_NAME)
     for key in ("CFBundleShortVersionString", "CFBundleVersion"):
         if not re.fullmatch(r"\d+(?:\.\d+){0,2}", info.get(key, "")):
             raise ReleaseError(f"Invalid release {key}: {info.get(key)!r}")
@@ -340,7 +344,7 @@ def export_download(release_dir, output, team, base_url):
     if (manifest.get("bundle_id") != BUNDLE_ID or manifest.get("team_id") != team
             or not isinstance(version, str) or not re.fullmatch(r"\d+(?:\.\d+){0,2}", version)
             or architecture not in ("arm64", "x86_64", "arm64-x86_64")
-            or filename != f"UDrive-{version}-{architecture}.dmg"):
+            or filename != f"Udrive-{version}-{architecture}.dmg"):
         raise ReleaseError("Release manifest has an unexpected publisher, application, version or architecture.")
     dmg = release_dir / filename
     if not dmg.is_file() or not inside(dmg, release_dir):
@@ -364,7 +368,7 @@ def export_download(release_dir, output, team, base_url):
         mount.mkdir()
         run("/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint", mount, dmg)
         try:
-            app = mount / "udrive.app"
+            app = mount / APP_BUNDLE
             info, binaries = validate_bundle(app)
             if info["CFBundleShortVersionString"] != version:
                 raise ReleaseError("Disk image contains a different application version.")
@@ -395,7 +399,7 @@ def export_download(release_dir, output, team, base_url):
         (staged / "SHA256SUMS").write_text(f"{checksum}  {filename}\n")
         label = {"arm64": "Apple Silicon", "x86_64": "Intel", "arm64-x86_64": "Apple Silicon and Intel"}[architecture]
         (staged / "download-link.html").write_text(
-            f'<a href="{html.escape(url, quote=True)}" download>Download UDrive {html.escape(version)} for Mac ({label})</a>\n')
+            f'<a href="{html.escape(url, quote=True)}" download>Download Udrive {html.escape(version)} for Mac ({label})</a>\n')
         staged.rename(output)
     print(f"Verified website download files: {output}")
 
@@ -466,7 +470,7 @@ class Workflow:
             raise ReleaseError(f"Output already exists; use a new --output-dir: {output}")
         output.mkdir(parents=True)
         (output / "PREPARED-ONLY.txt").write_text("Not a customer release. Signing, notarization and release verification have not completed.\n")
-        app = output / "udrive.app"
+        app = output / APP_BUNDLE
         # Preserve framework symlinks, but never mutate the development bundle.
         shutil.copytree(source, app, symlinks=True)
         macho_files(app)  # Reject escaping source symlinks before deployment tools run.
@@ -510,13 +514,13 @@ class Workflow:
         run("/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=2", app)
         image_root = Path(tempfile.mkdtemp(prefix="dmg-root-", dir=output))
         try:
-            run("/usr/bin/ditto", app, image_root / "udrive.app")
-            run("/usr/bin/codesign", "--verify", "--deep", "--strict", image_root / "udrive.app")
+            run("/usr/bin/ditto", app, image_root / APP_BUNDLE)
+            run("/usr/bin/codesign", "--verify", "--deep", "--strict", image_root / APP_BUNDLE)
             (image_root / "Applications").symlink_to("/Applications")
             architecture = "-".join(sorted(run("/usr/bin/lipo", "-archs", app / "Contents/MacOS/udrive", capture=True).split()))
-            name = f"UDrive-{info['CFBundleShortVersionString']}-{architecture}.dmg"
+            name = f"Udrive-{info['CFBundleShortVersionString']}-{architecture}.dmg"
             pending = output / (name + ".pending.dmg")
-            run("/usr/bin/hdiutil", "create", "-volname", "UDrive", "-srcfolder", image_root,
+            run("/usr/bin/hdiutil", "create", "-volname", "Udrive", "-srcfolder", image_root,
                 "-format", "UDZO", "-fs", "HFS+", pending)
             run("/usr/bin/codesign", "--force", "--sign", identity, "--timestamp", pending)
             notarize(pending, self.args.notary_profile, output / "dmg-notarization.json")

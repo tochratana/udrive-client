@@ -16,6 +16,7 @@
 #include <QJsonDocument>
 #include <QPushButton>
 #include <QTreeView>
+#include <QHeaderView>
 #include <QLineEdit>
 #include <QTabBar>
 #include <QDialog>
@@ -23,6 +24,8 @@
 #include <QComboBox>
 #include <QListWidget>
 #include <QScopeGuard>
+#include <QScrollArea>
+#include <QLabel>
 #include <QMenu>
 
 using namespace OCC;
@@ -40,7 +43,7 @@ public:
     struct Request { QByteArray verb; QUrl url; QJsonObject body; QMap<QByteArray, QByteArray> headers; };
     QList<Request> requests;
     QJsonArray permissions{"Accounts.ReadWrite.all", "Groups.ReadWrite.all", "Roles.ReadWrite.all", "Drives.List.all", "Drives.Create.all", "Drives.ReadWriteEnabled.all", "Drives.ReadWriteProjectQuota.all"};
-    int accessStatus = 200, writeStatus = 200, delay = 0;
+    int accessStatus = 200, writeStatus = 200, delay = 0, writesSeen = 0, failWriteNumber = 0;
     bool malformedPermissions = false, malformedList = false;
     QString nextLink, redirect;
     QJsonArray users{
@@ -96,16 +99,27 @@ public:
                 QJsonObject{{"id", "admin-role"}, {"displayName", "Admin"}}, QJsonObject{{"id", "user-role"}, {"displayName", "User"}}}}}}}}); return;
         }
         if (request.verb != "GET" && request.verb != "PROPFIND") {
+            const int status = ++writesSeen == failWriteNumber ? 500 : writeStatus;
             if (!redirect.isEmpty()) { reply(socket, 307, {}, "Location: " + redirect.toUtf8() + "\r\n"); return; }
-            if (writeStatus == 200 && request.verb == "POST" && path == QStringLiteral("/graph/v1.0/users")) {
+            if (status == 200 && request.verb == "POST" && path == QStringLiteral("/graph/v1.0/users")) {
                 auto created = request.body; created.remove(QStringLiteral("passwordProfile")); created.insert(QStringLiteral("id"), QStringLiteral("new-entry"));
                 created.insert(QStringLiteral("appRoleAssignments"), QJsonArray{QJsonObject{{"appRoleId", "user-role"}, {"resourceId", "application"}}}); users.append(created);
             }
-            if (writeStatus == 200 && request.verb == "POST" && path == QStringLiteral("/graph/v1.0/groups/team/members/$ref")) {
+            if (status == 200 && request.verb == "POST" && path == QStringLiteral("/graph/v1.0/groups/team/members/$ref")) {
                 const auto id = QUrl(request.body.value(QStringLiteral("@odata.id")).toString()).path().section(QLatin1Char('/'), -1);
                 for (const auto &user : users) if (user.toObject().value(QStringLiteral("id")).toString() == id) groupMembers.append(user);
             }
-            reply(socket, writeStatus, {{"id", "new-entry"}}); return;
+            if (status == 200) for (int i = 0; i < users.size(); ++i) {
+                auto user = users.at(i).toObject(); const auto id = user.value(QStringLiteral("id")).toString();
+                if (request.verb == "PATCH" && path == QStringLiteral("/graph/v1.0/users/") + id) {
+                    for (auto field = request.body.begin(); field != request.body.end(); ++field) if (field.key() != QStringLiteral("passwordProfile")) user.insert(field.key(), field.value());
+                }
+                if (request.verb == "POST" && path == QStringLiteral("/graph/v1.0/users/") + id + QStringLiteral("/appRoleAssignments")) user.insert(QStringLiteral("appRoleAssignments"), QJsonArray{request.body});
+                auto drive = user.value(QStringLiteral("drive")).toObject();
+                if (request.verb == "PATCH" && path == QStringLiteral("/graph/v1.0/drives/") + drive.value(QStringLiteral("id")).toString() && request.body.contains(QStringLiteral("quota"))) { drive.insert(QStringLiteral("quota"), request.body.value(QStringLiteral("quota"))); user.insert(QStringLiteral("drive"), drive); }
+                users[i] = user;
+            }
+            reply(socket, status, {{"id", "new-entry"}}); return;
         }
         if (path == QStringLiteral("/graph/v1.0/users")) {
             QJsonObject data{{"value", users}};
@@ -259,9 +273,65 @@ private Q_SLOTS:
         server.delay = 0; QVERIFY(discovered(api)); server.delay = 150; api.load(Resource::Users); state.signOutByUi();
         QTest::qWait(200); QVERIFY(!api.available()); QCOMPARE(loaded.count(), 0); QVERIFY(api.roles().isEmpty());
     }
+    void personalQuotaRequiresItsOwnPermission()
+    {
+        AdminServer server; AccountState state(server.account()); UDriveAdminApi api(&state); QVERIFY(discovered(api));
+        QVERIFY(!api.canSetPersonalQuota()); QVERIFY(!api.setPersonalQuota(QStringLiteral("personal-other"), 20000000000LL));
+        server.permissions.append(QStringLiteral("Drives.ReadWritePersonalQuota.all")); QVERIFY(discovered(api)); QVERIFY(api.canSetPersonalQuota());
+        QVERIFY(!api.setPersonalQuota(QStringLiteral("../other"), 20)); QVERIFY(!api.setPersonalQuota(QStringLiteral("personal-other"), -1));
+        QSignalSpy done(&api, &UDriveAdminApi::operationFinished); QVERIFY(api.setPersonalQuota(QStringLiteral("personal-other"), 20000000000LL));
+        QTRY_COMPARE(done.count(), 1); QCOMPARE(server.requests.last().url.path(), QStringLiteral("/graph/v1.0/drives/personal-other"));
+        QCOMPARE(server.requests.last().body, QJsonObject({{"quota", QJsonObject{{"total", 20000000000LL}}}}));
+        state.account()->setCapabilities(Capabilities(server.url(), {{"spaces", QVariantMap{{"enabled", true}}}, {"graph", QVariantMap{{"users", QVariantMap{{"read_only_attributes", QStringList{QStringLiteral("drive.quota")}}}}}}}));
+        QVERIFY(!api.canSetPersonalQuota()); QVERIFY(!api.setPersonalQuota(QStringLiteral("personal-other"), 10));
+        state.signOutByUi(); QVERIFY(!api.canSetPersonalQuota());
+    }
+    void sidebarUserEditingSavesAndStopsOnFailure()
+    {
+        AdminServer server; server.permissions.append(QStringLiteral("Drives.ReadWritePersonalQuota.all"));
+        auto alice = server.users.at(1).toObject(); alice.insert(QStringLiteral("drive"), QJsonObject{{"id", "personal-other"}, {"quota", QJsonObject{{"total", 15000000000LL}}}}); server.users[1] = alice;
+        AccountState state(server.account()); UDriveAdminWidget page(&state); page.resize(1150, 850); page.show();
+        auto *table = page.findChild<QTreeView *>(QStringLiteral("driveAdminTable")); QTRY_COMPARE(table->model()->rowCount(), 2); QTRY_VERIFY(!page.api()->busy());
+        table->setCurrentIndex(table->model()->index(1, 0)); page.findChild<QPushButton *>(QStringLiteral("driveAdminEdit"))->click();
+        auto *editor = page.findChild<QWidget *>(QStringLiteral("driveAdminUserEditor")); QVERIFY(editor->isVisible());
+        auto *name = editor->findChild<QLineEdit *>(QStringLiteral("adminEdit_displayName"));
+        auto *password = editor->findChild<QLineEdit *>(QStringLiteral("adminEdit_passwordProfile"));
+        auto *role = editor->findChild<QComboBox *>(QStringLiteral("adminEditRole")); auto *login = editor->findChild<QComboBox *>(QStringLiteral("adminEditLogin"));
+        auto *quota = editor->findChild<QLineEdit *>(QStringLiteral("adminEditQuota")); auto *save = editor->findChild<QPushButton *>(QStringLiteral("driveAdminUserSave"));
+        auto *error = editor->findChild<QLabel *>(QStringLiteral("driveAdminUserEditError"));
+        QVERIFY(password->text().isEmpty()); QCOMPARE(password->echoMode(), QLineEdit::Password); QVERIFY(!table->isEnabled());
+        QVERIFY(role->isEnabled()); QVERIFY(login->isEnabled()); QVERIFY(quota->isEnabled());
+        name->clear(); const int beforeValidation = server.writesSeen; save->click(); QVERIFY(error->isVisible()); QCOMPARE(server.writesSeen, beforeValidation);
+        name->setText(QStringLiteral("Alice Updated")); password->setText(QStringLiteral("test-only-new-password")); login->setCurrentIndex(0); quota->setText(QStringLiteral("20")); role->setCurrentIndex(0);
+        quota->setText(QStringLiteral("NaN")); save->click(); QCOMPARE(server.writesSeen, beforeValidation); quota->setText(QStringLiteral("20"));
+        server.delay = 25; save->click(); QVERIFY(!save->isEnabled()); save->click();
+        QTRY_VERIFY(!editor->isVisible()); QTRY_VERIFY(!page.api()->busy()); QCOMPARE(server.writesSeen - beforeValidation, 4);
+        QVERIFY(password->text().isEmpty()); QVERIFY(table->isEnabled());
+        auto updated = server.users.at(1).toObject(); QCOMPARE(updated.value(QStringLiteral("displayName")).toString(), QStringLiteral("Alice Updated")); QVERIFY(updated.value(QStringLiteral("accountEnabled")).toBool());
+        QCOMPARE(updated.value(QStringLiteral("drive")).toObject().value(QStringLiteral("quota")).toObject().value(QStringLiteral("total")).toInteger(), 20000000000LL);
+        QCOMPARE(updated.value(QStringLiteral("appRoleAssignments")).toArray().first().toObject().value(QStringLiteral("appRoleId")).toString(), QStringLiteral("admin-role"));
+        auto *details = page.findChild<QScrollArea *>(QStringLiteral("driveAdminDetails")); QTRY_VERIFY(details->isVisible());
+        QCOMPARE(page.findChild<QLabel *>(QStringLiteral("driveAdminDetailsName"))->text(), QStringLiteral("Alice Updated"));
+        page.findChild<QPushButton *>(QStringLiteral("driveAdminDetailsEdit"))->click();
+        name->setText(QStringLiteral("Alice Partial")); login->setCurrentIndex(1); quota->setText(QStringLiteral("21")); role->setCurrentIndex(1);
+        const int beforeFailure = server.writesSeen; server.failWriteNumber = beforeFailure + 2; save->click();
+        QTRY_VERIFY(error->isVisible()); QVERIFY(error->text().contains(QStringLiteral("Some changes were saved"))); QCOMPARE(server.writesSeen - beforeFailure, 2);
+        QVERIFY(editor->isVisible()); QVERIFY(save->isEnabled());
+        server.failWriteNumber = 0; save->click(); QTRY_VERIFY(!editor->isVisible()); QTRY_VERIFY(!page.api()->busy());
+        QCOMPARE(server.writesSeen - beforeFailure, 5); // Retry only login, quota, and role; profile already succeeded.
+        QCOMPARE(server.users.at(1).toObject().value(QStringLiteral("displayName")).toString(), QStringLiteral("Alice Partial"));
+        QTRY_VERIFY(details->isVisible()); page.findChild<QPushButton *>(QStringLiteral("driveAdminDetailsEdit"))->click();
+        password->setText(QStringLiteral("discard-this-draft")); const int beforeCancel = server.writesSeen;
+        page.findChild<QPushButton *>(QStringLiteral("driveAdminDetailsBack"))->click(); QVERIFY(!editor->isVisible()); QVERIFY(password->text().isEmpty()); QCOMPARE(server.writesSeen, beforeCancel);
+        table->setCurrentIndex(table->model()->index(0, 0)); page.findChild<QPushButton *>(QStringLiteral("driveAdminEdit"))->click();
+        QVERIFY(!role->isEnabled()); QVERIFY(!login->isEnabled()); QVERIFY(!quota->isEnabled());
+        password->setText(QStringLiteral("clear-on-sign-out")); state.signOutByUi(); QTRY_VERIFY(!details->isVisible()); QVERIFY(password->text().isEmpty());
+    }
     void nativeUiAndAccountIsolation()
     {
         AdminServer server, normal; normal.permissions = {}; auto *manager = AccountManager::instance();
+        const auto fullPermissions = server.permissions;
+        auto alice = server.users.at(1).toObject(); alice.insert(QStringLiteral("drive"), QJsonObject{{"quota", QJsonObject{{"total", 15000000000LL}}}}); server.users[1] = alice;
         auto *admin = server.account(); auto *user = normal.account(); auto *adminState = manager->addAccount(admin); auto *normalState = manager->addAccount(user);
         {
             SettingsDialog window(nullptr); window.resize(1400, 850); window.show();
@@ -269,14 +339,60 @@ private Q_SLOTS:
             UDriveAdminWidget *page = nullptr;
             for (auto *candidate : window.findChildren<UDriveAdminWidget *>()) if (candidate->api()->available()) page = candidate;
             QVERIFY(page); auto *table = page->findChild<QTreeView *>(QStringLiteral("driveAdminTable")); QVERIFY(table);
-            QTRY_COMPARE(table->model()->rowCount(), 2); QVERIFY(page->searchField()->parent() != page);
+            QTRY_COMPARE(table->model()->rowCount(), 2); QVERIFY(page->isAncestorOf(page->searchField()));
             QVERIFY(window.canCreateFiles()); QCOMPARE(window.adminCreationLabel(), QStringLiteral("New user"));
             page->searchField()->setText(QStringLiteral("alice")); QTRY_COMPARE(table->model()->rowCount(), 1); page->searchField()->clear();
+            // Checkboxes select rows without changing any server state. Multi-selection
+            // must not apply an editor or destructive action to an arbitrary user.
+            const int requestsBeforeSelection = server.requests.size();
+            auto checkRow = [&](int row) {
+                const auto rect = table->visualRect(table->model()->index(row, 0));
+                QTest::mouseClick(table->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(rect.left() + 15, rect.center().y()));
+            };
+            checkRow(0); QCOMPARE(table->selectionModel()->selectedRows().size(), 1);
+            checkRow(1); QCOMPARE(table->selectionModel()->selectedRows().size(), 2);
+            QVERIFY(!page->findChild<QPushButton *>(QStringLiteral("driveAdminEdit"))->isEnabled());
+            QVERIFY(!page->findChild<QPushButton *>(QStringLiteral("driveAdminRemove"))->isEnabled());
+            checkRow(0); QCOMPARE(table->selectionModel()->selectedRows().size(), 1);
+            QVERIFY(page->findChild<QPushButton *>(QStringLiteral("driveAdminLogin"))->isEnabled());
+            QTest::mouseClick(table->header()->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(15, table->header()->height() / 2));
+            QCOMPARE(table->selectionModel()->selectedRows().size(), 2);
+            QTest::mouseClick(table->header()->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(15, table->header()->height() / 2));
+            QCOMPARE(table->selectionModel()->selectedRows().size(), 0);
+            auto openDetails = [&](int row) {
+                const auto cell = table->visualRect(table->model()->index(row, table->model()->columnCount() - 1));
+                QTest::mouseClick(table->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(cell.right() - 79, cell.center().y()));
+            };
+            openDetails(1);
+            auto *details = page->findChild<QScrollArea *>(QStringLiteral("driveAdminDetails")); QVERIFY(details && details->isVisible());
+            QVERIFY(!details->isWindow()); for (auto *input : details->findChildren<QLineEdit *>()) QVERIFY(!input->isVisible());
+            auto detailValue = [&](const QString &caption) {
+                for (auto *value : details->findChildren<QLabel *>()) if (value->accessibleName() == caption) return value->text();
+                return QString();
+            };
+            QCOMPARE(detailValue(QStringLiteral("User name")), QStringLiteral("alice"));
+            QCOMPARE(detailValue(QStringLiteral("Role")), QStringLiteral("User"));
+            QCOMPARE(detailValue(QStringLiteral("Login")), QStringLiteral("Forbidden"));
+            QCOMPARE(detailValue(QStringLiteral("Groups")), QStringLiteral("Design"));
+            QVERIFY(detailValue(QStringLiteral("Quota")).contains(QStringLiteral("15"))); QVERIFY(detailValue(QStringLiteral("Quota")).contains(QStringLiteral("GB")));
+            QCOMPARE(server.requests.size(), requestsBeforeSelection);
+            // The sidebar editor uses the displayed user's current selection.
+            page->findChild<QPushButton *>(QStringLiteral("driveAdminDetailsEdit"))->click();
+            auto *detailsEditor = page->findChild<QWidget *>(QStringLiteral("driveAdminUserEditor")); QVERIFY(detailsEditor && detailsEditor->isVisible());
+            QCOMPARE(detailsEditor->findChild<QLineEdit *>(QStringLiteral("adminEdit_onPremisesSamAccountName"))->text(), QStringLiteral("alice"));
+            page->findChild<QPushButton *>(QStringLiteral("driveAdminUserCancel"))->click();
+            table->setCurrentIndex(table->model()->index(0, 0));
+            QCOMPARE(detailValue(QStringLiteral("User name")), QStringLiteral("admin")); QCOMPARE(detailValue(QStringLiteral("Quota")), QStringLiteral("Not available"));
+            checkRow(1); QVERIFY(!details->isVisible()); QVERIFY(detailValue(QStringLiteral("User name")).isEmpty());
+            table->clearSelection(); QTest::qWait(80); openDetails(1); QVERIFY(details->isVisible());
+            page->findChild<QPushButton *>(QStringLiteral("driveAdminDetailsClose"))->click(); QVERIFY(!details->isVisible());
+            QCOMPARE(table->selectionModel()->selectedRows().size(), 1);
             auto *roles = page->findChild<QComboBox *>(QStringLiteral("driveAdminRoleFilter")); roles->setCurrentIndex(roles->findData(QStringLiteral("user-role"))); QCOMPARE(table->model()->rowCount(), 1); roles->setCurrentIndex(0);
             // Click Alice's menu while another row is selected and the view is sorted.
             // Opening Edit must still target Alice, not the previously selected account.
             table->sortByColumn(0, Qt::DescendingOrder);
             table->setCurrentIndex(table->model()->index(1, 0));
+            QTest::qWait(100); // Settle header resizing after the filters rebuild the model.
             bool sawMenu = false;
             QTimer::singleShot(80, &window, [&] {
                 auto *menu = page->findChild<QMenu *>(QStringLiteral("driveAdminRowMenu"));
@@ -286,11 +402,12 @@ private Q_SLOTS:
                 menu->actions().first()->trigger(); menu->close();
             });
             const auto actionCell = table->model()->index(0, table->model()->columnCount() - 1);
-            QTest::mouseClick(table->viewport(), Qt::LeftButton, Qt::NoModifier, table->visualRect(actionCell).center());
+            QTest::mouseClick(table->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(table->visualRect(actionCell).right() - 15, table->visualRect(actionCell).center().y()));
             QTRY_VERIFY(sawMenu);
-            auto *rowDialog = page->findChild<QDialog *>(QStringLiteral("driveAdminEditDialog")); QVERIFY(rowDialog && rowDialog->isVisible());
-            QCOMPARE(rowDialog->findChild<QLineEdit *>(QStringLiteral("adminField_onPremisesSamAccountName"))->text(), QStringLiteral("alice"));
-            rowDialog->reject(); QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            auto *rowEditor = page->findChild<QWidget *>(QStringLiteral("driveAdminUserEditor")); QVERIFY(rowEditor && rowEditor->isVisible());
+            QCOMPARE(rowEditor->findChild<QLineEdit *>(QStringLiteral("adminEdit_onPremisesSamAccountName"))->text(), QStringLiteral("alice"));
+            page->findChild<QPushButton *>(QStringLiteral("driveAdminUserCancel"))->click();
+            page->findChild<QPushButton *>(QStringLiteral("driveAdminDetailsClose"))->click(); QTest::qWait(80);
             // The same menu is keyboard accessible and preserves self-protection.
             table->sortByColumn(0, Qt::AscendingOrder);
             table->setCurrentIndex(table->model()->index(0, table->model()->columnCount() - 1));
@@ -298,7 +415,7 @@ private Q_SLOTS:
             QTimer::singleShot(80, &window, [&] {
                 auto *menu = page->findChild<QMenu *>(QStringLiteral("driveAdminRowMenu"));
                 if (!menu || !menu->isVisible()) return;
-                selfProtected = menu->actions().size() == 4 && !menu->actions().at(1)->isEnabled()
+                selfProtected = menu->actions().size() == 6 && !menu->actions().at(1)->isEnabled()
                     && !menu->actions().at(2)->isEnabled() && !menu->actions().at(3)->isEnabled();
                 menu->close();
             });
@@ -336,6 +453,15 @@ private Q_SLOTS:
                     QVERIFY(table->viewport()->rect().contains(actionsRect.center()));
                     window.grab().save(QStringLiteral("/tmp/udrive-admin-compact-%1.png").arg(dark ? QStringLiteral("dark") : QStringLiteral("light")));
                     window.resize(originalSize); QTest::qWait(80);
+                    table->sortByColumn(0, Qt::AscendingOrder); QTest::qWait(80); openDetails(1); QTest::qWait(80);
+                    window.grab().save(QStringLiteral("/tmp/udrive-admin-sidebar-%1.png").arg(dark ? QStringLiteral("dark") : QStringLiteral("light")));
+                    page->findChild<QPushButton *>(QStringLiteral("driveAdminDetailsEdit"))->click(); QTest::qWait(80);
+                    window.grab().save(QStringLiteral("/tmp/udrive-admin-editor-%1.png").arg(dark ? QStringLiteral("dark") : QStringLiteral("light")));
+                    page->findChild<QPushButton *>(QStringLiteral("driveAdminUserCancel"))->click();
+                    const auto sidebarSize = window.size(); window.resize(950, 700); QTest::qWait(80);
+                    QVERIFY(window.width() <= 950); QVERIFY(page->rect().contains(details->geometry()));
+                    window.grab().save(QStringLiteral("/tmp/udrive-admin-sidebar-compact-%1.png").arg(dark ? QStringLiteral("dark") : QStringLiteral("light")));
+                    page->findChild<QPushButton *>(QStringLiteral("driveAdminDetailsClose"))->click(); window.resize(sidebarSize); QTest::qWait(80);
                     // Optional visual review of every Admin dialog, using only this local mock server.
                     auto capture = [&](const QString &name) {
                         QTest::qWait(80);
@@ -361,6 +487,17 @@ private Q_SLOTS:
                     tabs->setCurrentIndex(0); QTRY_VERIFY(!page->api()->busy());
                 }
             }
+            // Resource navigation is available through the breadcrumb menu.
+            bool sawSections = false;
+            QTimer::singleShot(80, &window, [&] {
+                auto *menu = page->findChild<QMenu *>(QStringLiteral("driveAdminSectionsMenu"));
+                if (!menu || !menu->isVisible()) return;
+                sawSections = menu->actions().size() >= 3;
+                if (sawSections) menu->actions().at(1)->trigger(); menu->close();
+            });
+            page->findChild<QPushButton *>(QStringLiteral("driveAdminSection"))->click();
+            QTRY_VERIFY(sawSections); QTRY_COMPARE(table->model()->rowCount(), 1);
+            QCOMPARE(table->model()->index(0, 0).data().toString(), QStringLiteral("Design"));
             server.permissions = {"Groups.ReadWrite.all"}; page->api()->refreshAccess();
             QTRY_COMPARE(page->findChild<QTabBar *>(QStringLiteral("driveAdminTabs"))->currentIndex(), 1);
             QTRY_COMPARE(table->model()->rowCount(), 1); QCOMPARE(table->model()->index(0, 0).data().toString(), QStringLiteral("Design"));
@@ -368,9 +505,12 @@ private Q_SLOTS:
             QCOMPARE(table->model()->index(0, 0).data().toString(), QStringLiteral("Design"));
             window.setCurrentAccount(user); QTRY_VERIFY(!window.canAdminister()); window.setCurrentPage(SettingsDialog::SettingsPage::Administration);
             QVERIFY(window.currentPage() != SettingsDialog::SettingsPage::Administration);
+            server.permissions = fullPermissions; page->api()->refreshAccess(); QTRY_VERIFY(!page->api()->busy());
             window.setCurrentAccount(admin); QVERIFY(window.canAdminister()); window.setCurrentPage(SettingsDialog::SettingsPage::Administration);
+            QTRY_VERIFY(!page->api()->busy()); page->findChild<QTabBar *>(QStringLiteral("driveAdminTabs"))->setCurrentIndex(0);
+            QTRY_COMPARE(table->model()->rowCount(), 3); QTest::qWait(80); openDetails(1); QVERIFY(details->isVisible());
             adminState->signOutByUi(); QTRY_VERIFY(!window.canAdminister()); QTRY_VERIFY(window.currentPage() != SettingsDialog::SettingsPage::Administration);
-            QCOMPARE(table->model()->rowCount(), 0);
+            QCOMPARE(table->model()->rowCount(), 0); QVERIFY(!details->isVisible()); QVERIFY(detailValue(QStringLiteral("User name")).isEmpty());
         }
         manager->deleteAccount(adminState); manager->deleteAccount(normalState);
     }

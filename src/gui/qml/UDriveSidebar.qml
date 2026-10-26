@@ -14,7 +14,7 @@ Pane {
     readonly property bool hasAccount: AccountManager.accounts.length > 0
     readonly property bool collapsed: !settingsDialog.sidebarVisible
     padding: 10
-    Accessible.name: qsTr("UDrive navigation")
+    Accessible.name: qsTr("Udrive navigation")
     background: Rectangle {
         radius: 16
         color: sidebar.dark ? "#272727" : "#FFFFFF"
@@ -207,9 +207,9 @@ Pane {
                 id: quitButton
                 Layout.preferredWidth: 42
                 icon.source: "qrc:/udrive/icons/nav-quit.svg"
-                Accessible.name: qsTr("Quit UDrive")
+                Accessible.name: qsTr("Quit Udrive")
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Quit UDrive")
+                ToolTip.text: qsTr("Quit Udrive")
                 Keys.onTabPressed: widget.parentFocusWidget.focusNext()
                 onClicked: Qt.quit()
             }

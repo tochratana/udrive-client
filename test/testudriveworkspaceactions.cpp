@@ -227,6 +227,81 @@ private Q_SLOTS:
         QVERIFY(actions.patch({drive}, {{"name", "No replay"}})); QTRY_COMPARE(done.size(), 1); QVERIFY(!done.takeFirst().at(0).toBool());
         QVERIFY(beforeWrite > count); QCOMPARE(server.requests.size(), beforeWrite + 1);
     }
+    void deleteAccess_data()
+    {
+        QTest::addColumn<QJsonArray>("global"); QTest::addColumn<QJsonArray>("effective");
+        QTest::addColumn<bool>("allowed");
+        const QJsonArray viewer{"libre.graph/driveItem/content/read", "libre.graph/driveItem/permissions/read"};
+        auto editor = viewer; editor.append("libre.graph/driveItem/upload/create");
+        auto manager = editor; manager.append("libre.graph/driveItem/permissions/delete");
+        QTest::newRow("viewer") << QJsonArray{} << viewer << false;
+        QTest::newRow("editor") << QJsonArray{} << editor << false;
+        QTest::newRow("effective-manager") << QJsonArray{} << manager << true;
+        QTest::newRow("global-delete") << QJsonArray{"Drives.Delete.all"} << viewer << true;
+        QTest::newRow("global-update-only") << QJsonArray{"Drives.ReadWriteEnabled.all"} << viewer << false;
+        QTest::newRow("quota-only") << QJsonArray{"Drives.ReadWriteProjectQuota.all"} << viewer << false;
+        QTest::newRow("role-label-only") << QJsonArray{"Admin", "Manager"} << viewer << false;
+    }
+    void deleteAccess()
+    {
+        QFETCH(QJsonArray, global); QFETCH(QJsonArray, effective); QFETCH(bool, allowed);
+        WorkspaceServer server; server.permissions = global; server.effectiveActions = effective;
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new TestCredentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account); UDriveWorkspaceActions actions(&state);
+        const auto active = server.drive(); auto json = active.asJsonObject();
+        json.insert("root", QJsonObject{{"deleted", QJsonObject{{"state", "trashed"}}}});
+        OpenAPI::OAIDrive disabled; disabled.fromJsonObject(json);
+        QVERIFY(!actions.can("delete", disabled)); // Wait for verified effective permissions.
+        actions.setPermissionDrives({active}); QTRY_VERIFY(actions.permissionsReady());
+        QCOMPARE(actions.can("delete", disabled), allowed);
+        QVERIFY(!actions.can("delete", active));
+        QSignalSpy finished(&actions, &UDriveWorkspaceActions::finished);
+        const int before = server.requests.size();
+        QCOMPARE(actions.remove({disabled}), allowed);
+        if (allowed) {
+            QTRY_COMPARE(finished.size(), 1); QVERIFY(finished.first().at(0).toBool());
+            QCOMPARE(server.requests.last().verb, QByteArray("DELETE"));
+            QCOMPARE(server.requests.last().headers.value("purge"), QByteArray("T"));
+        } else QCOMPARE(server.requests.size(), before);
+        state.signOutByUi();
+        QVERIFY(!actions.can("delete", disabled));
+    }
+    void permanentDeletionRequiresDisabledWorkspaceAndPermission()
+    {
+        WorkspaceServer server;
+        server.effectiveActions = {"libre.graph/driveItem/content/read", "libre.graph/driveItem/permissions/read"};
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new TestCredentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account); UDriveWorkspaceActions actions(&state);
+        const auto active = server.drive();
+        auto json = active.asJsonObject();
+        // Disabled catalogs may omit the inaccessible root ID and DAV URL.
+        json.insert("root", QJsonObject{{"deleted", QJsonObject{{"state", "trashed"}}}});
+        OpenAPI::OAIDrive disabled; disabled.fromJsonObject(json);
+        actions.setPermissionDrives({active}); QTRY_VERIFY(actions.permissionsReady());
+        auto before = server.requests.size();
+        QVERIFY(!actions.can("delete", disabled)); QVERIFY(!actions.remove({disabled}));
+        QCOMPARE(server.requests.size(), before);
+        server.permissions.append("Drives.Delete.all");
+        actions.refreshPermissions(); QTRY_VERIFY(actions.permissionsReady());
+        QVERIFY(actions.can("delete", disabled)); QVERIFY(!actions.can("delete", active));
+        before = server.requests.size();
+        QVERIFY(!actions.remove({active})); QVERIFY(!actions.remove({disabled, active}));
+        QCOMPARE(server.requests.size(), before);
+        QSignalSpy done(&actions, &UDriveWorkspaceActions::finished);
+        QVERIFY(actions.remove({disabled})); QTRY_COMPARE(done.size(), 1);
+        QVERIFY(done.takeFirst().at(0).toBool());
+        QCOMPARE(server.requests.last().verb, QByteArray("DELETE"));
+        QCOMPARE(server.requests.last().headers.value("purge"), QByteArray("T"));
+        QVERIFY(server.requests.last().body.isEmpty());
+        server.deny = 403; before = server.requests.size();
+        QVERIFY(actions.remove({disabled, disabled})); QTRY_COMPARE(done.size(), 1);
+        QVERIFY(!done.takeFirst().at(0).toBool());
+        QCOMPARE(server.requests.size(), before + 1); // Stop on a denied delete; do not process the next workspace.
+    }
     void specialFilesAndDescription()
     {
         WorkspaceServer server;

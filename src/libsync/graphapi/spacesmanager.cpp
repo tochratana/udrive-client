@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Hannah von Reth <hannah.vonreth@owncloud.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -53,6 +56,14 @@ void SpacesManager::refresh()
     if (!_account->credentials()->ready()) {
         return;
     }
+
+    // Serialize catalog requests so a slower old response cannot undo a newer
+    // workspace change. Refresh again afterwards if a change occurred mid-fetch.
+    if (_refreshInProgress) {
+        _refreshPending = true;
+        return;
+    }
+    _refreshInProgress = true;
 
     // TODO: leak the job until we fixed the ownership https://github.com/owncloud/client/issues/11203
     auto drivesJob = new Drives(_account, nullptr);
@@ -109,7 +120,13 @@ void SpacesManager::refresh()
             emit spacesRemoved(_account->uuid(), deletedSpaces, _spaces.count());
         // todo: remove this once the old accountSettings are gone
         Q_EMIT updated(_account);
-        _refreshTimer->start();
+        _refreshInProgress = false;
+        if (_refreshPending) {
+            _refreshPending = false;
+            refresh();
+        } else {
+            _refreshTimer->start();
+        }
     });
     _refreshTimer->stop();
     drivesJob->start();

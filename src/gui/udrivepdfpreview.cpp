@@ -91,6 +91,7 @@ UDrivePdfPreview::UDrivePdfPreview(QWidget *parent) : QWidget(parent)
     back->setToolTip(tr("Back to files"));
     back->setAccessibleName(tr("Back to files"));
     back->setFixedSize(34, 34);
+    back->setCursor(Qt::PointingHandCursor);
     back->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Back));
     back->setIconSize(QSize(20, 20));
     header->addWidget(back);
@@ -659,7 +660,9 @@ void UDrivePdfPreview::updateAppearance()
         "QWidget#drivePdfPreview QPushButton { min-width: 0; min-height: 0; padding: 0; border: none; border-radius: 6px; background: transparent; }"
         "QWidget#drivePdfPreview QPushButton:hover { background: %4; }"
         "QWidget#drivePdfPreview QPushButton:focus { border: 1px solid #40D979; }"
-        "QWidget#drivePdfPreview QPushButton#pdfBack:focus { border: none; background: %4; }"
+        "QWidget#drivePdfPreview QPushButton#pdfBack { border: none; background: transparent; }"
+        "QWidget#drivePdfPreview QPushButton#pdfBack:hover { border: none; background: transparent; }"
+        "QWidget#drivePdfPreview QPushButton#pdfBack:focus { border: none; outline: none; background: transparent; }"
         "QWidget#drivePdfPreview QPushButton:disabled { background: transparent; color: %5; }"
         "QWidget#pdfPageNavigation { background: %7; border: 1px solid %3; border-radius: 8px; }"
         "QLabel#pdfPageCount { color: %5; font-size: 12px; padding-right: 4px; }"

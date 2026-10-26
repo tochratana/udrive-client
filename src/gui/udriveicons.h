@@ -26,6 +26,7 @@ enum class Symbol {
     Move,
     Trash,
     Restore,
+    History,
     Star,
     StarFilled,
     Link,
@@ -51,6 +52,7 @@ enum class Symbol {
     Filter,
     Cloud,
     Disable,
+    Enable,
     Help,
     Info,
     Bell,
@@ -131,6 +133,10 @@ public:
             path.cubicTo(6, 2, 17, 2, 19, 10); path.cubicTo(25, 10, 25, 19, 18, 19);
             path.closeSubpath(); painter->drawPath(path); break;
         }
+        case Symbol::Enable:
+            painter->drawEllipse(QRectF(3, 3, 18, 18));
+            line({{10, 8}, {16, 12}, {10, 16}, {10, 8}});
+            break;
         case Symbol::Disable:
             painter->drawEllipse(QRectF(3, 3, 18, 18));
             painter->drawRoundedRect(QRectF(9, 9, 6, 6), 1, 1);
@@ -277,6 +283,18 @@ public:
             line({{10, 10}, {10, 17}});
             line({{14, 10}, {14, 17}});
             break;
+        case Symbol::History: {
+            QPainterPath path;
+            path.moveTo(3, 12);
+            path.cubicTo(3, 17, 7, 21, 12, 21);
+            path.cubicTo(17, 21, 21, 17, 21, 12);
+            path.cubicTo(21, 7, 17, 3, 12, 3);
+            path.cubicTo(8.5, 3, 5.5, 5, 3, 8);
+            painter->drawPath(path);
+            line({{3, 3}, {3, 8}, {8, 8}});
+            line({{12, 7}, {12, 12}, {16, 14}});
+            break;
+        }
         case Symbol::Restore:
             painter->drawArc(QRectF(4, 4, 16, 16), -45 * 16, 285 * 16);
             line({{3, 3}, {3, 9}, {9, 9}});

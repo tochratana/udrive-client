@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Build a UDrive x64 test installer on Windows with the pinned Craft dependencies."""
+"""Build a Udrive x64 test installer on Windows with the pinned Craft dependencies."""
 
 import argparse
 import configparser
@@ -91,14 +91,19 @@ def brand_blueprint(path):
     """Adapt the pinned upstream package in the isolated Craft build directory."""
     source = path.read_text()
     changes = {
-        'self.description = "ownCloud Desktop Client"': 'self.description = "UDrive Desktop Client"',
-        'self.displayName = "ownCloud"': 'self.displayName = "UDrive"',
+        'self.description = "ownCloud Desktop Client"': 'self.description = "Udrive Desktop Client"',
+        'self.displayName = "ownCloud"': 'self.displayName = "Udrive"',
         'self.webpage = "https://github.com/owncloud/client"': 'self.webpage = "https://drive.unity-workspace.com"',
         'self.defines["company"] = "ownCloud GmbH"': 'self.defines["company"] = "Unity Workspace"\n        self.defines["license"] = self.sourceDir() / "COPYING"',
         'self.buildDir() / "src/gui/owncloud.ico"': 'self.buildDir() / "src/gui/udrive.ico"',
         'self.runtimeDependencies["libs/qt/qtdeclarative"] = None': 'self.runtimeDependencies["libs/qt/qtdeclarative"] = None\n        self.runtimeDependencies["libs/qt6/qtmultimedia"] = None',
     }
     for old, new in changes.items():
+        # Recognize the previous fork label when reusing a known branded Craft
+        # checkout; unrelated blueprint changes still fail the checks below.
+        previous = new.replace('"Udrive', '"UDrive')
+        if previous != new and source.count(previous) == 1:
+            source = source.replace(previous, new)
         if source.count(new) == 1 and old not in source.replace(new, "", 1):
             continue
         if source.count(old) != 1:
@@ -159,11 +164,11 @@ def smoke_test(installer, prefix, work_root, expected_version):
     import winreg
 
     # Never replace an existing local installation while checking a build.
-    for key in (r"Software\Unity Workspace\UDrive", r"Software\Microsoft\Windows\CurrentVersion\Uninstall\UDrive"):
+    for key in (r"Software\Unity Workspace\Udrive", r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Udrive"):
         for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
             try:
                 with winreg.OpenKey(hive, key):
-                    raise BuildError("UDrive is already installed. Use a clean Windows VM or CI runner for --smoke-test.")
+                    raise BuildError("Udrive is already installed. Use a clean Windows VM or CI runner for --smoke-test.")
             except FileNotFoundError:
                 pass
     hidden_prefix = prefix.with_name(prefix.name + ".smoke-isolated")
@@ -182,7 +187,7 @@ def smoke_test(installer, prefix, work_root, expected_version):
                 raise BuildError(f"Installer exited without creating {executable}. "
                                  f"Files in the requested install folder: {files[:40]}")
             if pe_machine(executable) != 0x8664:
-                raise BuildError("The installed UDrive application is not x64.")
+                raise BuildError("The installed Udrive application is not x64.")
             for name in ("Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "vcruntime140.dll", "msvcp140.dll"):
                 if not (executable.parent / name).is_file():
                     raise BuildError(f"Missing installed runtime dependency: {name}")
@@ -204,7 +209,7 @@ def smoke_test(installer, prefix, work_root, expected_version):
                 output = run(executable, "--version", env=env, capture=True, timeout=30)
             finally:
                 hidden_prefix.rename(prefix)
-            if "UDrive" not in output or expected_version not in output:
+            if "Udrive" not in output or expected_version not in output:
                 raise BuildError("The installed application reported an unexpected version or brand.")
             print(output, flush=True)
             print("Installed application, runtime dependencies and version check passed.", flush=True)
@@ -232,7 +237,7 @@ def smoke_test(installer, prefix, work_root, expected_version):
                     print("+ " + command, flush=True)
                     subprocess.run(command, check=True, timeout=180)
                     if (installed / "bin/udrive.exe").exists():
-                        raise BuildError("The test uninstaller left the UDrive application installed.")
+                        raise BuildError("The test uninstaller left the Udrive application installed.")
                 except (BuildError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
                     if original_error is not None:
                         print(f"Cleanup also failed; preserving the installation error above: {error}", file=sys.stderr, flush=True)
@@ -264,7 +269,7 @@ def build(args):
     override = work_root / "udrive-windows.ini"
     override.write_text(WINDOWS_CRAFT_OVERRIDE)
     env = os.environ.copy()
-    env.update(APPLICATION_EXECUTABLE="udrive", APPLICATION_SHORTNAME="UDrive", SIGN_PACKAGE="False")
+    env.update(APPLICATION_EXECUTABLE="udrive", APPLICATION_SHORTNAME="Udrive", SIGN_PACKAGE="False")
     base = [sys.executable, str(master / "CraftMaster.py"), "--config", str(ROOT / ".craft.ini"),
             "--config-override", str(ROOT / ".github/workflows/craft_override.ini"), "--config-override", str(override),
             "--variables", f"Root={work_root}", f"WORKSPACE={work_root}", f"PythonExecutable={sys.executable}",
@@ -286,7 +291,7 @@ def build(args):
     craft("-c", "--no-cache", PACKAGE)
     prefix = work_root / TARGET
     if pe_machine(prefix / "bin/udrive.exe") != 0x8664:
-        raise BuildError("The compiled UDrive application is not Windows x64.")
+        raise BuildError("The compiled Udrive application is not Windows x64.")
     craft("-c", "--no-cache", "--package", PACKAGE)
     installers = list(packages.glob("*.exe"))
     if len(installers) != 1 or pe_machine(installers[0]) not in (0x014C, 0x8664):
@@ -295,7 +300,7 @@ def build(args):
     if args.smoke_test:
         smoke_test(installers[0], prefix, work_root, app_version)
     output.mkdir(parents=True)
-    filename = f"UDrive-{app_version}-Windows-x64-TESTING-ONLY.exe"
+    filename = f"Udrive-{app_version}-Windows-x64-TESTING-ONLY.exe"
     destination = output / filename
     shutil.copy2(installers[0], destination)
     metadata = {"schema_version": 1, "platform": "windows", "channel": "testing", "version": app_version,
@@ -305,7 +310,7 @@ def build(args):
                 "source_dirty": bool(run("git", "-C", ROOT, "status", "--porcelain", capture=True).strip())}
     (output / "download.json").write_text(json.dumps(metadata, indent=2) + "\n")
     (output / "SHA256SUMS").write_text(f'{metadata["sha256"]}  {filename}\n')
-    (output / "TESTING-ONLY.txt").write_text("Unsigned UDrive Windows x64 test installer. Not a signed production release.\n")
+    (output / "TESTING-ONLY.txt").write_text("Unsigned Udrive Windows x64 test installer. Not a signed production release.\n")
     print(f"Windows test installer: {destination}")
 
 

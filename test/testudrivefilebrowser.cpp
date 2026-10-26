@@ -148,6 +148,10 @@ public:
     int incomingStatus = 404;
     int incomingDelay = 0;
     QJsonArray extraDrives;
+    int catalogDelay = 0;
+    bool omitDisabledFromMembership = false;
+    int workspaceImageDelay = 0;
+    QMap<QString, QByteArray> workspaceImages;
     QJsonArray globalPermissions{"Drives.Create.all", "Drives.ReadWriteEnabled.all", "Drives.ReadWriteProjectQuota.all"};
     int outgoingDelay = 0;
     int outgoingStatus = 200;
@@ -391,6 +395,8 @@ public:
                             if (guard && guard->state() == QAbstractSocket::ConnectedState)
                                 respond(guard, status, "application/json", body);
                         });
+                    } else if (parts.at(0) == "GET" && path == QStringLiteral("/graph/v1.0/drives")) {
+                        respond(socket, 200, "application/json", QJsonDocument(QJsonObject{{"value", extraDrives}}).toJson());
                     } else if (path == QStringLiteral("/graph/v1.0/me/drives")) {
                         QJsonArray drives;
                         QStringList ids {QStringLiteral("personal"), QStringLiteral("team")};
@@ -402,8 +408,23 @@ public:
                                 {"root", QJsonObject{{"id", id == "team" ? teamRootId : id}, {"eTag", "root-tag"},
                                     {"webDavUrl", url(graphDavPrefix + "/" + id + "/").toString()}, {"webUrl", url("/web/" + id).toString()}}}});
                         }
-                        for (const auto &drive : extraDrives) drives.append(drive);
-                        respond(socket, 200, "application/json", QJsonDocument(QJsonObject{{"value", drives}}).toJson());
+                        for (const auto &drive : extraDrives) {
+                            if (omitDisabledFromMembership && drive.toObject().value("root").toObject().value("deleted").toObject().value("state") == "trashed") continue;
+                            drives.append(drive);
+                        }
+                        const auto body = QJsonDocument(QJsonObject{{"value", drives}}).toJson();
+                        const QPointer<QTcpSocket> guard(socket);
+                        QTimer::singleShot(catalogDelay, this, [this, guard, body] {
+                            if (guard && guard->state() == QAbstractSocket::ConnectedState)
+                                respond(guard, 200, "application/json", body);
+                        });
+                    } else if (parts.at(0) == "GET" && workspaceImages.contains(path)) {
+                        const auto body = workspaceImages.value(path);
+                        const QPointer<QTcpSocket> guard(socket);
+                        QTimer::singleShot(workspaceImageDelay, this, [this, guard, body] {
+                            if (guard && guard->state() == QAbstractSocket::ConnectedState)
+                                respond(guard, 200, "image/png", body, {{"Cache-Control", "max-age=3600"}, {"ETag", QCryptographicHash::hash(body, QCryptographicHash::Sha256).toHex()}});
+                        });
                     } else if (parts.at(0) == "PATCH" && path.startsWith(QStringLiteral("/graph/v1.0/drives/"))) {
                         const int status = workspaceMutationStatus;
                         if (status == 200) for (int i = 0; i < extraDrives.size(); ++i) {
@@ -411,12 +432,31 @@ public:
                             if (drive.value("id").toString() != path.section('/', -1)) continue;
                             const auto patch = QJsonDocument::fromJson(requestBodies.value(key)).object();
                             for (auto it = patch.begin(); it != patch.end(); ++it) drive.insert(it.key(), it.value());
+                            if (headers.value("restore") == "T") {
+                                auto root = drive.value("root").toObject(); root.remove("deleted"); drive.insert("root", root);
+                            }
                             extraDrives[i] = drive;
                         }
                         const QPointer<QTcpSocket> guard(socket);
                         QTimer::singleShot(workspaceMutationDelay, this, [this, guard, status] {
                             if (guard && guard->state() == QAbstractSocket::ConnectedState) respond(guard, status, "application/json", "{}");
                         });
+                    } else if (parts.at(0) == "DELETE" && path.startsWith(QStringLiteral("/graph/v1.0/drives/"))) {
+                        int status = workspaceMutationStatus;
+                        if (status == 200) for (int i = 0; i < extraDrives.size(); ++i) {
+                            auto drive = extraDrives.at(i).toObject();
+                            if (drive.value("id").toString() != path.section('/', -1)) continue;
+                            auto root = drive.value("root").toObject();
+                            if (headers.value("purge") == "T") {
+                                if (root.value("deleted").toObject().value("state") != "trashed") status = 400;
+                                else extraDrives.removeAt(i);
+                            } else {
+                                root.insert("deleted", QJsonObject{{"state", "trashed"}});
+                                drive.insert("root", root); extraDrives[i] = drive;
+                            }
+                            break;
+                        }
+                        respond(socket, status, "application/json", "{}");
                     } else if (parts.at(0) == "GET" && QUrlQuery(QUrl::fromEncoded(parts.at(1))).queryItemValue("preview") == "1") {
                         thumbnailQueries.insert(path, QUrlQuery(QUrl::fromEncoded(parts.at(1))));
                         ++activeThumbnails;
@@ -691,10 +731,10 @@ QByteArray pdfFixture(QSizeF dimensions = QSizeF(300, 400))
         writer.setPageMargins(QMarginsF(0, 0, 0, 0));
         QPainter painter(&writer);
         painter.fillRect(QRect(20, 20, 60, 30), Qt::red);
-        painter.drawText(QRect(20, 90, 250, 40), "UDrive PDF preview — page one");
+        painter.drawText(QRect(20, 90, 250, 40), "Udrive PDF preview — page one");
         writer.newPage();
         painter.fillRect(QRect(20, 20, 60, 30), Qt::blue);
-        painter.drawText(QRect(20, 90, 250, 40), "UDrive PDF preview — page two");
+        painter.drawText(QRect(20, 90, 250, 40), "Udrive PDF preview — page two");
     }
     return data;
 }
@@ -770,7 +810,7 @@ class TestUDriveFileBrowser : public QObject
 private Q_SLOTS:
     void initTestCase()
     {
-        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive"))
+        if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive"))
             QVERIFY(Resources::loadUDriveFonts());
         _localHttpWasSet = qEnvironmentVariableIsSet("UDRIVE_ALLOW_LOCAL_HTTP");
         _previousLocalHttp = qgetenv("UDRIVE_ALLOW_LOCAL_HTTP");
@@ -785,6 +825,13 @@ private Q_SLOTS:
     {
         if (_localHttpWasSet) qputenv("UDRIVE_ALLOW_LOCAL_HTTP", _previousLocalHttp);
         else qunsetenv("UDRIVE_ALLOW_LOCAL_HTTP");
+    }
+
+    void cleanup()
+    {
+        // Language settings install a process-wide translator. A failing test
+        // must not leave later fixtures searching for translated English labels.
+        Translations::installLanguage(QStringLiteral("en_US"));
     }
 
     void loggingDialogLayout_data()
@@ -843,8 +890,8 @@ private Q_SLOTS:
 
     void khmerFontRendering()
     {
-        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive"))
-            QSKIP("UDrive bundled font test.");
+        if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive"))
+            QSKIP("Udrive bundled font test.");
         const QFont original = qApp->font();
         QVERIFY(Resources::loadUDriveFonts());
         QVERIFY(Resources::loadUDriveFonts());
@@ -883,8 +930,8 @@ private Q_SLOTS:
 
     void networkSettingsLayout()
     {
-        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive"))
-            QSKIP("UDrive network settings layout test.");
+        if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive"))
+            QSKIP("Udrive network settings layout test.");
         QFETCH(QString, locale);
         QTranslator translator;
         QVERIFY(translator.load(Translations::translationsFilePrefix() + locale, Translations::translationsDirectoryPath()));
@@ -1714,7 +1761,7 @@ private Q_SLOTS:
     }
     void languageSettingsRestoreAndRendering()
     {
-        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive")) QSKIP("UDrive language selector test.");
+        if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive")) QSKIP("Udrive language selector test.");
         QFETCH(QString, savedLocale);
         QFETCH(QString, expectedLocale);
         const QString previous = ConfigFile().uiLanguage();
@@ -1788,10 +1835,12 @@ private Q_SLOTS:
         QVERIFY(title && message && okay && okay->isDefault());
         QCOMPARE(title->textFormat(), Qt::PlainText);
         QCOMPARE(message->textFormat(), Qt::PlainText);
-        QCOMPARE(title->text(), expectedLocale == QStringLiteral("en_US") ? QStringLiteral("Language saved")
-            : translator.translate("OCC::GeneralSettings", "Language saved"));
-        QCOMPARE(message->text(), expectedLocale == QStringLiteral("en_US") ? QStringLiteral("Restart UDrive to apply your new language.")
-            : translator.translate("OCC::GeneralSettings", "Restart UDrive to apply your new language."));
+        // The selection takes effect immediately; the notice uses the newly
+        // selected language, regardless of the language used to open settings.
+        QTranslator selectedLanguage;
+        QVERIFY(selectedLanguage.load(Translations::translationsFilePrefix() + QStringLiteral("km"), Translations::translationsDirectoryPath()));
+        QCOMPARE(title->text(), selectedLanguage.translate("OCC::GeneralSettings", "Language saved"));
+        QCOMPARE(message->text(), selectedLanguage.translate("OCC::GeneralSettings", "Restart Udrive to apply your new language."));
         QVERIFY(QMetaObject::invokeMethod(languages, "activated", Qt::DirectConnection, Q_ARG(int, 1)));
         QCOMPARE(window.findChildren<QDialog *>("languageRestartNotice").size(), 1);
         if (qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE")) {
@@ -1903,8 +1952,8 @@ private Q_SLOTS:
 
     void workspaceHeaderAccountIsolation()
     {
-        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive"))
-            QSKIP("UDrive workspace header test.");
+        if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive"))
+            QSKIP("Udrive workspace header test.");
         DriveServer firstServer;
         DriveServer secondServer;
         firstServer.personalQuota = {{"used", qint64(29 * 1024 * 1024)}, {"total", qint64(15) * 1024 * 1024 * 1024}};
@@ -1916,12 +1965,17 @@ private Q_SLOTS:
         first->credentials()->fetchFromKeychain();
         second->credentials()->fetchFromKeychain();
         auto *manager = AccountManager::instance();
-        auto *firstState = manager->addAccount(first);
-        auto *secondState = manager->addAccount(second);
+        QPointer<AccountState> firstState = manager->addAccount(first);
+        QPointer<AccountState> secondState = manager->addAccount(second);
+        const auto cleanupAccounts = qScopeGuard([&] {
+            if (firstState) manager->deleteAccount(firstState);
+            if (secondState) manager->deleteAccount(secondState);
+        });
         {
             SettingsDialog window(nullptr);
             window.resize(1280, 800);
             window.show();
+            QApplication::setActiveWindow(&window);
             auto *headerSearch = window.findChild<QStackedWidget *>("driveHeaderSearch");
             QVERIFY(headerSearch);
             auto *home = window.findChild<QPushButton *>("driveHome");
@@ -2820,7 +2874,7 @@ private Q_SLOTS:
             QCOMPARE(UDriveFilePreview::kindForName(name), UDriveFilePreview::Kind::Text);
         }
         DriveServer server;
-        server.uploaded.insert("/dav/personal/main.py", "def hello():\n    return 'UDrive'\n");
+        server.uploaded.insert("/dav/personal/main.py", "def hello():\n    return 'Udrive'\n");
         auto *account = new Account(QUuid::createUuid(), "test", server.url());
         account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
         account->credentials()->fetchFromKeychain();
@@ -2832,7 +2886,7 @@ private Q_SLOTS:
         QSignalSpy ready(preview, &UDriveFilePreview::ready);
         QVERIFY(browser.previewSelectedFile());
         QTRY_COMPARE(ready.count(), 1);
-        QCOMPARE(browser.findChild<QPlainTextEdit *>("previewText")->toPlainText(), QStringLiteral("def hello():\n    return 'UDrive'\n"));
+        QCOMPARE(browser.findChild<QPlainTextEdit *>("previewText")->toPlainText(), QStringLiteral("def hello():\n    return 'Udrive'\n"));
         QVERIFY(preview->findChild<QLabel *>("previewStatus")->text().contains("text preview"));
     }
 
@@ -3868,6 +3922,29 @@ private Q_SLOTS:
         UDriveInputDialog allowEmptyDialog(QStringLiteral("Move to folder"), QStringLiteral("Destination"), QString(), QStringLiteral("OK"), nullptr, true);
         auto *allowEmptyConfirm = allowEmptyDialog.findChild<QPushButton *>(QStringLiteral("inputConfirmButton"));
         QVERIFY(allowEmptyConfirm && allowEmptyConfirm->isEnabled());
+
+        UDriveInputDialog quotaDialog(QStringLiteral("Edit quota"), QStringLiteral("Quota in GB (minimum 0.001):"), QStringLiteral("15"), QStringLiteral("Save"), nullptr, false);
+        auto *quotaField = quotaDialog.findChild<QLineEdit *>(QStringLiteral("inputDialogField"));
+        QVERIFY(quotaField);
+        QCOMPARE(quotaField->text(), QStringLiteral("15"));
+
+        const auto origPal = QGuiApplication::palette();
+        QPalette darkPal;
+        darkPal.setColor(QPalette::Window, QColor(36, 37, 40));
+        darkPal.setColor(QPalette::WindowText, QColor(237, 237, 237));
+        QGuiApplication::setPalette(darkPal);
+
+        UDriveEmojiDialog emojiDialog(QStringLiteral("tt"));
+        auto *emojiTitle = emojiDialog.findChild<QLabel *>(QStringLiteral("emojiDialogTitle"));
+        auto *search = emojiDialog.findChild<QLineEdit *>(QStringLiteral("emojiSearchField"));
+        auto *preview = emojiDialog.findChild<QLabel *>(QStringLiteral("emojiPreviewLabel"));
+        auto *cancel = emojiDialog.findChild<QPushButton *>(QStringLiteral("emojiCancelButton"));
+
+        QVERIFY(emojiTitle && search && preview && cancel);
+        QCOMPARE(emojiTitle->text(), QStringLiteral("Set icon for tt"));
+        QCOMPARE(search->placeholderText(), QStringLiteral("Search"));
+
+        QGuiApplication::setPalette(origPal);
     }
 
     void confirmRemoveAccountDialogStylingAndBehavior()
@@ -4243,14 +4320,14 @@ private Q_SLOTS:
 
         // Save screenshot of the versions view for user verification
         auto *fileDetails = browser.findChild<QWidget *>(QStringLiteral("driveDetailsPages"))->parentWidget();
-        if (fileDetails) {
+        if (fileDetails && qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE")) {
             const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
             QPixmap pix(fileDetails->size());
             pix.fill(dark ? QColor(0x18, 0x1A, 0x1F) : Qt::white);
             QPainter p(&pix);
             fileDetails->render(&p);
             p.end();
-            pix.save(QStringLiteral("/Users/tochratana/.gemini/antigravity/brain/00705d74-3dbe-4bb0-962c-114a4aadd1a1/versions-panel.png"));
+            QVERIFY(pix.save(QDir::temp().filePath(QStringLiteral("udrive-versions-panel.png"))));
         }
     }
 
@@ -4265,7 +4342,7 @@ private Q_SLOTS:
         QVERIFY(card);
         auto *name = dialog.findChild<QLabel *>(QStringLiteral("aboutAppName"));
         QVERIFY(name);
-        QCOMPARE(name->text(), QStringLiteral("UDrive"));
+        QCOMPARE(name->text(), QStringLiteral("Udrive"));
 
         auto *badge = dialog.findChild<QLabel *>(QStringLiteral("aboutVersionBadge"));
         QVERIFY(badge);
@@ -4282,14 +4359,8 @@ private Q_SLOTS:
         auto *copyBtn = dialog.findChild<QPushButton *>(QStringLiteral("aboutCopyDiagBtn"));
         QVERIFY(copyBtn);
 
-        const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
-        // 1. Capture Diagnostics tab
-        QPixmap diagPix(dialog.size());
-        diagPix.fill(dark ? QColor(0x18, 0x1A, 0x1F) : Qt::white);
-        QPainter pDiag(&diagPix);
-        dialog.render(&pDiag);
-        pDiag.end();
-        diagPix.save(QStringLiteral("/Users/tochratana/.gemini/antigravity/brain/00705d74-3dbe-4bb0-962c-114a4aadd1a1/about-dialog-diag.png"));
+        if (qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE"))
+            QVERIFY(dialog.grab().save(QDir::temp().filePath(QStringLiteral("udrive-about-diagnostics.png"))));
 
         // 2. Switch back to Overview for the Overview screenshot
         auto *tabAbout = dialog.findChild<QPushButton *>(QStringLiteral("tabBtnAbout"));
@@ -4297,12 +4368,8 @@ private Q_SLOTS:
         QTest::mouseClick(tabAbout, Qt::LeftButton);
         QCOMPARE(pages->currentIndex(), 0);
 
-        QPixmap pix(dialog.size());
-        pix.fill(dark ? QColor(0x18, 0x1A, 0x1F) : Qt::white);
-        QPainter p(&pix);
-        dialog.render(&p);
-        p.end();
-        pix.save(QStringLiteral("/Users/tochratana/.gemini/antigravity/brain/00705d74-3dbe-4bb0-962c-114a4aadd1a1/about-dialog.png"));
+        if (qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE"))
+            QVERIFY(dialog.grab().save(QDir::temp().filePath(QStringLiteral("udrive-about.png"))));
 
         // Verify GeneralSettings footer labels
         GeneralSettings genSettings;
@@ -4314,14 +4381,10 @@ private Q_SLOTS:
         QCOMPARE(copyLbl->text(), QStringLiteral("Unity Workspace"));
         auto *aboutBtn = genSettings.findChild<QPushButton *>(QStringLiteral("about_pushButton"));
         QVERIFY(aboutBtn);
-        QCOMPARE(aboutBtn->text(), QStringLiteral("About UDrive"));
+        QCOMPARE(aboutBtn->text(), QStringLiteral("About Udrive"));
 
-        QPixmap genPix(genSettings.size());
-        genPix.fill(dark ? QColor(0x18, 0x1A, 0x1F) : Qt::white);
-        QPainter pGen(&genPix);
-        genSettings.render(&pGen);
-        pGen.end();
-        genPix.save(QStringLiteral("/Users/tochratana/.gemini/antigravity/brain/00705d74-3dbe-4bb0-962c-114a4aadd1a1/general-settings.png"));
+        if (qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE"))
+            QVERIFY(genSettings.grab().save(QDir::temp().filePath(QStringLiteral("udrive-general-settings.png"))));
     }
 
     void emptyTrash_data()
@@ -4604,8 +4667,8 @@ private Q_SLOTS:
 
     void monochromeStatusIcons()
     {
-        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive") || Resources::isVanillaTheme())
-            QSKIP("UDrive branding is not enabled in this build.");
+        if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive") || Resources::isVanillaTheme())
+            QSKIP("Udrive branding is not enabled in this build.");
         const QStringList states {QStringLiteral("ok"), QStringLiteral("error"), QStringLiteral("offline"),
             QStringLiteral("pause"), QStringLiteral("sync"), QStringLiteral("information")};
         for (int size : {22, 32}) {
@@ -4632,11 +4695,11 @@ private Q_SLOTS:
 
     void sidebarToggleAndVisibility()
     {
-        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive") || Resources::isVanillaTheme())
-            QSKIP("UDrive branding is not enabled in this build.");
+        if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive") || Resources::isVanillaTheme())
+            QSKIP("Udrive branding is not enabled in this build.");
 
         auto settings = ConfigFile::makeQSettings();
-        settings.remove(QStringLiteral("UDrive/sidebarVisible"));
+        settings.remove(QStringLiteral("Udrive/sidebarVisible"));
 
         SettingsDialog window(nullptr);
         window.resize(1200, 800);
@@ -4658,7 +4721,7 @@ private Q_SLOTS:
         QCOMPARE(quickWidget->width(), 56);
         QVERIFY(!quickWidget->isHidden());
         QCOMPARE(brandWidget->width(), 140);
-        QCOMPARE(settings.value(QStringLiteral("UDrive/sidebarVisible")).toBool(), false);
+        QCOMPARE(settings.value(QStringLiteral("Udrive/sidebarVisible")).toBool(), false);
 
         // Expand back via toggleSidebar()
         window.toggleSidebar();
@@ -4666,7 +4729,7 @@ private Q_SLOTS:
         QCOMPARE(quickWidget->width(), 236);
         QVERIFY(!quickWidget->isHidden());
         QCOMPARE(brandWidget->width(), 224);
-        QCOMPARE(settings.value(QStringLiteral("UDrive/sidebarVisible")).toBool(), true);
+        QCOMPARE(settings.value(QStringLiteral("Udrive/sidebarVisible")).toBool(), true);
 
         // Collapse again
         window.setSidebarVisible(false);
@@ -4693,7 +4756,7 @@ private Q_SLOTS:
         QCOMPARE(reopenedBrandWidget->width(), 224);
 
         // Cleanup
-        settings.remove(QStringLiteral("UDrive/sidebarVisible"));
+        settings.remove(QStringLiteral("Udrive/sidebarVisible"));
     }
 
     void detailsSidebarLayout_data()
@@ -5073,6 +5136,7 @@ private Q_SLOTS:
         layout.addWidget(&input);
         window.resize(500, 300);
         window.show();
+        QApplication::setActiveWindow(&window);
         input.setFocus();
         QTRY_COMPARE(QApplication::focusWidget(), &input);
         QTest::mouseMove(&window, QPoint(5, 5));
@@ -5085,12 +5149,8 @@ private Q_SLOTS:
         QCOMPARE(text->textFormat(), Qt::PlainText);
         QCOMPARE(QApplication::focusWidget(), &input);
 
-        // Capture Success Toast (matching user scenario: Public link copied to clipboard)
-        UDriveToast::showMessage(&window, QStringLiteral("Public link copied to clipboard."), UDriveToast::Kind::Success);
-        notice = window.findChild<QFrame *>("udriveToast");
-        QVERIFY(notice);
-        QTest::qWait(50);
-        notice->grab().save(QStringLiteral("/Users/tochratana/.gemini/antigravity/brain/00705d74-3dbe-4bb0-962c-114a4aadd1a1/toast-centered.png"));
+        if (qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE"))
+            QVERIFY(notice->grab().save(QDir::temp().filePath(QStringLiteral("udrive-toast.png"))));
 
         UDriveToast::dismiss(&window);
         UDriveToast::showMessage(&window, message);
@@ -5679,7 +5739,7 @@ private Q_SLOTS:
         QTest::keyClick(combo.view(), Qt::Key_End);
         QTest::keyClick(combo.view(), Qt::Key_Return);
         QCOMPARE(combo.currentIndex(), 39);
-        QVERIFY(!popup->isVisible());
+        QTRY_VERIFY(!popup->isVisible());
         for (const auto &request : server.requests) QVERIFY(request.first == "GET" || request.first == "PROPFIND");
     }
 
@@ -5723,8 +5783,9 @@ private Q_SLOTS:
         QCOMPARE(roleField->currentData().toInt(), 1);
         roleField->showPopup();
         auto *popup = roleField->view()->window();
-        QTRY_COMPARE(popup->pos(), roleField->mapToGlobal(QPoint(0, roleField->height() + 4)));
-        QCOMPARE(popup->width(), roleField->width());
+        QTRY_COMPARE(popup->y(), roleField->mapToGlobal(QPoint(0, roleField->height() + 4)).y());
+        QVERIFY(popup->width() >= roleField->width());
+        QVERIFY(udrivePopupBounds(roleField).contains(popup->geometry()));
         QVERIFY(roleField->screen()->availableGeometry().contains(popup->geometry()));
         for (int row = 0; row < roleField->count(); ++row) {
             const auto index = roleField->model()->index(row, 0);
@@ -5737,6 +5798,7 @@ private Q_SLOTS:
         QTest::keyClick(roleField->view(), Qt::Key_Down);
         QTest::keyClick(roleField->view(), Qt::Key_Return);
         QCOMPARE(roleField->currentData().toInt(), 15);
+        QTRY_VERIFY(!popup->isVisible());
         QVERIFY(dialog.isVisible());
         if (qEnvironmentVariableIsSet("UDRIVE_UI_TEST_CAPTURE")) {
             QTest::qWait(50);
@@ -6050,6 +6112,76 @@ private Q_SLOTS:
         QVERIFY(wsPublicSection->parentWidget()->isHidden());
     }
 
+    void incomingNotificationUsesShareTime()
+    {
+        DriveServer server(true); server.incomingStatus = 200;
+        const auto now = QDateTime::currentDateTimeUtc();
+        const auto recent = now.addSecs(-37);
+        const auto older = now.addDays(-37);
+        auto share = [&](const QString &id, const QJsonArray &permissions) {
+            return QJsonObject{{"id", id}, {"name", QString(id + QStringLiteral(".jpg"))},
+                {"createdDateTime", now.addDays(-90).toString(Qt::ISODate)},
+                {"lastModifiedDateTime", now.addDays(-63).toString(Qt::ISODate)},
+                {"remoteItem", QJsonObject{{"file", QJsonObject{}},
+                    {"lastModifiedDateTime", now.addDays(-63).toString(Qt::ISODate)}, {"permissions", permissions}}}};
+        };
+        auto grant = [](const QString &date) {
+            return QJsonObject{{"createdDateTime", date}, {"invitation", QJsonObject{
+                {"invitedBy", QJsonObject{{"user", QJsonObject{{"id", "alice"}, {"displayName", "Alice"}}}}}}}};
+        };
+        server.incomingShares = {
+            share("older-share", {grant(older.toString(Qt::ISODate))}),
+            share("recent-share", {grant("invalid"), grant(now.addDays(-2).toString(Qt::ISODate)),
+                grant(recent.toOffsetFromUtc(7 * 3600).toString(Qt::ISODate))}),
+            share("unknown-time", {grant("invalid")})};
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        auto *accounts = AccountManager::instance();
+        auto *state = accounts->addAccount(account);
+        const auto cleanup = qScopeGuard([&] { accounts->deleteAccount(state); });
+        SettingsDialog window(nullptr); window.resize(1250, 850);
+        window.setCurrentAccount(account); window.setCurrentPage(SettingsDialog::SettingsPage::Files); window.show();
+        auto *browser = static_cast<UDriveFileBrowser *>(window.findChild<QWidget *>("udriveFileBrowser"));
+        QVERIFY(browser);
+        auto *notifier = browser->sharesNotifier(); QVERIFY(notifier);
+        // This notifier belongs to the GUI library, which has its own moc copy.
+        // Trigger its existing timer instead of calling the test binary's poll implementation.
+        auto *pollTimer = notifier->findChild<QTimer *>(); QVERIFY(pollTimer);
+        QSignalSpy updated(notifier, SIGNAL(notificationsChanged()));
+        pollTimer->start(1);
+        QTRY_VERIFY(notifier->hasBaseline() && !notifier->isInFlight());
+        QCOMPARE(notifier->notifications().size(), 3);
+        QCOMPARE(notifier->notifications().at(0).id, QStringLiteral("recent-share"));
+        QCOMPARE(notifier->notifications().at(0).timestamp, QDateTime::fromString(recent.toString(Qt::ISODate), Qt::ISODate));
+        QCOMPARE(notifier->notifications().at(1).id, QStringLiteral("older-share"));
+        QVERIFY(!notifier->notifications().at(2).timestamp.isValid());
+
+        // Editing the file must not make its sharing notification newer.
+        auto changed = server.incomingShares.at(0).toObject(); auto remote = changed.value("remoteItem").toObject();
+        remote.insert("lastModifiedDateTime", now.toString(Qt::ISODate)); changed.insert("remoteItem", remote);
+        server.incomingShares[0] = changed;
+        const int beforeRefresh = updated.size();
+        pollTimer->start(1); QTRY_VERIFY(updated.size() > beforeRefresh);
+        QTRY_VERIFY(!notifier->isInFlight());
+        QCOMPARE(notifier->notifications().at(0).id, QStringLiteral("recent-share"));
+        QCOMPARE(notifier->notifications().at(1).timestamp, QDateTime::fromString(older.toString(Qt::ISODate), Qt::ISODate));
+
+        QPushButton *bell = nullptr;
+        for (auto *button : window.findChildren<QPushButton *>())
+            if (button->accessibleName() == QStringLiteral("Notifications")) { bell = button; break; }
+        QVERIFY(bell); bell->click();
+        auto *popup = window.findChild<QWidget *>("driveNotificationPopup"); QTRY_VERIFY(popup && popup->isVisible());
+        auto labels = popup->findChildren<QLabel *>("driveNotificationTime"); QCOMPARE(labels.size(), 3);
+        QVERIFY(labels.at(0)->text().endsWith(QStringLiteral("seconds ago")));
+        QCOMPARE(labels.at(2)->text(), QStringLiteral("Time unavailable"));
+        const QString initial = labels.at(0)->text();
+        QTRY_VERIFY_WITH_TIMEOUT(labels.at(0)->text() != initial, 2500);
+        if (qEnvironmentVariableIsSet("UDRIVE_NOTIFICATION_TEST_CAPTURE"))
+            QVERIFY(popup->grab().save("/tmp/udrive-notification-times.png"));
+        popup->close();
+    }
+
     void incomingShareNotifications()
     {
         DriveServer server(true);
@@ -6227,6 +6359,7 @@ private Q_SLOTS:
         QVERIFY(input && confirm && role && completer && status);
         QVERIFY(QTest::qWaitForWindowExposed(&dialog));
         dialog.activateWindow();
+        QApplication::setActiveWindow(&dialog);
         input->setFocus();
         QTRY_VERIFY(input->hasFocus());
         QTest::keyClicks(input, "a");
@@ -6349,6 +6482,7 @@ private Q_SLOTS:
         QVERIFY(input && role && confirm && completer);
         QVERIFY(QTest::qWaitForWindowExposed(&dialog));
         dialog.activateWindow();
+        QApplication::setActiveWindow(&dialog);
         input->setFocus();
         QTRY_VERIFY(input->hasFocus());
         QTest::keyClicks(input, "alice");
@@ -6557,9 +6691,30 @@ private Q_SLOTS:
                 QTRY_COMPARE(catalog->verticalScrollBar()->maximum(), 0);
                 QTest::qWait(100);
                 window.grab().save("/tmp/udrive-workspaces-layout.png");
+                QPixmap cover(360, 240); cover.fill(QColor("#557DA5"));
+                {
+                    QPainter painter(&cover); painter.setPen(Qt::white);
+                    auto font = painter.font(); font.setPixelSize(24); painter.setFont(font);
+                    painter.drawText(cover.rect(), Qt::AlignCenter, QStringLiteral("Workspace cover"));
+                }
+                const auto coverIndex = catalog->model()->index(0, 0);
+                catalog->model()->setData(coverIndex, QIcon(cover), Qt::DecorationRole);
+                QTest::qWait(50); window.grab().save("/tmp/udrive-workspace-cover-checkbox.png");
+                catalog->selectionModel()->select(coverIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+                QTest::qWait(50); window.grab().save("/tmp/udrive-workspace-cover-checkbox-selected.png");
+                catalog->selectionModel()->clearSelection();
                 window.findChild<QPushButton *>("driveIncludeDisabled")->click();
                 QTest::qWait(100);
                 window.grab().save("/tmp/udrive-workspaces-disabled.png");
+                for (int row = 0; row < catalog->model()->rowCount(); ++row) {
+                    const auto index = catalog->model()->index(row, 0);
+                    if (index.data(UDriveFileBrowser::SpaceDisabledRole).toBool()) {
+                        catalog->selectionModel()->select(index, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+                        QTest::qWait(50); window.grab().save("/tmp/udrive-workspace-enable-icon.png");
+                        break;
+                    }
+                }
+                catalog->selectionModel()->clearSelection();
                 auto *tableAction = window.findChild<QAction *>("driveWorkspaceViewTable");
                 tableAction->trigger(); QTest::qWait(100);
                 window.grab().save("/tmp/udrive-workspaces-table.png");
@@ -6796,9 +6951,12 @@ private Q_SLOTS:
         browser.showPersonal(); QTRY_VERIFY(!editor->isVisible()); QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         browser.showWorkspaces(); browser.findChild<QAction *>("driveWorkspaceViewTable")->trigger(); QTRY_COMPARE(table->model()->rowCount(), 2);
         table->selectionModel()->select(table->model()->index(0, 0), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-        const int before = server.requests.size();
+        const auto deleteRequests = [&server] {
+            return std::count_if(server.requests.cbegin(), server.requests.cend(), [](const auto &request) { return request.first == "DELETE"; });
+        };
+        const auto before = deleteRequests();
         QTimer::singleShot(0, &browser, [&] { auto *input = browser.findChild<UDriveInputDialog *>(); QVERIFY(input); input->reject(); });
-        browser.findChild<QAction *>("driveWorkspaceBulk_disable")->trigger(); QCOMPARE(server.requests.size(), before);
+        browser.findChild<QAction *>("driveWorkspaceBulk_disable")->trigger(); QCOMPARE(deleteRequests(), before);
         server.workspaceMutationDelay = 150;
         QTimer::singleShot(0, &browser, [&] { auto *input = browser.findChild<UDriveInputDialog *>(); QVERIFY(input); input->findChild<QLineEdit *>()->setText(QStringLiteral("2.5")); input->accept(); });
         quota->trigger(); QVERIFY(!quota->isEnabled()); QVERIFY(!table->isEnabled()); QVERIFY(!browser.findChild<QLineEdit *>("driveWorkspaceSearch")->isEnabled());
@@ -7073,6 +7231,269 @@ private Q_SLOTS:
         QVERIFY(second.isVisible());
         QVERIFY(second.findChild<QLineEdit *>(QStringLiteral("shareUserInput"))->isEnabled());
         QVERIFY(firstServer.workspaceInvitations.isEmpty() && secondServer.workspaceInvitations.isEmpty());
+    }
+
+    void disabledWorkspacesCatalogAndDeletion()
+    {
+        DriveServer server;
+        server.omitDisabledFromMembership = true;
+        server.globalPermissions.append("Drives.List.all");
+        // The current account has an effective Manager grant, without global delete.
+        server.workspacePermissions.insert("@libre.graph.permissions.actions.allowedValues", QJsonArray{
+            "libre.graph/driveItem/permissions/read", "libre.graph/driveItem/permissions/delete"});
+        for (const auto *id : {"archived-one", "archived-two"})
+            server.extraDrives.append(QJsonObject{{"id", id}, {"name", id}, {"driveType", "project"},
+                {"root", QJsonObject{{"deleted", QJsonObject{{"state", "trashed"}}}}}});
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        account->credentials()->fetchFromKeychain();
+        AccountState state(account); UDriveFileBrowser browser(&state);
+        const std::unique_ptr<QLineEdit> searchOwner(browser.takeSearchField());
+        browser.resize(1100, 760); browser.show(); browser.showWorkspaces();
+        auto *view = browser.findChild<QListView *>("driveWorkspacesView");
+        auto *include = browser.findChild<QPushButton *>("driveIncludeDisabled");
+        auto *search = browser.findChild<QLineEdit *>("driveWorkspaceSearch");
+        auto *remove = browser.findChild<QAction *>("driveWorkspaceBulk_delete");
+        auto *enable = browser.findChild<QAction *>("driveWorkspaceBulk_restore");
+        auto *quota = browser.findChild<QAction *>("driveWorkspaceBulk_quota");
+        QVERIFY(view && include && search && remove && enable && quota);
+        QTRY_COMPARE(view->model()->rowCount(), 1);
+        include->click();
+        QTRY_COMPARE(view->model()->rowCount(), 3);
+        QCOMPARE(account->spacesManager()->spacesCount(), 2); // No disabled catalog entries become sync roots.
+        search->setText("archived"); QTRY_COMPARE(view->model()->rowCount(), 2);
+        browser.findChild<QCheckBox *>("driveWorkspaceSelectAll")->click();
+        QTRY_VERIFY(remove->isEnabled()); QVERIFY(remove->isVisible());
+        QVERIFY(enable->isEnabled()); QVERIFY(enable->isVisible()); QVERIFY(quota->isEnabled());
+        QVERIFY(!browser.findChild<QAction *>("driveWorkspaceBulk_disable")->isVisible());
+        QVERIFY(!browser.findChild<QToolButton *>("driveWorkspaceBulk_disableButton")->isVisible());
+        QVERIFY(!browser.findChild<QToolButton *>("driveWorkspaceBulk_downloadButton")->isVisible());
+        QVERIFY(browser.findChild<QToolButton *>("driveWorkspaceBulk_deleteButton")->isVisible());
+        QTest::mouseClick(view->viewport(), Qt::LeftButton, Qt::NoModifier,
+            view->visualRect(view->model()->index(0, 0)).bottomRight() - QPoint(20, 25));
+        auto *menu = browser.findChild<QMenu *>("driveWorkspaceActionsMenu");
+        QTRY_VERIFY(menu && menu->isVisible());
+        QVERIFY(menu->findChild<QAction *>("driveWorkspace_delete")->isEnabled());
+        menu->close();
+        // Opening an individual card menu selects that card. Select both again
+        // to exercise the bulk deletion path.
+        view->selectionModel()->select(QItemSelection(view->model()->index(0, 0), view->model()->index(1, 0)),
+            QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        QCOMPARE(view->selectionModel()->selectedRows(0).size(), 2);
+        auto deleteCount = [&] {
+            return std::count_if(server.requests.cbegin(), server.requests.cend(), [](const auto &request) { return request.first == "DELETE"; });
+        };
+        const auto before = deleteCount();
+        QTimer::singleShot(0, &browser, [&] {
+            auto *dialog = browser.findChild<UDriveInputDialog *>("driveWorkspaceDeleteConfirmation"); QVERIFY(dialog); dialog->reject();
+        });
+        remove->trigger(); QCOMPARE(deleteCount(), before);
+        QCOMPARE(server.extraDrives.size(), 2);
+        if (qEnvironmentVariableIsSet("UDRIVE_DISABLED_WORKSPACE_CAPTURE"))
+            QVERIFY(browser.grab().save("/tmp/udrive-disabled-workspaces.png"));
+        QTimer::singleShot(0, &browser, [&] {
+            auto *dialog = browser.findChild<UDriveInputDialog *>("driveWorkspaceDeleteConfirmation"); QVERIFY(dialog); dialog->accept();
+        });
+        remove->trigger();
+        QTRY_COMPARE(server.extraDrives.size(), 0);
+        QTRY_COMPARE(view->model()->rowCount(), 0);
+        QCOMPARE(deleteCount(), before + 2);
+        for (const auto &request : server.requests) if (request.first == "DELETE")
+            QCOMPARE(server.requestHeaders.value(QString::fromLatin1(request.first) + QLatin1Char(' ') + request.second).value("purge"), QByteArray("T"));
+    }
+
+    void workspaceCatalogQueuesRefreshDuringRequest()
+    {
+        DriveServer server;
+        QJsonObject project{{"id", "project"}, {"name", "Research"}, {"driveType", "project"},
+            {"description", "Old subtitle"}, {"root", QJsonObject{{"id", "project"}, {"eTag", "unchanged"}}}};
+        server.extraDrives = {project};
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        AccountState state(account);
+        account->credentials()->fetchFromKeychain();
+        auto *manager = account->spacesManager();
+        QTRY_VERIFY(manager->space("project"));
+        UDriveFileBrowser browser(&state);
+        const std::unique_ptr<QLineEdit> search(browser.takeSearchField());
+        browser.resize(1050, 760); browser.show(); browser.showWorkspaces();
+        auto *view = browser.findChild<QListView *>("driveWorkspacesView");
+        QVERIFY(view);
+        QTRY_COMPARE(view->model()->rowCount(), 2);
+        auto requestCount = [&] {
+            return std::count_if(server.requests.cbegin(), server.requests.cend(), [](const auto &request) {
+                return request.first == "GET" && request.second == "/graph/v1.0/me/drives";
+            });
+        };
+        const auto before = requestCount();
+        server.catalogDelay = 150;
+        manager->refresh();
+        QTRY_COMPARE(requestCount(), before + 1);
+        project.insert("description", "Updated on web");
+        server.extraDrives = {project};
+        manager->refresh();
+        manager->refresh();
+        QTest::qWait(30);
+        QCOMPARE(requestCount(), before + 1);
+        QTRY_COMPARE(manager->space("project")->description(), QStringLiteral("Updated on web"));
+        QCOMPARE(requestCount(), before + 2);
+        QCOMPARE(view->model()->index(0, 0).data().toString(), QStringLiteral("Research"));
+        QCOMPARE(view->model()->index(0, 0).data(UDriveFileBrowser::SpaceDescriptionRole).toString(), QStringLiteral("Updated on web"));
+        if (qEnvironmentVariableIsSet("UDRIVE_WORKSPACE_SYNC_CAPTURE"))
+            QVERIFY(browser.grab().save("/tmp/udrive-workspace-sync.png"));
+    }
+
+    void workspaceImagesIgnoreStaleDownloadsAndBypassCache()
+    {
+        DriveServer server;
+        auto png = [](QColor color) {
+            QImage image(24, 24, QImage::Format_RGB32); image.fill(color);
+            QByteArray bytes; QBuffer buffer(&bytes); buffer.open(QIODevice::WriteOnly);
+            image.save(&buffer, "PNG"); return bytes;
+        };
+        const QString path = QStringLiteral("/workspace-image.png");
+        server.workspaceImages[path] = png(Qt::red);
+        server.workspaceImageDelay = 250;
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        account->setCredentials(new Credentials("browser-test-token", "test-refresh-token", account));
+        AccountState state(account);
+        account->credentials()->fetchFromKeychain();
+        QJsonObject special{{"id", "image"}, {"name", "image.png"}, {"eTag", "image-1"},
+            {"webDavUrl", server.url(path).toString()}, {"specialFolder", QJsonObject{{"name", "image"}}}};
+        QJsonObject json{{"id", "image-project"}, {"name", "Research"}, {"driveType", "project"},
+            {"root", QJsonObject{{"id", "image-project"}, {"eTag", "unchanged"}}}, {"special", QJsonArray{special}}};
+        auto drive = [&] { OpenAPI::OAIDrive value; value.fromJsonObject(json); return value; };
+        GraphApi::Space space(account->spacesManager(), drive(), true);
+        auto requestCount = [&] { return server.requests.count(qMakePair(QByteArray("GET"), path)); };
+        QTRY_COMPARE(requestCount(), 1);
+        special.insert("eTag", "image-2"); json.insert("special", QJsonArray{special});
+        server.workspaceImages[path] = png(Qt::blue); server.workspaceImageDelay = 0;
+        QVERIFY(space.setDrive(drive()));
+        auto imageColor = [&] {
+            return space.image()->image().pixmap(24, 24).toImage().pixelColor(12, 12);
+        };
+        QTRY_VERIFY(!space.image()->image().isNull());
+        QTRY_COMPARE(imageColor(), QColor(Qt::blue));
+        QTest::qWait(300); // The first (red) download finishes last.
+        QCOMPARE(imageColor(), QColor(Qt::blue));
+
+        // A new revision at the same URL must bypass a fresh HTTP cache entry.
+        special.insert("eTag", "image-3"); json.insert("special", QJsonArray{special});
+        server.workspaceImages[path] = png(Qt::green);
+        QVERIFY(space.setDrive(drive()));
+        QTRY_COMPARE(imageColor(), QColor(Qt::green));
+        QCOMPARE(requestCount(), 3);
+
+        // Removing the special file wins even if its download is still running.
+        special.insert("eTag", "image-4"); json.insert("special", QJsonArray{special});
+        server.workspaceImageDelay = 150;
+        QVERIFY(space.setDrive(drive()));
+        QTRY_COMPARE(requestCount(), 4);
+        json.insert("special", QJsonArray{});
+        QVERIFY(space.setDrive(drive()));
+        QVERIFY(space.image()->image().isNull());
+        QSignalSpy changed(space.image(), &GraphApi::SpaceImage::imageChanged);
+        QTest::qWait(200);
+        QVERIFY(space.image()->image().isNull());
+        QCOMPARE(changed.size(), 0);
+    }
+
+    void workspaceImageWebSyncAndSetDriveDetection()
+    {
+        DriveServer server;
+        auto *account = new Account(QUuid::createUuid(), "test", server.url());
+        auto *credentials = new RefreshingBrowserCredentials("browser-test-token", "test-refresh-token", account);
+        account->setCredentials(credentials);
+        credentials->fetchFromKeychain();
+        AccountState state(account);
+
+        QJsonObject rootJson;
+        rootJson.insert(QStringLiteral("id"), QStringLiteral("root-1"));
+        rootJson.insert(QStringLiteral("eTag"), QStringLiteral("root-etag-1"));
+        rootJson.insert(QStringLiteral("webDavUrl"), QString(server.url().toString() + QStringLiteral("/dav/spaces/proj-1")));
+
+        QJsonObject sfJson;
+        sfJson.insert(QStringLiteral("name"), QStringLiteral("image"));
+
+        QJsonObject imgJson;
+        imgJson.insert(QStringLiteral("id"), QStringLiteral("img-file-1"));
+        imgJson.insert(QStringLiteral("name"), QStringLiteral("custom-icon.png"));
+        imgJson.insert(QStringLiteral("eTag"), QStringLiteral("img-etag-1"));
+        imgJson.insert(QStringLiteral("specialFolder"), sfJson);
+
+        QJsonObject driveJson;
+        driveJson.insert(QStringLiteral("id"), QStringLiteral("proj-1"));
+        driveJson.insert(QStringLiteral("name"), QStringLiteral("Project 1"));
+        driveJson.insert(QStringLiteral("driveType"), QStringLiteral("project"));
+        driveJson.insert(QStringLiteral("eTag"), QStringLiteral("drive-etag-1"));
+        driveJson.insert(QStringLiteral("root"), rootJson);
+        driveJson.insert(QStringLiteral("special"), QJsonArray{imgJson});
+
+        OpenAPI::OAIDrive drive;
+        drive.fromJsonObject(driveJson);
+
+        auto *spacesManager = account->spacesManager();
+        QVERIFY(spacesManager != nullptr);
+
+        auto *space = new GraphApi::Space(spacesManager, drive, true);
+
+        QCOMPARE(space->id(), QStringLiteral("root-1"));
+        QCOMPARE(space->driveId(), QStringLiteral("proj-1"));
+
+        // 1. Unchanged drive: setDrive should return false
+        QVERIFY(!space->setDrive(drive));
+
+        // 2. Web updates workspace image without changing root directory etag:
+        auto updatedJson = driveJson;
+        auto specialArr = updatedJson.value(QStringLiteral("special")).toArray();
+        auto imgObj = specialArr.first().toObject();
+        imgObj[QStringLiteral("eTag")] = QStringLiteral("img-etag-2");
+        specialArr[0] = imgObj;
+        updatedJson[QStringLiteral("special")] = specialArr;
+
+        OpenAPI::OAIDrive updatedDrive;
+        updatedDrive.fromJsonObject(updatedJson);
+        QVERIFY(space->setDrive(updatedDrive));
+
+        // 3. Web removes workspace image without changing root directory etag:
+        auto noImgJson = updatedJson;
+        noImgJson[QStringLiteral("special")] = QJsonArray();
+        OpenAPI::OAIDrive noImgDrive;
+        noImgDrive.fromJsonObject(noImgJson);
+        QVERIFY(space->setDrive(noImgDrive));
+
+        // 4. Web changes description without changing root directory etag:
+        auto descJson = noImgJson;
+        descJson[QStringLiteral("description")] = QStringLiteral("New description");
+        OpenAPI::OAIDrive descDrive;
+        descDrive.fromJsonObject(descJson);
+        QVERIFY(space->setDrive(descDrive));
+
+        // 5. Test SpaceImage URL resolution when imgItem has empty webDavUrl:
+        space->setDrive(drive);
+        space->image()->update();
+        const QUrl expectedUrl(server.url().toString() + QStringLiteral("/dav/spaces/proj-1/.space/custom-icon.png"));
+        QCOMPARE(space->image()->url(), expectedUrl);
+
+        // URL and same-sized permission updates also lack a root ETag change.
+        auto urlJson = driveJson;
+        auto urlImage = imgJson;
+        urlImage.insert("webDavUrl", server.url("/new-image.png").toString());
+        urlJson.insert("special", QJsonArray{urlImage});
+        OpenAPI::OAIDrive urlDrive; urlDrive.fromJsonObject(urlJson);
+        QVERIFY(space->setDrive(urlDrive));
+        QCOMPARE(space->image()->url(), server.url("/new-image.png"));
+        auto permissionRoot = rootJson;
+        permissionRoot.insert("permissions", QJsonArray{QJsonObject{{"id", "member"}, {"roles", QJsonArray{"viewer"}}}});
+        urlJson.insert("root", permissionRoot);
+        OpenAPI::OAIDrive viewer; viewer.fromJsonObject(urlJson);
+        QVERIFY(space->setDrive(viewer));
+        permissionRoot.insert("permissions", QJsonArray{QJsonObject{{"id", "member"}, {"roles", QJsonArray{"editor"}}}});
+        urlJson.insert("root", permissionRoot);
+        OpenAPI::OAIDrive editor; editor.fromJsonObject(urlJson);
+        QVERIFY(space->setDrive(editor));
+        QCOMPARE(space->drive().asJsonObject(), editor.asJsonObject());
+        delete space;
     }
 
 };

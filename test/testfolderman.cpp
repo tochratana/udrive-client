@@ -34,14 +34,14 @@ class TestFolderMan: public QObject
 private Q_SLOTS:
     void testAccountFolderLabels()
     {
-        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive")) QSKIP("UDrive account naming");
-        QCOMPARE(FolderMan::accountFolderLabel("Ratana Toch", QUrl("https://drive.example.org/")), QStringLiteral("UDrive (Ratana Toch)"));
-        QCOMPARE(FolderMan::accountFolderLabel("Admin", QUrl("https://drive.example.org:9443/team/")), QStringLiteral("UDrive (Admin)"));
-        QCOMPARE(FolderMan::accountFolderLabel("", QUrl("https://drive.example.org")), QStringLiteral("UDrive (drive.example.org)"));
+        if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive")) QSKIP("Udrive account naming");
+        QCOMPARE(FolderMan::accountFolderLabel("Ratana Toch", QUrl("https://drive.example.org/")), QStringLiteral("Udrive (Ratana Toch)"));
+        QCOMPARE(FolderMan::accountFolderLabel("Admin", QUrl("https://drive.example.org:9443/team/")), QStringLiteral("Udrive (Admin)"));
+        QCOMPARE(FolderMan::accountFolderLabel("", QUrl("https://drive.example.org")), QStringLiteral("Udrive (drive.example.org)"));
         const auto privateUrl = QUrl("https://user:secret@drive.example.org/?token=private#hidden");
-        QCOMPARE(FolderMan::accountFolderLabel("  Ratana\nToch ", privateUrl), QStringLiteral("UDrive (Ratana Toch)"));
+        QCOMPARE(FolderMan::accountFolderLabel("  Ratana\nToch ", privateUrl), QStringLiteral("Udrive (Ratana Toch)"));
         QCOMPARE(FolderMan::accountFolderLabel("Ratana", QUrl("https://work.example.org")), FolderMan::accountFolderLabel("Ratana", QUrl("https://home.example.org")));
-        QCOMPARE(FolderMan::accountFolderLabel("", {}), QStringLiteral("UDrive"));
+        QCOMPARE(FolderMan::accountFolderLabel("", {}), QStringLiteral("Udrive"));
         auto dir = TestUtils::createTempDir(); QVERIFY(dir.isValid());
         auto *manager = TestUtils::folderMan(); const auto id = QUuid::createUuid();
         const auto label = FolderMan::accountFolderLabel("../Unsafe/Name", QUrl("https://drive.example.org/a/b/"));

@@ -1,7 +1,7 @@
-# UDrive desktop branding
+# Udrive desktop branding
 
 This directory is selected automatically by `THEME.cmake`. The default identity
-is UDrive / Unity Workspace, with green and teal accents and the supplied UDrive
+is Udrive / Unity Workspace, with green and teal accents and the supplied Udrive
 logo. The original transparent PNG is `theme/universal/udrive-icon.png` (the
 uploaded file had a `.jpg` extension, but its contents were already a PNG).
 Application and sidebar PNG sizes are under `theme/colored`. Color menu bar
@@ -27,7 +27,7 @@ python3 branding/render-tray-icons.py
 ```
 
 The visible app name, executable (`udrive`) and macOS bundle ID are branded.
-UDrive stays a regular macOS app during startup and while its window is hidden;
+Udrive stays a regular macOS app during startup and while its window is hidden;
 its Dock entry is not removed and recreated as the UI opens. The development
 helper uses macOS Launch Services (`open -W`) to launch the app bundle, explicitly
 forwarding the localhost HTTP flag with `--env`. `MacDockTest` verifies the native
@@ -38,12 +38,12 @@ folders can be reused. This version shares settings with the upstream client;
 do not run both against the same sync folders. A separately distributed app
 should adopt its own settings identity with an explicit migration plan.
 
-Automatic updates are disabled until UDrive has its own signed update feed.
+Automatic updates are disabled until Udrive has its own signed update feed.
 OAuth settings remain compatible with the desktop client already registered
 in your Keycloak realm. Open on Web uses the selected item's sign-in link,
 falling back to the selected space's web URL.
 
-For an HTTP-only local development server, quit any running UDrive instance,
+For an HTTP-only local development server, quit any running Udrive instance,
 then launch the Debug build with `bash scripts/dev-macos.sh run-local`. This
 sets `UDRIVE_ALLOW_LOCAL_HTTP=1` and permits HTTP for `localhost`, `127.0.0.1`
 and `::1` only. Remote server and authentication addresses still require HTTPS.
@@ -52,7 +52,7 @@ also requires this mode when refreshing tokens. The server and identity provider
 must advertise addresses reachable from the Mac; Docker service names are not
 loopback addresses. Ordinary `run` keeps HTTPS requirements enabled.
 
-The UDrive workspace uses a compact header with the logo, folder search,
+The Udrive workspace uses a compact header with the logo, folder search,
 Activity, Settings, and an account menu. Click the initials in the upper-right
 corner to open the account popup: cards show avatars or initials, the display
 name, and a separate server address. The active account has a green check.
@@ -83,16 +83,16 @@ APIs.
 
 ## Languages
 
-UDrive offers exactly three UI languages: English (`en_US`), Khmer (`km`),
-and Simplified Chinese (`zh_CN`). Only these catalogs are embedded in UDrive
+Udrive offers exactly three UI languages: English (`en_US`), Khmer (`km`),
+and Simplified Chinese (`zh_CN`). Only these catalogs are embedded in Udrive
 builds. The unbranded build retains its full translation list. Language names
 remain recognizable in their native script. A saved regional locale is mapped
 to one of the three choices; unsupported old preferences use English. With no
 saved preference, the system's preferred UI language is mapped the same way.
-Selecting a language saves its canonical locale; fully quit and reopen UDrive
+Selecting a language saves its canonical locale; fully quit and reopen Udrive
 to apply it.
 
-The Khmer and Chinese catalogs include the UDrive workspace, file actions and
+The Khmer and Chinese catalogs include the Udrive workspace, file actions and
 messages, PDF preview, account and sign-in screens, general/network settings,
 and common sync controls. Additional upstream diagnostics and platform-owned
 dialog text can still fall back to English. `TranslationsTest` checks packaged
@@ -198,7 +198,7 @@ Regression cases also cover failed and malformed HTTP 207 responses for file
 operations and Favorites, plus distinct monochrome status masks at tray sizes.
 
 
-On macOS, double-click a PDF or select **Open PDF** to read it inside UDrive.
+On macOS, double-click a PDF or select **Open PDF** to read it inside Udrive.
 The preview supports page navigation, Fit page / Fit width, and 50–300% zoom.
 Synced PDFs use a read-only snapshot of the local file; cloud PDFs are downloaded
 through the selected account into a private temporary directory. Closing the
@@ -209,7 +209,7 @@ macOS CoreGraphics in a separate process, with a 4096-pixel raster bound and
 bounded raw RGBA output. The helper keeps one immutable snapshot across paging
 and zoom. Each render has a five-second time limit; timeout, preview closure,
 replacement, account hiding/sign-out and destruction kill and reap the helper.
-UDrive then offers Download when a PDF cannot be previewed. This process boundary
+Udrive then offers Download when a PDF cannot be previewed. This process boundary
 is not an OS sandbox or a hard memory limit. It executes no PDF links, scripts or
 embedded actions. No new Qt module or runtime installation is needed.
 The first version previews PDFs up to 100 MiB; password-protected PDFs still need
@@ -221,7 +221,7 @@ permissions/cleanup, account hiding/sign-out, invalid/oversized documents,
 expensive compressed/nested PDFs, timeout recovery and helper process cleanup.
 
 
-UDrive action buttons and file rows use the rounded outline icons defined in
+Udrive action buttons and file rows use the rounded outline icons defined in
 `src/gui/udriveicons.h`. They render at the current device pixel ratio and follow
 light/dark and disabled palettes. Button spacing, centered dropdown chevrons,
 menu rows and the space/PDF zoom selectors are styled in
@@ -229,10 +229,10 @@ menu rows and the space/PDF zoom selectors are styled in
 `src/gui/udriveicons.qrc`.
 
 
-On macOS, once the UDrive window has been opened, closing or hiding it keeps
+On macOS, once the Udrive window has been opened, closing or hiding it keeps
 the running app in the Dock. Clicking the Dock icon reopens the existing window;
-use Quit UDrive to exit. The original ownCloud menu-bar-only activation behavior
-is retained for builds that do not use the UDrive branding.
+use Quit Udrive to exit. The original ownCloud menu-bar-only activation behavior
+is retained for builds that do not use the Udrive branding.
 
 
 Folder navigation uses clickable breadcrumbs instead of an Up button or a plain

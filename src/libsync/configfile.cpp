@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Klaas Freitag <freitag@owncloud.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -569,7 +572,7 @@ bool ConfigFile::monoIcons() const
     auto settings = makeQSettings();
     bool monoDefault = false; // On Mac we want bw by default
 #ifdef Q_OS_MAC
-    monoDefault = Resources::hasMonoTheme() || Theme::instance()->appNameGUI() == QStringLiteral("UDrive") || Theme::instance()->appNameGUI() == QStringLiteral("ownCloud");
+    monoDefault = Resources::hasMonoTheme() || Theme::instance()->appNameGUI() == QStringLiteral("Udrive") || Theme::instance()->appNameGUI() == QStringLiteral("ownCloud");
 #endif
     return settings.value(monoIconsC(), monoDefault).toBool();
 }

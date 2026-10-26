@@ -120,7 +120,10 @@ private Q_SLOTS:
         QScopedPointer<QTranslator> translator;
         if (useTranslation) {
             translator.reset(new QTranslator(QCoreApplication::instance()));
-            QVERIFY(translator->load(QStringLiteral("client_en.ts"), QStringLiteral(":/client/translations/")));
+            // Udrive packages en_US; upstream themes may still package en.
+            // Load the compiled resource rather than the old TS source name.
+            QVERIFY(translator->load(QStringLiteral("client_en_US"), QStringLiteral(":/client/translations/"))
+                || translator->load(QStringLiteral("client_en"), QStringLiteral(":/client/translations/")));
             QCoreApplication::instance()->installTranslator(translator.data());
         }
 

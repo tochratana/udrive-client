@@ -32,6 +32,8 @@ public:
     bool canUpdate(Resource resource) const;
     bool canDelete(Resource resource) const;
     bool canSetQuota() const;
+    bool canSetPersonalQuota() const;
+    bool setPersonalQuota(const QString &driveId, qint64 total);
     bool canAssignRoles() const;
     bool userFieldWritable(const QString &field) const;
     QString selfId() const { return _selfId; }

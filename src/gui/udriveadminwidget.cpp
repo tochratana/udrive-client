@@ -23,6 +23,8 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QStackedWidget>
+#include <QScrollBar>
 #include <QShowEvent>
 #include <QSortFilterProxyModel>
 #include <QStandardItemModel>
@@ -41,51 +43,172 @@
 #include <QKeyEvent>
 #include <QPainter>
 #include <QPersistentModelIndex>
+#include <QHelpEvent>
+#include <QResizeEvent>
+#include <QToolTip>
 #include <cmath>
 
 using namespace OCC;
 using Resource = UDriveAdminApi::Resource;
 namespace {
 constexpr int recordRole = Qt::UserRole + 20;
+constexpr int editableRole = Qt::UserRole + 21;
+class AdminIcon : public QWidget
+{
+public:
+    AdminIcon(UDriveIcons::Symbol symbol, QWidget *parent) : QWidget(parent), _symbol(symbol) { setFixedSize(20, 20); }
+protected:
+    void paintEvent(QPaintEvent *) override { QPainter painter(this); UDriveIcons::icon(_symbol).paint(&painter, rect()); }
+private:
+    UDriveIcons::Symbol _symbol;
+};
+class AdminDetailsEditButton : public QPushButton
+{
+public:
+    using QPushButton::QPushButton;
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        QPushButton::paintEvent(event); QPainter painter(this);
+        UDriveIcons::icon(UDriveIcons::Symbol::Next).paint(&painter, QRect(width() - 26, (height() - 18) / 2, 18, 18), Qt::AlignCenter, isEnabled() ? QIcon::Normal : QIcon::Disabled);
+    }
+};
+class AdminHeader : public QHeaderView
+{
+public:
+    explicit AdminHeader(QTreeView *tree) : QHeaderView(Qt::Horizontal, tree), _tree(tree) {}
+protected:
+    void paintSection(QPainter *painter, const QRect &rect, int section) const override
+    {
+        if (section != 0) { QHeaderView::paintSection(painter, rect, section); return; }
+        QStyleOptionHeader option;
+        initStyleOption(&option); option.rect = rect; option.section = section;
+        style()->drawControl(QStyle::CE_HeaderSection, &option, painter, this);
+        // Use the table's item indicator geometry and style for select-all as
+        // well, including stylesheet padding and the platform's border metrics.
+        QStyleOptionViewItem check; check.initFrom(_tree); check.widget = _tree;
+        check.rect = rect; check.index = model()->index(0, 0);
+        check.features = QStyleOptionViewItem::HasCheckIndicator | QStyleOptionViewItem::HasDecoration | QStyleOptionViewItem::HasDisplay;
+        check.decorationSize = _tree->iconSize(); check.displayAlignment = Qt::AlignLeft | Qt::AlignVCenter;
+        const int count = _tree->selectionModel()->selectedRows().size();
+        check.checkState = count == 0 ? Qt::Unchecked : count == model()->rowCount() ? Qt::Checked : Qt::PartiallyChecked;
+        check.state &= ~(QStyle::State_On | QStyle::State_Off | QStyle::State_NoChange);
+        check.state |= check.checkState == Qt::Checked ? QStyle::State_On : check.checkState == Qt::PartiallyChecked ? QStyle::State_NoChange : QStyle::State_Off;
+        check.rect = _tree->style()->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &check, _tree);
+        _tree->style()->drawPrimitive(QStyle::PE_IndicatorItemViewItemCheck, &check, painter, _tree);
+        option.rect.adjust(76, 0, -8, 0); option.text = model()->headerData(0, Qt::Horizontal).toString();
+        option.textAlignment = Qt::AlignLeft | Qt::AlignVCenter;
+        option.sortIndicator = sortIndicatorSection() == 0 ? (sortIndicatorOrder() == Qt::AscendingOrder ? QStyleOptionHeader::SortDown : QStyleOptionHeader::SortUp) : QStyleOptionHeader::None;
+        style()->drawControl(QStyle::CE_HeaderLabel, &option, painter, this);
+    }
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton && logicalIndexAt(event->position().toPoint()) == 0
+            && event->position().x() < sectionViewportPosition(0) + 34) {
+            if (_tree->selectionModel()->selectedRows().size() == model()->rowCount()) _tree->clearSelection();
+            else _tree->selectAll();
+            viewport()->update(); return;
+        }
+        QHeaderView::mousePressEvent(event);
+    }
+private:
+    QTreeView *_tree;
+};
 class AdminActionsDelegate : public QStyledItemDelegate
 {
 public:
-    AdminActionsDelegate(QTreeView *tree, std::function<void(const QModelIndex &)> open)
+    AdminActionsDelegate(QTreeView *tree, std::function<void(const QModelIndex &, int)> open)
         : QStyledItemDelegate(tree), _tree(tree), _open(std::move(open))
     {
-        tree->installEventFilter(this);
+        tree->installEventFilter(this); tree->viewport()->installEventFilter(this);
     }
     void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
     {
         QStyledItemDelegate::paint(painter, option, index);
-        if (isAction(index))
-            UDriveIcons::icon(UDriveIcons::Symbol::MoreVertical).paint(painter, QRect(option.rect.center() - QPoint(9, 9), QSize(18, 18)));
+        if (!isAction(index)) return;
+        const bool users = index.model()->columnCount() == 6;
+        const int first = users ? 0 : 2;
+        for (int action = first; action < 3; ++action) {
+            const auto symbol = action == 0 ? UDriveIcons::Symbol::Info : action == 1 ? UDriveIcons::Symbol::Rename : UDriveIcons::Symbol::MoreVertical;
+            const bool editable = index.siblingAtColumn(0).data(editableRole).toBool();
+            UDriveIcons::icon(symbol).paint(painter, actionRect(option.rect, action, users).adjusted(7, 7, -7, -7), Qt::AlignCenter,
+                action == 1 && !editable ? QIcon::Disabled : QIcon::Normal);
+        }
     }
     bool editorEvent(QEvent *event, QAbstractItemModel *model, const QStyleOptionViewItem &option, const QModelIndex &index) override
     {
-        if (isAction(index) && event->type() == QEvent::MouseButtonRelease) {
+        if (event->type() == QEvent::MouseButtonRelease) {
             const auto *mouse = static_cast<QMouseEvent *>(event);
             if (mouse->button() == Qt::LeftButton && option.rect.contains(mouse->position().toPoint())) {
-                _open(index); return true;
+                if (isAction(index)) {
+                    const bool users = index.model()->columnCount() == 6;
+                    for (int action = users ? 0 : 2; action < 3; ++action)
+                        if (actionRect(option.rect, action, users).contains(mouse->position().toPoint())) { _open(index, action); return true; }
+                }
             }
         }
         return QStyledItemDelegate::editorEvent(event, model, option, index);
     }
+    void initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const override
+    {
+        QStyledItemDelegate::initStyleOption(option, index);
+        option->decorationSize = index.column() == 0 ? QSize(32, 32) : QSize(20, 20);
+    }
+    bool helpEvent(QHelpEvent *event, QAbstractItemView *view, const QStyleOptionViewItem &option, const QModelIndex &index) override
+    {
+        if (isAction(index)) {
+            const bool users = index.model()->columnCount() == 6;
+            for (int action = users ? 0 : 2; action < 3; ++action) if (actionRect(option.rect, action, users).contains(event->pos())) {
+                QToolTip::showText(event->globalPos(), action == 0 ? QObject::tr("User details") : action == 1 ? QObject::tr("Edit user") : QObject::tr("More actions"), view); return true;
+            }
+        }
+        return QStyledItemDelegate::helpEvent(event, view, option, index);
+    }
     bool eventFilter(QObject *watched, QEvent *event) override
     {
+        if (watched == _tree->viewport() && (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease || event->type() == QEvent::MouseButtonDblClick)) {
+            const auto *mouse = static_cast<QMouseEvent *>(event); const auto index = _tree->indexAt(mouse->position().toPoint());
+            if (mouse->button() == Qt::LeftButton && index.isValid() && index.column() == 0
+                && mouse->position().x() < _tree->visualRect(index).left() + 32) {
+                if (event->type() == QEvent::MouseButtonRelease) {
+                    _tree->selectionModel()->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
+                    _tree->selectionModel()->select(index, QItemSelectionModel::Toggle | QItemSelectionModel::Rows);
+                }
+                return true;
+            }
+        }
         if (watched == _tree && event->type() == QEvent::KeyPress) {
             const auto *key = static_cast<QKeyEvent *>(event);
+            if (key->key() == Qt::Key_Space && _tree->currentIndex().column() == 0) {
+                _tree->selectionModel()->select(_tree->currentIndex(), QItemSelectionModel::Toggle | QItemSelectionModel::Rows); return true;
+            }
             const bool activate = isAction(_tree->currentIndex()) && (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter || key->key() == Qt::Key_Space);
             const bool context = key->key() == Qt::Key_Menu || (key->key() == Qt::Key_F10 && key->modifiers() == Qt::ShiftModifier);
-            if ((activate || context) && _tree->currentIndex().isValid()) { _open(_tree->currentIndex()); return true; }
+            if ((activate || context) && _tree->currentIndex().isValid()) { _open(_tree->currentIndex(), 2); return true; }
         }
-        return QStyledItemDelegate::eventFilter(watched, event);
+        return QObject::eventFilter(watched, event);
     }
 private:
+    static QRect actionRect(const QRect &rect, int action, bool users) { return QRect(rect.right() - (users ? (3 - action) * 32 : 32) + 1, rect.center().y() - 16, 32, 32); }
     static bool isAction(const QModelIndex &index) { return index.isValid() && index.column() == index.model()->columnCount() - 1; }
     QTreeView *_tree;
-    std::function<void(const QModelIndex &)> _open;
+    std::function<void(const QModelIndex &, int)> _open;
 };
+QIcon userAvatar(const QJsonObject &record, int size = 64)
+{
+    const QString name = record.value(QStringLiteral("displayName")).toString();
+    QString initials;
+    for (const auto &word : name.split(QLatin1Char(' '), Qt::SkipEmptyParts)) { initials += word.left(1).toUpper(); if (initials.size() >= 2) break; }
+    if (initials.isEmpty()) initials = record.value(QStringLiteral("onPremisesSamAccountName")).toString().left(2).toUpper();
+    const QString id = record.value(QStringLiteral("id")).toString();
+    uint hash = 0; for (const auto character : id) hash = hash * 31 + character.unicode();
+    const QColor colors[] = {QColor("#167594"), QColor("#208579"), QColor("#267C2C"), QColor("#865B49"), QColor("#727A12"), QColor("#AC2858")};
+    QPixmap pixmap(size, size); pixmap.fill(Qt::transparent); QPainter painter(&pixmap); painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(Qt::NoPen); painter.setBrush(colors[hash % 6]); painter.drawEllipse(pixmap.rect());
+    auto font = qApp->font(); font.setPixelSize(qRound(size * 0.36)); font.setWeight(QFont::Medium); painter.setFont(font); painter.setPen(Qt::white);
+    painter.drawText(pixmap.rect(), Qt::AlignCenter, initials.isEmpty() ? QStringLiteral("?") : initials);
+    return QIcon(pixmap);
+}
 QString text(const QJsonObject &object, const char *key) { return object.value(QString::fromLatin1(key)).toString(); }
 bool disabledWorkspace(const QJsonObject &record)
 {
@@ -194,38 +317,66 @@ UDriveAdminWidget::UDriveAdminWidget(AccountState *state, QWidget *parent)
     : QWidget(parent), _api(new UDriveAdminApi(state, this)), _state(state)
 {
     setObjectName(QStringLiteral("driveAdministration"));
-    auto *layout = new QVBoxLayout(this); layout->setContentsMargins(24, 24, 24, 20); layout->setSpacing(16);
-    auto *heading = label(tr("Administration"), this); heading->setObjectName(QStringLiteral("driveAdminTitle"));
-    auto titleFont = heading->font(); titleFont.setPointSize(18); titleFont.setBold(true); heading->setFont(titleFont);
-    auto *headingRow = new QHBoxLayout; headingRow->addWidget(heading, 1);
-    auto *web = new QPushButton(UDriveIcons::icon(UDriveIcons::Symbol::Online), tr("Web administration"), this);
-    web->setProperty("driveToolbarButton", true); web->setToolTip(tr("Open server administration, including additional web-only settings."));
-    headingRow->addWidget(web); layout->addLayout(headingRow);
-    connect(web, &QPushButton::clicked, this, [this] {
-        if (_state && _state->account() && _api->available())
-            Utility::openBrowser(Utility::concatUrlPath(_state->account()->url(), QStringLiteral("admin-settings")), this);
-    });
-    layout->addWidget(label(tr("Manage your server’s users, groups, and workspaces."), this));
+    auto *pageLayout = new QHBoxLayout(this); pageLayout->setContentsMargins(0, 0, 0, 0); pageLayout->setSpacing(0);
+    auto *content = new QWidget(this); content->setObjectName(QStringLiteral("driveAdminContent"));
+    content->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding); pageLayout->addWidget(content);
+    auto *layout = new QVBoxLayout(content); layout->setContentsMargins(24, 24, 24, 20); layout->setSpacing(16);
+    layout->setSizeConstraint(QLayout::SetNoConstraint);
+    auto *headingRow = new QHBoxLayout; headingRow->setSpacing(8);
+    auto *heading = label(tr("Administration Settings"), this); heading->setObjectName(QStringLiteral("driveAdminTitle"));
+    headingRow->addWidget(heading);
+    auto *separator = new AdminIcon(UDriveIcons::Symbol::Next, this); headingRow->addWidget(separator);
+    _section = new QPushButton(tr("Users"), this); _section->setObjectName(QStringLiteral("driveAdminSection"));
+    _section->setProperty("driveToolbarButton", true); _section->setAccessibleName(tr("Administration section")); headingRow->addWidget(_section);
+    headingRow->addStretch();
+    _refresh = new QPushButton(UDriveIcons::icon(UDriveIcons::Symbol::Refresh), {}, this);
+    _refresh->setObjectName(QStringLiteral("driveAdminRefresh")); _refresh->setProperty("driveToolbarButton", true);
+    _refresh->setToolTip(tr("Refresh")); _refresh->setAccessibleName(tr("Refresh administration entries")); headingRow->addWidget(_refresh);
+    auto *settings = new QPushButton(UDriveIcons::icon(UDriveIcons::Symbol::Settings), {}, this);
+    settings->setProperty("driveToolbarButton", true); settings->setAccessibleName(tr("Administration settings")); settings->setToolTip(tr("Administration settings")); headingRow->addWidget(settings);
+    layout->addLayout(headingRow);
     _tabs = new QTabBar(this); _tabs->setObjectName(QStringLiteral("driveAdminTabs")); _tabs->setExpanding(false); _tabs->setDrawBase(false);
     _tabs->addTab(UDriveIcons::icon(UDriveIcons::Symbol::Members), tr("Users"));
     _tabs->addTab(UDriveIcons::icon(UDriveIcons::Symbol::Share), tr("Groups"));
     _tabs->addTab(UDriveIcons::icon(UDriveIcons::Symbol::Grid), tr("Workspaces"));
-    layout->addWidget(_tabs, 0, Qt::AlignLeft);
+    _tabs->hide();
+    auto openSections = [this](QWidget *anchor) {
+        UDriveMenu menu(this); menu.setObjectName(QStringLiteral("driveAdminSectionsMenu"));
+        for (int i = 0; i < _tabs->count(); ++i) if (_tabs->isTabVisible(i)) {
+            auto *action = menu.addAction(_tabs->tabIcon(i), _tabs->tabText(i), this, [this, i] { _tabs->setCurrentIndex(i); });
+            action->setCheckable(true); action->setChecked(i == _tabs->currentIndex()); action->setEnabled(!_api->busy() && !_userEditorOpen);
+        }
+        menu.addSeparator();
+        menu.addAction(UDriveIcons::icon(UDriveIcons::Symbol::Online), tr("Web administration"), this, [this] {
+            if (_state && _state->account() && _api->available()) Utility::openBrowser(Utility::concatUrlPath(_state->account()->url(), QStringLiteral("admin-settings")), this);
+        });
+        menu.exec(anchor->mapToGlobal(QPoint(0, anchor->height())));
+    };
+    connect(settings, &QPushButton::clicked, this, [settings, openSections] { openSections(settings); });
+    connect(_section, &QPushButton::clicked, this, [this, openSections] { openSections(_section); });
+    layout->addSpacing(4);
     auto *filters = new QHBoxLayout; filters->setSpacing(10);
     _search = new QLineEdit(this); _search->setObjectName(QStringLiteral("driveAdminSearch")); _search->setClearButtonEnabled(true);
     _search->addAction(UDriveIcons::icon(UDriveIcons::Symbol::Search), QLineEdit::LeadingPosition);
     _search->setPlaceholderText(tr("Search users")); _search->setAccessibleName(tr("Search administration entries"));
-    filters->addWidget(_search, 1);
+    _search->setMinimumWidth(150); _search->setMaximumWidth(240);
     auto combo = [this](const QString &name) {
         auto *box = new UDriveComboBox(this); box->setObjectName(name); box->setProperty("udriveCombo", true);
-        box->setMinimumContentsLength(12); box->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-        box->setMinimumWidth(160); return box;
+        box->setMinimumContentsLength(6); box->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        box->setMinimumWidth(96); box->setMaximumWidth(190); return box;
     };
+    _filterLabel = new QWidget(this);
+    auto *filterLabelLayout = new QHBoxLayout(_filterLabel); filterLabelLayout->setContentsMargins(0, 0, 0, 0); filterLabelLayout->setSpacing(5);
+    auto *filterIcon = new AdminIcon(UDriveIcons::Symbol::Filter, _filterLabel);
+    filterLabelLayout->addWidget(filterIcon); filterLabelLayout->addWidget(label(tr("Filter:"), _filterLabel)); filters->addWidget(_filterLabel);
     _groupFilter = combo(QStringLiteral("driveAdminGroupFilter")); _groupFilter->setAccessibleName(tr("Filter by group")); filters->addWidget(_groupFilter);
     _roleFilter = combo(QStringLiteral("driveAdminRoleFilter")); _roleFilter->setAccessibleName(tr("Filter by role")); filters->addWidget(_roleFilter);
-    filters->addStretch();
+    filters->addStretch(); filters->addWidget(_search);
     layout->addLayout(filters);
-    auto *actions = new QHBoxLayout; actions->setSpacing(6);
+    _selectionActions = new QWidget(this);
+    auto selectionPolicy = _selectionActions->sizePolicy(); selectionPolicy.setRetainSizeWhenHidden(true); _selectionActions->setSizePolicy(selectionPolicy);
+    _selectionActions->setMinimumHeight(36);
+    auto *actions = new QHBoxLayout(_selectionActions); actions->setContentsMargins(0, 0, 0, 0); actions->setSpacing(6);
     auto button = [this, actions](const QString &name, const QString &caption, UDriveIcons::Symbol icon) {
         auto *result = new QPushButton(UDriveIcons::icon(icon), caption, this); result->setObjectName(name);
         result->setProperty("driveToolbarButton", true); result->setIconSize(QSize(18, 18)); actions->addWidget(result); return result;
@@ -236,17 +387,20 @@ UDriveAdminWidget::UDriveAdminWidget(AccountState *state, QWidget *parent)
     _login = button(QStringLiteral("driveAdminLogin"), tr("Login access"), UDriveIcons::Symbol::Disable);
     _remove = button(QStringLiteral("driveAdminRemove"), tr("Delete"), UDriveIcons::Symbol::Trash);
     actions->addStretch();
-    _refresh = button(QStringLiteral("driveAdminRefresh"), tr("Refresh"), UDriveIcons::Symbol::Refresh);
-    layout->addLayout(actions);
+    layout->insertWidget(1, _selectionActions);
     _status = label({}, this); _status->setObjectName(QStringLiteral("driveAdminStatus")); _status->hide(); layout->addWidget(_status);
     _model = new QStandardItemModel(this); _proxy = new QSortFilterProxyModel(this); _proxy->setSourceModel(_model);
     _proxy->setFilterCaseSensitivity(Qt::CaseInsensitive); _proxy->setFilterKeyColumn(-1); _proxy->setSortCaseSensitivity(Qt::CaseInsensitive);
     _tree = new QTreeView(this); _tree->setObjectName(QStringLiteral("driveAdminTable")); _tree->setAccessibleName(tr("Administration entries"));
     _tree->setModel(_proxy); _tree->setRootIsDecorated(false); _tree->setSortingEnabled(true); _tree->setSelectionBehavior(QAbstractItemView::SelectRows);
-    _tree->setSelectionMode(QAbstractItemView::SingleSelection); _tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    _tree->setUniformRowHeights(true); _tree->header()->setStretchLastSection(false); _tree->header()->setSectionsMovable(false);
+    _tree->setSelectionMode(QAbstractItemView::ExtendedSelection); _tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    _tree->setHeader(new AdminHeader(_tree)); _tree->setIconSize(QSize(32, 32));
+    _tree->setUniformRowHeights(true); _tree->header()->setStretchLastSection(false); _tree->header()->setSectionsMovable(false); _tree->header()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     _tree->setTabKeyNavigation(true);
-    _tree->setItemDelegate(new AdminActionsDelegate(_tree, [this](const QModelIndex &index) {
+    _tree->setItemDelegate(new AdminActionsDelegate(_tree, [this](const QModelIndex &index, int actionIndex) {
+        _tree->selectionModel()->setCurrentIndex(index, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows); updateActions();
+        if (actionIndex == 0) { showDetails(); return; }
+        if (actionIndex == 1) { if (_edit->isEnabled()) edit(false); return; }
         const auto action = index.siblingAtColumn(_proxy->columnCount() - 1);
         showRowActions(index, _tree->viewport()->mapToGlobal(_tree->visualRect(action).bottomRight()));
     }));
@@ -255,13 +409,14 @@ UDriveAdminWidget::UDriveAdminWidget(AccountState *state, QWidget *parent)
     auto *emptyIcon = label({}, _empty); emptyIcon->setPixmap(UDriveIcons::icon(UDriveIcons::Symbol::Members).pixmap(48, 48)); emptyIcon->setAlignment(Qt::AlignCenter);
     emptyLayout->addWidget(emptyIcon); auto *emptyText = label(tr("No entries to display"), _empty); emptyText->setAlignment(Qt::AlignCenter); emptyLayout->addWidget(emptyText); emptyLayout->addStretch();
     layout->addWidget(_empty, 1); _empty->hide();
-    _count = label({}, this); _count->setObjectName(QStringLiteral("driveAdminCount")); layout->addWidget(_count);
+    _count = label({}, this); _count->setObjectName(QStringLiteral("driveAdminCount")); _count->setAlignment(Qt::AlignCenter); layout->addWidget(_count);
+    buildDetails();
     connect(_search, &QLineEdit::textChanged, _proxy, &QSortFilterProxyModel::setFilterFixedString);
     connect(_proxy, &QAbstractItemModel::rowsInserted, this, &UDriveAdminWidget::updateActions);
     connect(_proxy, &QAbstractItemModel::rowsRemoved, this, &UDriveAdminWidget::updateActions);
     connect(_proxy, &QAbstractItemModel::modelReset, this, &UDriveAdminWidget::updateActions);
     connect(_tree->selectionModel(), &QItemSelectionModel::selectionChanged, this, &UDriveAdminWidget::updateActions);
-    connect(_tabs, &QTabBar::currentChanged, this, [this] { if (!_api->busy()) refresh(); });
+    connect(_tabs, &QTabBar::currentChanged, this, [this] { _section->setText(_tabs->tabText(_tabs->currentIndex())); if (!_api->busy()) refresh(); });
     connect(_groupFilter, &QComboBox::currentIndexChanged, this, &UDriveAdminWidget::render);
     connect(_roleFilter, &QComboBox::currentIndexChanged, this, &UDriveAdminWidget::render);
     connect(_refresh, &QPushButton::clicked, this, &UDriveAdminWidget::activate);
@@ -273,6 +428,7 @@ UDriveAdminWidget::UDriveAdminWidget(AccountState *state, QWidget *parent)
     connect(_tree, &QTreeView::doubleClicked, this, [this](const QModelIndex &index) { if (index.column() != _proxy->columnCount() - 1 && _edit->isEnabled()) edit(false); });
     connect(_tree, &QWidget::customContextMenuRequested, this, &UDriveAdminWidget::showActions);
     connect(_api, &UDriveAdminApi::cleared, this, [this] {
+        closeDetails();
         _refreshAfterAccess = false; _reloadAfterWrite = false;
         for (auto *dialog : findChildren<QDialog *>()) dialog->reject();
         _records = {}; _model->clear(); _search->clear(); _groupFilter->clear(); _roleFilter->clear(); _status->clear(); _count->clear();
@@ -288,8 +444,8 @@ UDriveAdminWidget::UDriveAdminWidget(AccountState *state, QWidget *parent)
         _records = records;
         const QSignalBlocker groupSignals(_groupFilter), roleSignals(_roleFilter);
         const auto groupId = _groupFilter->currentData(); const auto roleId = _roleFilter->currentData();
-        _groupFilter->clear(); _groupFilter->addItem(tr("All groups"), QString());
-        _roleFilter->clear(); _roleFilter->addItem(tr("All roles"), QString()); _roleFilter->addItem(tr("No role"), QStringLiteral("none"));
+        _groupFilter->clear(); _groupFilter->addItem(tr("Groups"), QString());
+        _roleFilter->clear(); _roleFilter->addItem(tr("Roles"), QString()); _roleFilter->addItem(tr("No role"), QStringLiteral("none"));
         for (const auto &role : _api->roles()) {
             const auto data = role.toObject(); _roleFilter->addItem(text(data, "displayName"), text(data, "id"));
         }
@@ -300,8 +456,16 @@ UDriveAdminWidget::UDriveAdminWidget(AccountState *state, QWidget *parent)
         }
         _groupFilter->setCurrentIndex(qMax(0, _groupFilter->findData(groupId))); _roleFilter->setCurrentIndex(qMax(0, _roleFilter->findData(roleId)));
         render();
+        if (!_reopenDetailsId.isEmpty()) {
+            const auto id = _reopenDetailsId; _reopenDetailsId.clear();
+            for (int row = 0; row < _proxy->rowCount(); ++row) if (text(_proxy->index(row, 0).data(recordRole).toJsonObject(), "id") == id) {
+                _tree->setCurrentIndex(_proxy->index(row, 0)); showDetails(); break;
+            }
+        }
     });
     connect(_api, &UDriveAdminApi::operationFinished, this, [this](bool success, const QString &message) {
+        if (_userSaving) { userEditFinished(success, message); return; }
+        if (!success) _reopenDetailsId.clear();
         const bool write = _reloadAfterWrite;
         _status->setText(message); _status->setVisible(!write && !message.isEmpty());
         if (write) UDriveToast::showMessage(this, message, success ? UDriveToast::Kind::Success : UDriveToast::Kind::Error);
@@ -311,14 +475,14 @@ UDriveAdminWidget::UDriveAdminWidget(AccountState *state, QWidget *parent)
     });
     auto *timer = new QTimer(this); timer->setInterval(60000);
     connect(timer, &QTimer::timeout, this, [this] {
-        if (_api->busy()) return;
+        if (_api->busy() || _userEditorOpen) return;
         for (auto *dialog : findChildren<QDialog *>()) if (dialog->isVisible()) return;
         if (isVisible()) activate(); else _api->refreshAccess();
     }); timer->start();
     updateAccess();
 }
 Resource UDriveAdminWidget::resource() const { return static_cast<Resource>(qMax(0, _tabs->currentIndex())); }
-bool UDriveAdminWidget::canCreate() const { return !_api->busy() && _api->canCreate(resource()); }
+bool UDriveAdminWidget::canCreate() const { return !_userEditorOpen && !_api->busy() && _api->canCreate(resource()); }
 QString UDriveAdminWidget::creationLabel() const
 {
     return resource() == Resource::Users ? tr("New user") : resource() == Resource::Groups ? tr("New group") : tr("New workspace");
@@ -326,12 +490,14 @@ QString UDriveAdminWidget::creationLabel() const
 void UDriveAdminWidget::createNew() { if (canCreate()) edit(true); }
 QJsonObject UDriveAdminWidget::selected() const
 {
-    return _tree->currentIndex().siblingAtColumn(0).data(recordRole).toJsonObject();
+    const auto rows = _tree->selectionModel()->selectedRows();
+    return rows.size() == 1 ? rows.first().data(recordRole).toJsonObject() : QJsonObject();
 }
 void UDriveAdminWidget::showEvent(QShowEvent *event) { QWidget::showEvent(event); activate(); }
 void UDriveAdminWidget::hideEvent(QHideEvent *event)
 {
     for (auto *dialog : findChildren<QDialog *>()) dialog->reject();
+    closeDetails();
     QWidget::hideEvent(event);
 }
 void UDriveAdminWidget::activate()
@@ -339,10 +505,6 @@ void UDriveAdminWidget::activate()
     _refreshAfterAccess = true;
     if (_api->busy()) return;
     _status->setText(tr("Checking administration permissions…")); _status->show(); _api->refreshAccess();
-}
-QLineEdit *UDriveAdminWidget::takeSearchField()
-{
-    _search->setParent(nullptr); _search->setObjectName(QStringLiteral("driveSearch")); return _search;
 }
 void UDriveAdminWidget::refresh()
 {
@@ -363,9 +525,19 @@ void UDriveAdminWidget::updateAccess()
 }
 void UDriveAdminWidget::updateActions()
 {
-    const auto type = resource(); const auto record = selected(); const bool one = !text(record, "id").isEmpty();
+    const auto type = resource(); const auto record = selected(); const bool one = _tree->selectionModel()->selectedRows().size() == 1 && !text(record, "id").isEmpty();
+    const int selectedCount = _tree->selectionModel()->selectedRows().size();
     const bool idle = !_api->busy() && _api->canRead(type); const bool users = type == Resource::Users;
     const bool self = users && text(record, "id") == _api->selfId();
+    _section->setText(_tabs->tabText(_tabs->currentIndex())); _section->setEnabled(!_api->busy());
+    _selectionActions->setVisible(selectedCount > 0); _filterLabel->setVisible(users);
+    { const QSignalBlocker blocker(_model);
+      for (int row = 0; row < _proxy->rowCount(); ++row) {
+          const auto index = _proxy->index(row, 0);
+          _model->itemFromIndex(_proxy->mapToSource(index))->setCheckState(_tree->selectionModel()->isRowSelected(row) ? Qt::Checked : Qt::Unchecked);
+      }
+    }
+    _tree->viewport()->update(); _tree->header()->viewport()->update();
     _tabs->setEnabled(!_api->busy()); _refresh->setEnabled(!_api->busy());
     _search->setEnabled(idle); _groupFilter->setVisible(users); _roleFilter->setVisible(users); _groupFilter->setEnabled(idle); _roleFilter->setEnabled(idle);
     _edit->setEnabled(idle && one && (_api->canUpdate(type) || (type == Resource::Workspaces && _api->canSetQuota())));
@@ -376,13 +548,17 @@ void UDriveAdminWidget::updateActions()
     _remove->setEnabled(idle && one && !self && _api->canDelete(type));
     _count->setText(tr("%1 entries").arg(_proxy->rowCount()));
     _empty->setVisible(idle && _proxy->rowCount() == 0); _tree->setVisible(!idle || _proxy->rowCount() > 0);
+    updateDetails();
+    _selectionActions->setEnabled(!_userEditorOpen); _tabs->setEnabled(!_api->busy() && !_userEditorOpen);
+    _tree->setEnabled(!_userEditorOpen); _refresh->setEnabled(!_api->busy() && !_userEditorOpen); _section->setEnabled(!_api->busy() && !_userEditorOpen);
+    _search->setEnabled(idle && !_userEditorOpen); _groupFilter->setEnabled(idle && !_userEditorOpen); _roleFilter->setEnabled(idle && !_userEditorOpen);
     Q_EMIT controlsChanged();
 }
 void UDriveAdminWidget::render()
 {
     const auto type = resource(); _model->clear();
     _search->setPlaceholderText(type == Resource::Users ? tr("Search users") : type == Resource::Groups ? tr("Search groups") : tr("Search workspaces"));
-    _model->setHorizontalHeaderLabels(type == Resource::Users ? QStringList{tr("Username"), tr("Name"), tr("Email"), tr("Role"), tr("Login"), tr("Actions")}
+    _model->setHorizontalHeaderLabels(type == Resource::Users ? QStringList{tr("User name"), tr("First and last name"), tr("Email"), tr("Role"), tr("Login"), tr("Actions")}
         : type == Resource::Groups ? QStringList{tr("Group"), tr("Description"), tr("ID"), tr("Actions")}
         : QStringList{tr("Workspace"), tr("Description"), tr("Quota"), tr("Status"), tr("Actions")});
     for (const auto &entry : _records) {
@@ -407,7 +583,10 @@ void UDriveAdminWidget::render()
         QList<QStandardItem *> items;
         for (const auto &column : columns) { auto *item = new QStandardItem(column); item->setToolTip(column); items.append(item); }
         items.first()->setData(record, recordRole);
-        items.first()->setIcon(UDriveIcons::icon(type == Resource::Users ? UDriveIcons::Symbol::Members : type == Resource::Groups ? UDriveIcons::Symbol::Share : UDriveIcons::Symbol::Grid));
+        items.first()->setCheckable(true);
+        items.first()->setData(_api->canUpdate(type), editableRole);
+        items.first()->setIcon(type == Resource::Users ? userAvatar(record) : UDriveIcons::icon(type == Resource::Groups ? UDriveIcons::Symbol::Share : UDriveIcons::Symbol::Grid));
+        if (type == Resource::Users) items.at(4)->setIcon(UDriveIcons::icon(record.value(QStringLiteral("accountEnabled")).toBool(true) ? UDriveIcons::Symbol::Enable : UDriveIcons::Symbol::Disable));
         auto *actions = new QStandardItem;
         const auto caption = tr("Actions for %1").arg(columns.first());
         actions->setToolTip(caption); actions->setData(caption, Qt::AccessibleTextRole); items.append(actions);
@@ -419,7 +598,9 @@ void UDriveAdminWidget::render()
     if (type == Resource::Users) _tree->header()->setSectionResizeMode(2, QHeaderView::Stretch);
     const int actionsColumn = _model->columnCount() - 1;
     _tree->header()->setSectionResizeMode(actionsColumn, QHeaderView::Fixed);
-    _tree->header()->resizeSection(actionsColumn, qMax(76, _tree->fontMetrics().horizontalAdvance(tr("Actions")) + 24));
+    _tree->header()->resizeSection(actionsColumn, type == Resource::Users ? 108 : 76);
+    _tree->header()->setMinimumSectionSize(60);
+    _tree->header()->setSectionResizeMode(0, QHeaderView::Interactive); _tree->header()->resizeSection(0, type == Resource::Users ? 210 : 180);
     _tree->sortByColumn(0, Qt::AscendingOrder); updateActions();
 }
 void UDriveAdminWidget::showActions(const QPoint &point)
@@ -429,7 +610,7 @@ void UDriveAdminWidget::showActions(const QPoint &point)
 void UDriveAdminWidget::showRowActions(const QModelIndex &index, const QPoint &globalPosition)
 {
     if (!index.isValid() || _api->busy() || !_api->canRead(resource())) return;
-    _tree->setCurrentIndex(index); updateActions();
+    _tree->selectionModel()->setCurrentIndex(index, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows); updateActions();
     const QPersistentModelIndex row(index.siblingAtColumn(0));
     UDriveMenu menu(this); menu.setObjectName(QStringLiteral("driveAdminRowMenu"));
     connect(_model, &QAbstractItemModel::modelAboutToBeReset, &menu, &QMenu::close);
@@ -445,11 +626,238 @@ void UDriveAdminWidget::showRowActions(const QModelIndex &index, const QPoint &g
         });
         action->setEnabled(button->isEnabled());
     }
+    if (resource() == Resource::Users) {
+        menu.addSeparator();
+        menu.addAction(UDriveIcons::icon(UDriveIcons::Symbol::Info), tr("User details"), this, [this, row] {
+            if (!row.isValid()) return;
+            _tree->selectionModel()->setCurrentIndex(row, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows); showDetails();
+        });
+    }
     menu.exec(globalPosition);
+}
+void UDriveAdminWidget::buildDetails()
+{
+    _detailsPane = new QScrollArea(this); _detailsPane->setObjectName(QStringLiteral("driveAdminDetails"));
+    _detailsPane->setAccessibleName(tr("User details")); _detailsPane->setWidgetResizable(true);
+    _detailsPane->setFrameShape(QFrame::NoFrame); _detailsPane->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *body = new QWidget(_detailsPane); body->setObjectName(QStringLiteral("driveAdminDetailsBody"));
+    auto *layout = new QVBoxLayout(body); layout->setContentsMargins(18, 20, 18, 20); layout->setSpacing(16);
+    auto *header = new QHBoxLayout;
+    _detailsTitle = label(tr("Details"), body); _detailsTitle->setAlignment(Qt::AlignCenter);
+    auto font = _detailsTitle->font(); font.setBold(true); font.setPointSize(14); _detailsTitle->setFont(font);
+    _detailsBack = new QPushButton(UDriveIcons::icon(UDriveIcons::Symbol::Back), {}, body);
+    _detailsBack->setObjectName(QStringLiteral("driveAdminDetailsBack")); _detailsBack->setAccessibleName(tr("Back to Details panel")); _detailsBack->setToolTip(tr("Back to Details panel"));
+    _detailsBack->setProperty("driveToolbarButton", true); _detailsBack->setFixedSize(30, 30);
+    auto backPolicy = _detailsBack->sizePolicy(); backPolicy.setRetainSizeWhenHidden(true); _detailsBack->setSizePolicy(backPolicy); _detailsBack->hide();
+    connect(_detailsBack, &QPushButton::clicked, this, [this] { if (!_userSaving) leaveUserEditor(); });
+    header->addWidget(_detailsBack); header->addWidget(_detailsTitle, 1);
+    auto *close = new QPushButton(UDriveIcons::icon(UDriveIcons::Symbol::Close), {}, body);
+    close->setObjectName(QStringLiteral("driveAdminDetailsClose")); close->setAccessibleName(tr("Close user details")); close->setToolTip(tr("Close"));
+    close->setProperty("driveToolbarButton", true); close->setFixedSize(30, 30); header->addWidget(close);
+    connect(close, &QPushButton::clicked, this, [this] { const bool partial = _userSavedSteps > 0; closeDetails(); updateActions(); if (partial) refresh(); _tree->setFocus(); });
+    layout->addLayout(header); layout->addSpacing(24);
+    _detailsAvatar = label({}, body); _detailsAvatar->setAlignment(Qt::AlignCenter); layout->addWidget(_detailsAvatar);
+    auto *names = new QVBoxLayout; names->setSpacing(3);
+    _detailsUsername = label({}, body); _detailsUsername->setObjectName(QStringLiteral("driveAdminDetailsUsername")); _detailsUsername->setAlignment(Qt::AlignCenter);
+    _detailsName = label({}, body); _detailsName->setObjectName(QStringLiteral("driveAdminDetailsName")); _detailsName->setAlignment(Qt::AlignCenter);
+    auto nameFont = _detailsName->font(); nameFont.setPointSize(16); nameFont.setWeight(QFont::Medium); _detailsName->setFont(nameFont);
+    names->addWidget(_detailsUsername); names->addWidget(_detailsName); layout->addLayout(names); layout->addSpacing(12);
+    _detailsStack = new QStackedWidget(body); _detailsStack->setObjectName(QStringLiteral("driveAdminDetailsStack"));
+    auto *overview = new QWidget(_detailsStack); auto *overviewLayout = new QVBoxLayout(overview); overviewLayout->setContentsMargins(0, 0, 0, 0); overviewLayout->setSpacing(16);
+    auto *form = new QFormLayout; form->setSpacing(8); form->setHorizontalSpacing(12);
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow); form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    for (const auto &caption : QStringList{tr("User name"), tr("First and last name"), tr("Email"), tr("Role"), tr("Login"), tr("Quota"), tr("Groups")}) {
+        auto *key = label(caption, body); auto keyFont = key->font(); keyFont.setWeight(QFont::DemiBold); key->setFont(keyFont);
+        auto *value = label({}, body); value->setMinimumWidth(0); value->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+        value->setAccessibleName(caption); _detailsValues.append(value); form->addRow(key, value);
+    }
+    overviewLayout->addLayout(form);
+    auto *rule = new QFrame(body); rule->setObjectName(QStringLiteral("driveAdminDetailsRule")); rule->setFixedHeight(1); overviewLayout->addWidget(rule);
+    _detailsEdit = new AdminDetailsEditButton(UDriveIcons::icon(UDriveIcons::Symbol::Rename), tr("Edit user"), body);
+    _detailsEdit->setObjectName(QStringLiteral("driveAdminDetailsEdit")); _detailsEdit->setProperty("driveToolbarButton", true);
+    _detailsEdit->setIconSize(QSize(20, 20)); overviewLayout->addWidget(_detailsEdit);
+    connect(_detailsEdit, &QPushButton::clicked, this, [this] { if (_detailsOpen && _edit->isEnabled()) edit(false); });
+    overviewLayout->addStretch(); _detailsStack->addWidget(overview); buildUserEditor(_detailsStack);
+    _detailsStack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored); _detailsStack->setMinimumHeight(overview->sizeHint().height());
+    layout->addWidget(_detailsStack, 1); _detailsPane->setWidget(body); _detailsPane->hide();
+}
+void UDriveAdminWidget::showDetails()
+{
+    if (_api->busy() || !_api->canRead(Resource::Users) || resource() != Resource::Users || text(selected(), "id").isEmpty()) return;
+    resetUserEditor(); _detailsOpen = true; updateDetails();
+}
+void UDriveAdminWidget::updateDetails()
+{
+    if (!_detailsOpen) return;
+    const auto record = selected();
+    if (resource() != Resource::Users || !_api->canRead(Resource::Users) || text(record, "id").isEmpty()) { closeDetails(); return; }
+    if (_userEditorOpen && text(record, "id") != text(_userEditRecord, "id")) resetUserEditor();
+    _detailsAvatar->setPixmap(userAvatar(record, 160).pixmap(80, 80));
+    _detailsUsername->setText(text(record, "onPremisesSamAccountName")); _detailsName->setText(text(record, "displayName"));
+    const auto total = record.value(QStringLiteral("drive")).toObject().value(QStringLiteral("quota")).toObject().value(QStringLiteral("total"));
+    const QString quota = total.isDouble() && total.toInteger(-1) >= 0
+        ? QLocale().formattedDataSize(total.toInteger(), total.toInteger() % 1000000000 == 0 ? 0 : 2, QLocale::DataSizeSIFormat) : tr("Not available");
+    QStringList groups;
+    for (const auto &group : record.value(QStringLiteral("memberOf")).toArray()) {
+        const auto name = text(group.toObject(), "displayName"); if (!name.isEmpty()) groups.append(name);
+    }
+    groups.removeDuplicates(); groups.sort(Qt::CaseInsensitive);
+    const QStringList values{text(record, "onPremisesSamAccountName"), text(record, "displayName"), text(record, "mail"), roleNames(record, _api->roles()),
+        record.value(QStringLiteral("accountEnabled")).toBool(true) ? tr("Allowed") : tr("Forbidden"), quota, groups.isEmpty() ? tr("No groups") : groups.join(QStringLiteral(", "))};
+    for (int i = 0; i < values.size(); ++i) { _detailsValues.at(i)->setText(values.at(i)); _detailsValues.at(i)->setToolTip(values.at(i)); }
+    _detailsEdit->setEnabled(!_api->busy() && _api->canUpdate(Resource::Users)); updateUserEditorAccess(); _detailsPane->show(); positionDetails();
+}
+void UDriveAdminWidget::closeDetails()
+{
+    resetUserEditor(); _reopenDetailsId.clear(); _detailsOpen = false; _detailsPane->hide(); _detailsAvatar->clear(); _detailsUsername->clear(); _detailsName->clear();
+    for (auto *value : _detailsValues) { value->clear(); value->setToolTip({}); }
+    _detailsEdit->setEnabled(false); positionDetails();
+}
+void UDriveAdminWidget::positionDetails()
+{
+    if (!_detailsPane) return;
+    const int panelWidth = qMin(width(), 340);
+    // Narrow windows use an overlaid inspector, preserving room for the table
+    // and filters without forcing the application window wider.
+    layout()->setContentsMargins(0, 0, _detailsOpen && width() >= 900 ? panelWidth : 0, 0);
+    if (_detailsOpen) { _detailsPane->setGeometry(width() - panelWidth, 0, panelWidth, height()); _detailsPane->raise(); }
+}
+void UDriveAdminWidget::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event); positionDetails();
+}
+void UDriveAdminWidget::buildUserEditor(QWidget *parent)
+{
+    _userEditor = new QWidget(parent); _userEditor->setObjectName(QStringLiteral("driveAdminUserEditor"));
+    auto *layout = new QVBoxLayout(_userEditor); layout->setContentsMargins(14, 16, 14, 16); layout->setSpacing(16);
+    auto *form = new QFormLayout; form->setRowWrapPolicy(QFormLayout::WrapAllRows); form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow); form->setSpacing(12);
+    for (const auto &field : QList<QPair<QString, QString>>{{QStringLiteral("onPremisesSamAccountName"), tr("User name")}, {QStringLiteral("displayName"), tr("First and last name")}, {QStringLiteral("mail"), tr("Email")}, {QStringLiteral("passwordProfile"), tr("New password (optional)")}}) {
+        auto *input = new QLineEdit(_userEditor); input->setObjectName(QStringLiteral("adminEdit_") + field.first); input->setAccessibleName(field.second); input->setMaxLength(1024); input->setMinimumWidth(0);
+        if (field.first == QStringLiteral("passwordProfile")) { input->setEchoMode(QLineEdit::Password); input->setPlaceholderText(tr("Leave blank to keep the current password")); input->setAttribute(Qt::WA_InputMethodEnabled, false); }
+        form->addRow(field.second, input); _userInputs.insert(field.first, input);
+    }
+    _userRole = new UDriveComboBox(_userEditor); _userRole->setObjectName(QStringLiteral("adminEditRole")); _userRole->setProperty("udriveCombo", true); _userRole->setAccessibleName(tr("Role")); form->addRow(tr("Role"), _userRole);
+    _userLogin = new UDriveComboBox(_userEditor); _userLogin->setObjectName(QStringLiteral("adminEditLogin")); _userLogin->setProperty("udriveCombo", true); _userLogin->setAccessibleName(tr("Login"));
+    _userLogin->addItem(tr("Allowed"), true); _userLogin->addItem(tr("Forbidden"), false); form->addRow(tr("Login"), _userLogin);
+    _userQuota = new QLineEdit(_userEditor); _userQuota->setObjectName(QStringLiteral("adminEditQuota")); _userQuota->setAccessibleName(tr("Personal quota in GB")); _userQuota->setMaxLength(32); form->addRow(tr("Personal quota (GB)"), _userQuota);
+    layout->addLayout(form);
+    _userEditError = label({}, _userEditor); _userEditError->setObjectName(QStringLiteral("driveAdminUserEditError")); _userEditError->hide(); layout->addWidget(_userEditError);
+    auto *buttons = new QHBoxLayout; buttons->setSpacing(10);
+    _userCancel = new QPushButton(tr("Cancel"), _userEditor); _userCancel->setObjectName(QStringLiteral("driveAdminUserCancel")); buttons->addWidget(_userCancel);
+    _userSave = new QPushButton(tr("Save changes"), _userEditor); _userSave->setObjectName(QStringLiteral("driveAdminUserSave")); buttons->addWidget(_userSave);
+    layout->addLayout(buttons); layout->addStretch(); _detailsStack->addWidget(_userEditor);
+    connect(_userCancel, &QPushButton::clicked, this, [this] { if (!_userSaving) leaveUserEditor(); });
+    connect(_userSave, &QPushButton::clicked, this, &UDriveAdminWidget::saveUserEditor);
+}
+void UDriveAdminWidget::openUserEditor()
+{
+    if (_api->busy() || !_edit->isEnabled() || resource() != Resource::Users) return;
+    const auto record = selected(); if (text(record, "id").isEmpty()) return;
+    resetUserEditor(); _userEditRecord = record; _userEditorOpen = true; _detailsOpen = true;
+    for (auto it = _userInputs.begin(); it != _userInputs.end(); ++it) it.value()->setText(it.key() == QStringLiteral("passwordProfile") ? QString() : record.value(it.key()).toString());
+    _userRole->clear(); int assigned = -1;
+    for (const auto &value : _api->roles()) {
+        const auto role = value.toObject(); if (!role.value(QStringLiteral("isEnabled")).toBool(true)) continue;
+        _userRole->addItem(text(role, "displayName"), role);
+        for (const auto &grant : record.value(QStringLiteral("appRoleAssignments")).toArray()) if (text(grant.toObject(), "appRoleId") == text(role, "id") && text(grant.toObject(), "resourceId") == text(role, "resourceId")) assigned = _userRole->count() - 1;
+    }
+    _userRole->setCurrentIndex(assigned); _userRole->setPlaceholderText(tr("No role"));
+    _userLogin->setCurrentIndex(record.value(QStringLiteral("accountEnabled")).toBool(true) ? 0 : 1);
+    const auto total = record.value(QStringLiteral("drive")).toObject().value(QStringLiteral("quota")).toObject().value(QStringLiteral("total"));
+    _userQuota->setText(total.isDouble() && total.toInteger(-1) >= 0 ? QString::number(total.toDouble() / 1000000000.0, 'g', 12) : QString());
+    _userQuota->setPlaceholderText(tr("Not available until the user has signed in"));
+    _detailsStack->setCurrentWidget(_userEditor); _detailsStack->setMinimumHeight(_userEditor->sizeHint().height()); _detailsTitle->setText(tr("Edit user")); _detailsBack->show(); updateActions();
+    _detailsPane->verticalScrollBar()->setValue(0);
+}
+void UDriveAdminWidget::resetUserEditor()
+{
+    _userEditorOpen = false; _userSaving = false; _userSavedSteps = 0; _userEdits = {}; _userEditPending = {}; _userEditRecord = {};
+    for (auto *input : _userInputs) input->clear();
+    _userQuota->clear(); _userRole->clear(); _userEditError->clear(); _userEditError->hide();
+    _detailsStack->setCurrentIndex(0); _detailsStack->setMinimumHeight(_detailsStack->currentWidget()->sizeHint().height()); _detailsTitle->setText(tr("Details")); _detailsBack->setEnabled(true); _detailsBack->hide();
+    findChild<QPushButton *>(QStringLiteral("driveAdminDetailsClose"))->setEnabled(true);
+}
+void UDriveAdminWidget::leaveUserEditor()
+{
+    const auto id = text(_userEditRecord, "id"); const bool partial = _userSavedSteps > 0;
+    resetUserEditor();
+    if (partial) { closeDetails(); _reopenDetailsId = id; refresh(); }
+    else updateActions();
+}
+void UDriveAdminWidget::updateUserEditorAccess()
+{
+    if (!_userEditorOpen) return;
+    const bool idle = !_api->busy() && !_userSaving; const bool self = text(_userEditRecord, "id") == _api->selfId();
+    for (auto it = _userInputs.begin(); it != _userInputs.end(); ++it) it.value()->setEnabled(idle && _api->userFieldWritable(it.key()));
+    _userRole->setEnabled(idle && !self && _api->canAssignRoles() && _userRole->count() > 0);
+    _userLogin->setEnabled(idle && !self && _api->userFieldWritable(QStringLiteral("accountEnabled")));
+    const auto drive = _userEditRecord.value(QStringLiteral("drive")).toObject();
+    _userQuota->setEnabled(idle && _api->canSetPersonalQuota() && !text(drive, "id").isEmpty() && drive.value(QStringLiteral("quota")).toObject().value(QStringLiteral("total")).isDouble());
+    _userSave->setEnabled(idle && _api->canUpdate(Resource::Users)); _userCancel->setEnabled(!_userSaving); _detailsBack->setEnabled(!_userSaving);
+    findChild<QPushButton *>(QStringLiteral("driveAdminDetailsClose"))->setEnabled(!_userSaving);
+}
+void UDriveAdminWidget::saveUserEditor()
+{
+    if (!_userEditorOpen || _api->busy() || _userSaving || !_api->canUpdate(Resource::Users) || text(selected(), "id") != text(_userEditRecord, "id")) return;
+    _userEditError->hide(); QJsonArray changes; QJsonObject fields;
+    auto report = [this](const QString &message) { _userEditError->setText(message); _userEditError->show(); };
+    for (auto it = _userInputs.begin(); it != _userInputs.end(); ++it) {
+        if (!_api->userFieldWritable(it.key())) continue;
+        const auto value = it.key() == QStringLiteral("passwordProfile") ? it.value()->text() : it.value()->text().trimmed();
+        if ((it.key() == QStringLiteral("onPremisesSamAccountName") || it.key() == QStringLiteral("displayName")) && value.isEmpty()) { report(tr("Enter a name before saving.")); it.value()->setFocus(); return; }
+        if (it.key() == QStringLiteral("passwordProfile")) { if (!value.isEmpty()) fields.insert(it.key(), QJsonObject{{QStringLiteral("password"), value}}); }
+        else if (value != _userEditRecord.value(it.key()).toString()) fields.insert(it.key(), value);
+    }
+    if (!fields.isEmpty()) changes.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("profile")}, {QStringLiteral("fields"), fields}});
+    if (_userLogin->isEnabled() && _userLogin->currentData().toBool() != _userEditRecord.value(QStringLiteral("accountEnabled")).toBool(true)) changes.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("login")}, {QStringLiteral("enabled"), _userLogin->currentData().toBool()}});
+    if (_userQuota->isEnabled()) {
+        bool valid = false; const double gb = _userQuota->text().toDouble(&valid);
+        if (!valid || !std::isfinite(gb) || gb < 0 || gb > 9000000) { report(tr("Enter a valid personal quota in GB.")); _userQuota->setFocus(); return; }
+        const qint64 total = qRound64(gb * 1000000000.0);
+        if (total != _userEditRecord.value(QStringLiteral("drive")).toObject().value(QStringLiteral("quota")).toObject().value(QStringLiteral("total")).toInteger()) changes.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("quota")}, {QStringLiteral("total"), total}});
+    }
+    if (_userRole->isEnabled() && _userRole->currentIndex() >= 0) {
+        const auto role = _userRole->currentData().toJsonObject(); bool assigned = false;
+        for (const auto &entry : _userEditRecord.value(QStringLiteral("appRoleAssignments")).toArray()) if (text(entry.toObject(), "appRoleId") == text(role, "id") && text(entry.toObject(), "resourceId") == text(role, "resourceId")) assigned = true;
+        if (!assigned) changes.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("role")}, {QStringLiteral("role"), role}});
+    }
+    if (changes.isEmpty()) { resetUserEditor(); updateActions(); return; }
+    _userEdits = changes; _userSavedSteps = 0; _userSaving = true; sendNextUserEdit();
+}
+void UDriveAdminWidget::sendNextUserEdit()
+{
+    if (!_userSaving || !_userEditorOpen || !_detailsOpen || !isVisible()) return;
+    if (_userEdits.isEmpty()) {
+        const auto id = text(_userEditRecord, "id"); closeDetails(); _reopenDetailsId = id;
+        UDriveToast::showMessage(this, tr("Changes saved."), UDriveToast::Kind::Success); refresh(); return;
+    }
+    _userEditPending = _userEdits.takeAt(0).toObject(); const auto kind = text(_userEditPending, "kind"); const auto id = text(_userEditRecord, "id"); bool sent = false;
+    if (kind == QStringLiteral("profile")) sent = _api->save(Resource::Users, id, _userEditPending.value(QStringLiteral("fields")).toObject());
+    else if (kind == QStringLiteral("login")) sent = _api->setLogin(id, _userEditPending.value(QStringLiteral("enabled")).toBool());
+    else if (kind == QStringLiteral("quota")) sent = _api->setPersonalQuota(text(_userEditRecord.value(QStringLiteral("drive")).toObject(), "id"), _userEditPending.value(QStringLiteral("total")).toInteger());
+    else if (kind == QStringLiteral("role")) { const auto role = _userEditPending.value(QStringLiteral("role")).toObject(); sent = _api->assignRole(id, text(role, "id"), text(role, "resourceId")); }
+    if (!sent && _userSaving) userEditFinished(false, tr("This change is no longer permitted. Refresh and try again."));
+}
+void UDriveAdminWidget::userEditFinished(bool success, const QString &message)
+{
+    if (!success) {
+        _userSaving = false; _userEdits = {}; _userEditPending = {};
+        _userEditError->setText(_userSavedSteps > 0 ? tr("Some changes were saved. %1").arg(message) : message); _userEditError->show(); updateActions(); return;
+    }
+    const auto kind = text(_userEditPending, "kind");
+    if (kind == QStringLiteral("profile")) {
+        const auto fields = _userEditPending.value(QStringLiteral("fields")).toObject();
+        for (auto it = fields.begin(); it != fields.end(); ++it) if (it.key() != QStringLiteral("passwordProfile")) _userEditRecord.insert(it.key(), it.value());
+        _userInputs.value(QStringLiteral("passwordProfile"))->clear();
+    } else if (kind == QStringLiteral("login")) _userEditRecord.insert(QStringLiteral("accountEnabled"), _userEditPending.value(QStringLiteral("enabled")));
+    else if (kind == QStringLiteral("quota")) { auto drive = _userEditRecord.value(QStringLiteral("drive")).toObject(); auto quota = drive.value(QStringLiteral("quota")).toObject(); quota.insert(QStringLiteral("total"), _userEditPending.value(QStringLiteral("total"))); drive.insert(QStringLiteral("quota"), quota); _userEditRecord.insert(QStringLiteral("drive"), drive); }
+    else if (kind == QStringLiteral("role")) { const auto role = _userEditPending.value(QStringLiteral("role")).toObject(); _userEditRecord.insert(QStringLiteral("appRoleAssignments"), QJsonArray{QJsonObject{{QStringLiteral("appRoleId"), text(role, "id")}, {QStringLiteral("resourceId"), text(role, "resourceId")}}}); }
+    _userEditPending = {}; ++_userSavedSteps; sendNextUserEdit();
 }
 void UDriveAdminWidget::edit(bool create)
 {
     if (_api->busy() || !(create ? canCreate() : _edit->isEnabled())) return;
+    if (!create && resource() == Resource::Users) { openUserEditor(); return; }
     const auto type = resource(); const auto record = create ? QJsonObject() : selected(); const QString id = text(record, "id");
     const QString title = create ? creationLabel() : type == Resource::Users ? tr("Edit user") : type == Resource::Groups ? tr("Edit group") : tr("Edit workspace");
     auto *dialog = dialogFor(this, title, tr("Manage details on %1.").arg(_state->account()->url().host()),

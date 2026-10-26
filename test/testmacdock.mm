@@ -27,8 +27,8 @@ private Q_SLOTS:
     {
         if (QGuiApplication::platformName() != QStringLiteral("cocoa"))
             QSKIP("Requires the native Cocoa platform.");
-        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive"))
-            QSKIP("UDrive Dock behavior only.");
+        if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive"))
+            QSKIP("Udrive Dock behavior only.");
         QVERIFY(NSApp != nil);
         SettingsDialog window(nullptr);
         QCOMPARE(NSApp.activationPolicy, NSApplicationActivationPolicyRegular);

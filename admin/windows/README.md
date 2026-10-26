@@ -1,4 +1,4 @@
-# UDrive Windows installer
+# Udrive Windows installer
 
 The Windows build requires a **Windows x64 machine**, Git, Python 3.12+, and
 Visual Studio 2022 with the Desktop development with C++ workload and Windows SDK.
@@ -7,25 +7,25 @@ Use a Windows PC, Windows VM, or the included GitHub Actions Windows runner.
 
 ## Build on a Windows PC
 
-Copy or check out this UDrive source on Windows. From its root directory:
+Copy or check out this Udrive source on Windows. From its root directory:
 
 ```powershell
 python admin/windows/build.py --work-root C:\udrive-build
 ```
 
 The helper installs the pinned Craft dependencies, compiles this local checkout,
-and creates an NSIS `.exe` installer with the UDrive name, icon, shortcuts and
+and creates an NSIS `.exe` installer with the Udrive name, icon, shortcuts and
 publisher metadata. It uses an isolated build folder. Automatic updates and
 Finder/shell integration are disabled for this initial installer.
 
 On a **clean Windows test machine**, add `--smoke-test` to install temporarily,
 check the bundled runtime and x64 app version without the Craft installation
-available, then uninstall. It refuses to replace an existing UDrive installation.
+available, then uninstall. It refuses to replace an existing Udrive installation.
 It does not sign in to accounts or start file synchronization.
 
 Outputs appear under `build-release-artifacts/windows/run-.../`:
 
-- `UDrive-VERSION-Windows-x64-TESTING-ONLY.exe` — unsigned NSIS test installer.
+- `Udrive-VERSION-Windows-x64-TESTING-ONLY.exe` — unsigned NSIS test installer.
 - `SHA256SUMS` — SHA-256 checksum.
 - `download.json` — version, size, architecture and installation-test result.
 - `TESTING-ONLY.txt` — package status.
@@ -38,15 +38,15 @@ Apple Developer credentials are not used for Windows.
 
 The `.github/workflows/windows-build.yml` workflow runs on a Windows 2022 x64
 runner. It builds the installer, checks installation and startup, and uploads
-the installer/checksum as the `UDrive-Windows-x64-testing` artifact. It does not
+the installer/checksum as the `Udrive-Windows-x64-testing` artifact. It does not
 publish a release or change the download website.
 
-If a run fails, download `UDrive-Windows-build-diagnostics` from its Artifacts
+If a run fails, download `Udrive-Windows-build-diagnostics` from its Artifacts
 section. It contains the build transcript, installed-file list (when installation
 was reached), and installer scripts. An uninstall failure is reported separately
 so it cannot hide the original installation or startup error.
 
-The workflow must first be committed and pushed to the UDrive repository.
+The workflow must first be committed and pushed to the Udrive repository.
 Changes to these Windows build files can run it through a pull request. Once
 the workflow is on the default branch, it is also available under GitHub's
 Actions tab using **Run workflow**, or with:
@@ -66,8 +66,8 @@ Only enable the Windows download after a real installer has been produced and
 tested. Upload that `.exe` and its checksum to the download website alongside
 the Mac DMG. A Mac `.app` or `.dmg` cannot substitute for a Windows installer.
 
-The separate website is `/Users/tochratana/Work/web-test-host`. Its Windows
-control remains disabled until the actual Windows artifact is available.
+Keep the website's Windows download control disabled until the actual Windows
+artifact is available and has passed the required installation checks.
 
 ## Packaging-policy tests
 

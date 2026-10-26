@@ -85,8 +85,36 @@ private:
 }
 
 UDriveWorkspaceActions::UDriveWorkspaceActions(AccountState *state, QObject *parent)
-    : QObject(parent), _state(state), _permissions(new UDriveAdminApi(state, this, false))
+    : QObject(parent), _state(state), _permissions(new UDriveAdminApi(state, this, false)), _catalog(new UDriveAdminApi(state, this, false))
 {
+    connect(_catalog, &UDriveAdminApi::cleared, this, [this] {
+        _disabledDrives.clear(); Q_EMIT catalogChanged();
+    });
+    connect(_catalog, &UDriveAdminApi::operationFinished, this, [this](bool success, const QString &) {
+        if (_catalogAccessPending) {
+            _catalogAccessPending = false;
+            if (success && _catalog->canRead(UDriveAdminApi::Resource::Workspaces)) {
+                _catalog->load(UDriveAdminApi::Resource::Workspaces);
+                return;
+            }
+            _disabledDrives.clear(); Q_EMIT catalogChanged();
+        } else if (!success) {
+            _disabledDrives.clear(); Q_EMIT catalogChanged();
+        }
+        if (_catalogRefreshPending) {
+            _catalogRefreshPending = false;
+            QTimer::singleShot(0, this, &UDriveWorkspaceActions::refreshCatalog);
+        }
+    });
+    connect(_catalog, &UDriveAdminApi::recordsLoaded, this, [this](UDriveAdminApi::Resource resource, const QJsonArray &records) {
+        if (resource != UDriveAdminApi::Resource::Workspaces) return;
+        _disabledDrives.clear();
+        for (const auto &record : records) {
+            OpenAPI::OAIDrive drive; drive.fromJsonObject(record.toObject());
+            if (drive.getDriveType() == QStringLiteral("project") && !active(drive)) _disabledDrives.append(drive);
+        }
+        Q_EMIT catalogChanged();
+    });
     connect(_permissions, &UDriveAdminApi::cleared, this, &UDriveWorkspaceActions::clearPermissions);
     connect(_permissions, &UDriveAdminApi::busyChanged, this, [this] {
         if (_permissions->busy()) { clearPermissions(); _permissionQueue = _permissionDrives; }
@@ -107,6 +135,7 @@ UDriveWorkspaceActions::UDriveWorkspaceActions(AccountState *state, QObject *par
 UDriveWorkspaceActions::~UDriveWorkspaceActions()
 {
     disconnect(_permissions, nullptr, this, nullptr);
+    disconnect(_catalog, nullptr, this, nullptr);
     const auto permissionJob = _permissionJob; _permissionJob.clear();
     const auto job = _job; _job.clear();
     if (permissionJob) permissionJob->abort();
@@ -127,6 +156,13 @@ void UDriveWorkspaceActions::clearPermissions()
     if (job) { job->abort(); job->deleteLater(); }
     _permissionAge.invalidate(); _drivePermissions.clear(); _permissionQueue.clear();
     cancel(); Q_EMIT permissionsChanged();
+}
+void UDriveWorkspaceActions::refreshCatalog()
+{
+    if (!available()) return;
+    if (_catalog->busy()) { _catalogRefreshPending = true; return; }
+    _catalogAccessPending = true;
+    _catalog->refreshAccess();
 }
 void UDriveWorkspaceActions::refreshPermissions()
 {
@@ -205,8 +241,11 @@ bool UDriveWorkspaceActions::can(const QString &action, const OpenAPI::OAIDrive 
     const bool manager = grants.contains(QStringLiteral("libre.graph/driveItem/permissions/delete"));
     const bool update = _permissions->hasPermission("Drives.ReadWrite.all") || _permissions->hasPermission("Drives.ReadWriteEnabled.all");
     if (action == QStringLiteral("restore")) return !active(drive) && (manager || update);
-    if (!active(drive)) return false;
+    // Like the web client, accept an effective workspace-manager grant as well
+    // as the global delete permission. Never infer access from catalog role labels.
+    if (action == QStringLiteral("delete")) return !active(drive) && (manager || _permissions->hasPermission("Drives.Delete.all"));
     if (action == QStringLiteral("quota")) return _permissions->hasPermission("Drives.ReadWriteProjectQuota.all");
+    if (!active(drive)) return false;
     if (action == QStringLiteral("disable")) return manager || update || _permissions->hasPermission("Drives.Delete.all");
     if (action == QStringLiteral("rename") || action == QStringLiteral("subtitle")) return manager || update;
     if (action == QStringLiteral("description") || action == QStringLiteral("image") || action == QStringLiteral("icon")) return manager;
@@ -229,7 +268,7 @@ bool UDriveWorkspaceActions::begin(const QList<OpenAPI::OAIDrive> &drives)
 {
     if (_busy || !available() || drives.isEmpty()) return false;
     for (const auto &drive : drives)
-        if (drive.getDriveType() != QStringLiteral("project") || !driveIdValid(drive.getId()) || !nameValid(drive.getRoot().getId())) return false;
+        if (drive.getDriveType() != QStringLiteral("project") || !driveIdValid(drive.getId()) || (active(drive) && !nameValid(drive.getRoot().getId()))) return false;
     _busy = true; _drives = drives; _completed = 0; _partialCopy = false; _writeError.clear(); _signature.clear();
     Q_EMIT busyChanged();
     return true;
@@ -320,17 +359,24 @@ bool UDriveWorkspaceActions::disable(const QList<OpenAPI::OAIDrive> &drives, boo
     if (!begin(drives)) return false;
     patchNext({}, restore ? "PATCH" : "DELETE", restore); return true;
 }
-void UDriveWorkspaceActions::patchNext(const QJsonObject &payload, const QByteArray &verb, bool restore)
+bool UDriveWorkspaceActions::remove(const QList<OpenAPI::OAIDrive> &drives)
 {
-    if (_drives.isEmpty()) { finish(true, tr("Workspace changes saved.")); return; }
+    for (const auto &drive : drives) if (!can(QStringLiteral("delete"), drive)) return false;
+    if (!begin(drives)) return false;
+    patchNext({}, "DELETE", false, true); return true;
+}
+void UDriveWorkspaceActions::patchNext(const QJsonObject &payload, const QByteArray &verb, bool restore, bool purge)
+{
+    if (_drives.isEmpty()) { finish(true, purge ? tr("Workspaces deleted.") : tr("Workspace changes saved.")); return; }
     const auto drive = _drives.takeFirst();
     auto headers = jsonHeaders();
     if (!drive.getETag().isEmpty()) headers.setRawHeader("If-Match", drive.getETag().toUtf8());
     if (restore) headers.setRawHeader("Restore", "T");
+    if (purge) headers.setRawHeader("Purge", "T");
     auto value = payload;
     if (!value.contains(QStringLiteral("name"))) value.insert(QStringLiteral("name"), drive.getName());
-    request(verb, graph(drive.getId()), verb == "DELETE" ? QByteArray() : json(value), headers, [this, payload, verb, restore](const Reply &) {
-        ++_completed; patchNext(payload, verb, restore);
+    request(verb, graph(drive.getId()), verb == "DELETE" ? QByteArray() : json(value), headers, [this, payload, verb, restore, purge](const Reply &) {
+        ++_completed; patchNext(payload, verb, restore, purge);
     }, verb == "DELETE" ? QList<int>{200, 204} : QList<int>{200});
 }
 bool UDriveWorkspaceActions::readDescription(const OpenAPI::OAIDrive &drive)

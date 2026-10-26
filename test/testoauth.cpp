@@ -32,6 +32,32 @@ public:
 static const QUrl sOpenIdBaseURL(QStringLiteral("oauthtest://auth.example.com"));
 static const QUrl sOpenIdAuthURL(QStringLiteral("oauthtest://auth.example.com/realms/test/protocol/openid-connect/auth"));
 
+class OAuthTestCredentials : public FakeCredentials
+{
+public:
+    using FakeCredentials::FakeCredentials;
+    FakeAM::Override requestHandler;
+
+    OCC::AccessManager *createAccessManager() const override
+    {
+        // Account initialization keeps the primary manager. CheckServerJob
+        // requests a separate disposable manager and takes ownership of it.
+        if (!_primaryCreated) {
+            _primaryCreated = true;
+            return FakeCredentials::createAccessManager();
+        }
+        auto *manager = new FakeAM(nullptr);
+        manager->setOverride([manager, handler = requestHandler](QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *body) {
+            auto *reply = handler(op, request, body);
+            if (reply) reply->setParent(manager);
+            return reply;
+        });
+        return manager;
+    }
+private:
+    mutable bool _primaryCreated = false;
+};
+
 
 class FakePostReply : public QNetworkReply
 {
@@ -136,11 +162,9 @@ public:
         fakeAm = new FakeAM(nullptr);
         account = new Account(QUuid::createUuid(), "admin", sOpenIdBaseURL);
 
-        // the account seizes ownership over the qnam in account->setCredentials(...) by keeping a shared pointer on it
-        // therefore, we should never call fakeAm->setThis(...)
-        // Lisa todo: ???
-        account->setCredentials(new FakeCredentials(account, fakeAm, account));
-        fakeAm->setOverride([this](QNetworkAccessManager::Operation op, const QNetworkRequest &req, QIODevice *device) {
+        auto *credentials = new OAuthTestCredentials(account, fakeAm, account);
+        account->setCredentials(credentials);
+        credentials->requestHandler = [this](QNetworkAccessManager::Operation op, const QNetworkRequest &req, QIODevice *device) {
             if (req.url().path().endsWith(QLatin1String(".well-known/openid-configuration"))) {
                 return this->wellKnownReply(op, req);
             }
@@ -153,7 +177,8 @@ public:
             OC_ASSERT(device);
             OC_ASSERT(device && device->bytesAvailable() > 0); // OAuth2 always sends around POST data.
             return this->tokenReply(op, req, device);
-        });
+        };
+        fakeAm->setOverride(credentials->requestHandler);
 
         QObject::connect(&desktopServiceHook, &DesktopServiceHook::hooked, this, &OAuthTestCase::openBrowserHook);
 

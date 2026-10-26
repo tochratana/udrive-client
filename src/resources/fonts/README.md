@@ -1,6 +1,6 @@
 # Google Sans for Khmer
 
-UDrive bundles the unmodified Google Sans variable font and registers it as
+Udrive bundles the unmodified Google Sans variable font and registers it as
 Qt's application fallback for the Khmer script. English and Chinese retain
 their existing fonts. Loading is local and does not install a system font or
 contact Google at runtime.

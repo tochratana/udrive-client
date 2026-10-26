@@ -101,6 +101,17 @@ bool UDriveAdminApi::canDelete(Resource resource) const
     return resource == Resource::Users ? canRead(resource) && !userCapabilities().value(QStringLiteral("delete_disabled")).toBool() : canUpdate(resource);
 }
 bool UDriveAdminApi::canSetQuota() const { return canRead(Resource::Workspaces) && has("Drives.ReadWriteProjectQuota.all"); }
+bool UDriveAdminApi::canSetPersonalQuota() const
+{
+    return canRead(Resource::Users) && has("Drives.ReadWritePersonalQuota.all")
+        && !userCapabilities().value(QStringLiteral("read_only_attributes")).toArray().contains(QStringLiteral("drive.quota"));
+}
+bool UDriveAdminApi::setPersonalQuota(const QString &driveId, qint64 total)
+{
+    if (!validId(driveId) || total < 0 || !canSetPersonalQuota() || !begin()) return false;
+    request("PATCH", graphUrl(QStringLiteral("drives/") + driveId), {{QStringLiteral("quota"), QJsonObject{{QStringLiteral("total"), total}}}},
+        [this](const QJsonObject &) { finish(true, tr("Personal quota updated.")); }); return true;
+}
 bool UDriveAdminApi::canAssignRoles() const { return has("Roles.ReadWrite.all") && userFieldWritable(QStringLiteral("appRoleAssignments")); }
 QString UDriveAdminApi::collectionName(Resource resource) const
 {

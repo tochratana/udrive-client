@@ -29,8 +29,7 @@ class TestAppConfig : public QObject
     QString _configPath;
 
     bool createConfigFile(const QByteArray &data) {
-        auto theme = OCC::ownCloudTheme();
-        _configPath = OCC::AppConfig::configPath(QOperatingSystemVersion::Unknown, theme);
+        _configPath = OCC::AppConfig::configPath(QOperatingSystemVersion::Unknown, *OCC::Theme::instance());
 
         QString parent = QFileInfo(_configPath).path();
         if (!QDir().mkpath(parent))
@@ -53,8 +52,11 @@ class TestAppConfig : public QObject
 private Q_SLOTS:
     void testConfigPath()
     {
-        auto t = OCC::ownCloudTheme();
-        QCOMPARE(OCC::AppConfig::configPath(QOperatingSystemVersion::Windows, t), QString("HKEY_LOCAL_MACHINE\\Software\\Policies\\ownCloud\\ownCloud"));
+        const auto &t = *OCC::Theme::instance();
+        const auto windowsPath = t.appNameGUI() == QStringLiteral("Udrive")
+            ? QStringLiteral("HKEY_LOCAL_MACHINE\\Software\\Policies\\Unity Workspace\\Udrive")
+            : QStringLiteral("HKEY_LOCAL_MACHINE\\Software\\Policies\\ownCloud\\ownCloud");
+        QCOMPARE(OCC::AppConfig::configPath(QOperatingSystemVersion::Windows, t), windowsPath);
         QCOMPARE(OCC::AppConfig::configPath(QOperatingSystemVersion::MacOS, t), QString("/Library/Preferences/com.owncloud.desktopclient/ownCloud.ini"));
         QCOMPARE(OCC::AppConfig::configPath(QOperatingSystemVersion::Unknown, t), QString("/etc/ownCloud/ownCloud.ini"));
     }

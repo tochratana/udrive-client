@@ -143,7 +143,7 @@ class TestWindowsRelease(unittest.TestCase):
                 str(Path('C:/Windows') / 'System32'), 'C:/Windows']))
             if startup_fails:
                 raise windows.subprocess.CalledProcessError(1, args)
-            return 'UDrive 7.1.1\n'
+            return 'Udrive 7.1.1\n'
 
         stack = ExitStack()
         self.addCleanup(stack.close)
@@ -205,7 +205,7 @@ class TestWindowsRelease(unittest.TestCase):
         path.write_text(BLUEPRINT)
         windows.brand_blueprint(path)
         result = path.read_text()
-        self.assertIn('self.displayName = "UDrive"', result)
+        self.assertIn('self.displayName = "Udrive"', result)
         self.assertIn('"Unity Workspace"', result)
         self.assertIn('"src/gui/udrive.ico"', result)
         self.assertIn('self.sourceDir() / "COPYING"', result)
@@ -219,6 +219,15 @@ class TestWindowsRelease(unittest.TestCase):
         with self.assertRaises(windows.BuildError):
             windows.brand_blueprint(path)
         self.assertEqual(path.read_text(), content)
+
+    def test_previous_fork_label_is_updated_in_reused_blueprint(self):
+        path = self.root / "package.py"
+        path.write_text(BLUEPRINT)
+        windows.brand_blueprint(path)
+        expected = path.read_text()
+        path.write_text(expected.replace('"Udrive', '"UDrive'))
+        windows.brand_blueprint(path)
+        self.assertEqual(path.read_text(), expected)
 
     def test_pinned_qt_sources_use_archive_and_keep_checksum_verification(self):
         qt_root = self.qt_fixture()

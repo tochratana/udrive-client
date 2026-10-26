@@ -19,7 +19,7 @@ class TestNewAccountSettings : public QObject
 private Q_SLOTS:
     void accountIdentityPreservesCustomDownloadLocation()
     {
-        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive")) QSKIP("UDrive account naming");
+        if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive")) QSKIP("Udrive account naming");
         TestUtils::folderMan();
         QWizardPage page;
         AdvancedSettingsPageController controller(&page, &page);

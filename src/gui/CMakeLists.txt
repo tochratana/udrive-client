@@ -109,7 +109,7 @@ if(TARGET Qt6::Multimedia AND TARGET Qt6::MultimediaWidgets)
     target_link_libraries(owncloudGui PUBLIC Qt6::Multimedia Qt6::MultimediaWidgets)
     target_compile_definitions(owncloudGui PUBLIC UDRIVE_HAS_MULTIMEDIA)
 elseif(UDRIVE_REQUIRE_MULTIMEDIA)
-    message(FATAL_ERROR "UDrive video preview requires Qt Multimedia and MultimediaWidgets. Install the qtmultimedia Craft dependency.")
+    message(FATAL_ERROR "Udrive video preview requires Qt Multimedia and MultimediaWidgets. Install the qtmultimedia Craft dependency.")
 endif()
 ecm_add_qml_module(owncloudGui
         URI org.ownCloud.gui

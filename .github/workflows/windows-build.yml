@@ -1,4 +1,4 @@
-name: UDrive Windows installer
+name: Udrive Windows installer
 
 on:
   workflow_dispatch:
@@ -24,7 +24,7 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - name: Check out UDrive source
+      - name: Check out Udrive source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -46,7 +46,7 @@ jobs:
       - name: Upload installer and checksum
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: UDrive-Windows-x64-testing
+          name: Udrive-Windows-x64-testing
           path: build-release-artifacts/windows/*
           if-no-files-found: error
           retention-days: 14
@@ -75,7 +75,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: UDrive-Windows-build-diagnostics
+          name: Udrive-Windows-build-diagnostics
           path: build-release-artifacts/windows-diagnostics/
           if-no-files-found: ignore
           retention-days: 7

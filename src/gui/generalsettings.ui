@@ -246,7 +246,7 @@
       <item>
        <widget class="QPushButton" name="about_pushButton">
         <property name="text">
-         <string>About UDrive</string>
+         <string>About Udrive</string>
         </property>
        </widget>
       </item>

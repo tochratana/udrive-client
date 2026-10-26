@@ -233,6 +233,8 @@ private:
     QAction *_workspaceDuplicateAction = nullptr;
     QAction *_workspaceQuotaAction = nullptr;
     QAction *_workspaceDisableAction = nullptr;
+    QAction *_workspaceEnableAction = nullptr;
+    QAction *_workspaceDeleteAction = nullptr;
     QToolButton *_workspaceCancelButton = nullptr;
     QWidget *_workspaceTitleDivider = nullptr;
     QWidget *_workspaceControls = nullptr;
@@ -416,6 +418,38 @@ public:
 private:
     QLineEdit *_lineEdit = nullptr;
     QPushButton *_confirmButton = nullptr;
+};
+
+class UDriveEmojiDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    explicit UDriveEmojiDialog(const QString &spaceName, QWidget *parent = nullptr);
+    QString selectedEmoji() const;
+    static QString getEmoji(QWidget *parent, const QString &spaceName, bool *ok = nullptr);
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
+private:
+    void filterEmojis(const QString &query);
+    void selectEmoji(const QString &emoji);
+    void scrollToCategory(int index);
+
+    QString _selectedEmoji;
+    QLineEdit *_searchEdit = nullptr;
+    QLabel *_previewLabel = nullptr;
+    QScrollArea *_scrollArea = nullptr;
+    QList<QWidget *> _categoryHeaders;
+    QList<QPushButton *> _categoryButtons;
+    struct EmojiItem {
+        QString emoji;
+        QString name;
+        int categoryIndex = 0;
+        QPushButton *button = nullptr;
+    };
+    QList<EmojiItem> _emojiItems;
+    QLabel *_noResultsLabel = nullptr;
 };
 
 class UDriveMoveDialog : public QDialog

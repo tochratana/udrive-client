@@ -31,8 +31,8 @@ private Q_SLOTS:
     }
     void packagedLanguages()
     {
-        if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive"))
-            QSKIP("The three-language package restriction is specific to UDrive.");
+        if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive"))
+            QSKIP("The three-language package restriction is specific to Udrive.");
         const QSet<QString> expected{QStringLiteral("en_US"), QStringLiteral("km"), QStringLiteral("zh_CN")};
         QCOMPARE(Translations::listAvailableTranslations(), expected);
     }
@@ -58,7 +58,7 @@ private Q_SLOTS:
         for (const auto *label : {"Sort by", "Recent", "A-Z", "Z-A", "Newest", "Oldest", "Largest", "Smallest", "Select all", "Select all files in the current results."})
             QVERIFY2(!translator.translate("OCC::UDriveFileBrowser", label).isEmpty(), label);
         QVERIFY(translator.translate("OCC::UDriveFileBrowser", "%1 selected. Select one item to use file actions.").contains(QStringLiteral("%1")));
-        for (const auto *source : {"Language saved", "Restart UDrive to apply your new language.", "OK"}) {
+        for (const auto *source : {"Language saved", "Restart Udrive to apply your new language.", "OK"}) {
             const auto translated = translator.translate("OCC::GeneralSettings", source);
             QVERIFY2(!translated.isEmpty() && translated != QString::fromUtf8(source), source);
         }
@@ -140,7 +140,7 @@ private Q_SLOTS:
         QVERIFY(storage.contains(QStringLiteral("%1")) && storage.contains(QStringLiteral("%2")));
         if (locale == QStringLiteral("km")) {
             QCOMPARE(translator.translate("OCC::ownCloudGui", "Quit %1"), QStringLiteral("Quit %1"));
-            QCOMPARE(translator.translate("UDriveSidebar", "Quit UDrive"), QStringLiteral("Quit UDrive"));
+            QCOMPARE(translator.translate("UDriveSidebar", "Quit Udrive"), QStringLiteral("Quit Udrive"));
         }
         QVERIFY(qApp->installTranslator(&translator));
         struct Cleanup

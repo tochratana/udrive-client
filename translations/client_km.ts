@@ -228,7 +228,7 @@
     <context>
         <name>OCC::GeneralSettings</name>
         <message><source>Language saved</source><translation>បានរក្សាទុកភាសា</translation></message>
-        <message><source>Restart UDrive to apply your new language.</source><translation>ចាប់ផ្ដើម UDrive ឡើងវិញ ដើម្បីអនុវត្តភាសាថ្មីរបស់អ្នក។</translation></message>
+        <message><source>Restart Udrive to apply your new language.</source><translation>ចាប់ផ្ដើម Udrive ឡើងវិញ ដើម្បីអនុវត្តភាសាថ្មីរបស់អ្នក។</translation></message>
         <message><source>OK</source><translation>យល់ព្រម</translation></message>
         <message>
             <source>Form</source>
@@ -505,8 +505,8 @@
             <translation>ការកំណត់</translation>
         </message>
         <message>
-            <source>Choose how UDrive works on this computer.</source>
-            <translation>កំណត់របៀបដំណើរការ UDrive លើកុំព្យូទ័រនេះ។</translation>
+            <source>Choose how Udrive works on this computer.</source>
+            <translation>កំណត់របៀបដំណើរការ Udrive លើកុំព្យូទ័រនេះ។</translation>
         </message>
         <message>
             <source>%1 - %2</source>
@@ -591,7 +591,7 @@
         <message><source>Oldest</source><translation>ចាស់បំផុត</translation></message>
         <message><source>Largest</source><translation>ធំបំផុត</translation></message>
         <message><source>Smallest</source><translation>តូចបំផុត</translation></message>
-        <message><source>Files opened most recently in UDrive; unopened files follow by modified date.</source><translation>ឯកសារដែលបានបើកថ្មីៗក្នុង UDrive; ឯកសារដែលមិនទាន់បើកតម្រៀបតាមកាលបរិច្ឆេទកែប្រែ។</translation></message>
+        <message><source>Files opened most recently in Udrive; unopened files follow by modified date.</source><translation>ឯកសារដែលបានបើកថ្មីៗក្នុង Udrive; ឯកសារដែលមិនទាន់បើកតម្រៀបតាមកាលបរិច្ឆេទកែប្រែ។</translation></message>
         <message><source>Change file view</source><translation>ប្ដូរទិដ្ឋភាពឯកសារ</translation></message>
         <message><source>Condensed table view</source><translation>ទិដ្ឋភាពតារាងបង្រួម</translation></message>
         <message><source>Default table view</source><translation>ទិដ្ឋភាពតារាងធម្មតា</translation></message>
@@ -868,8 +868,8 @@
             <translation>បើកឯកសារ</translation>
         </message>
         <message>
-            <source>Preview this PDF inside UDrive.</source>
-            <translation>មើល PDF នេះជាមុនក្នុង UDrive។</translation>
+            <source>Preview this PDF inside Udrive.</source>
+            <translation>មើល PDF នេះជាមុនក្នុង Udrive។</translation>
         </message>
         <message>
             <source>Download this file to open it on your computer.</source>
@@ -1002,8 +1002,8 @@
             <translation>ម៉ាស៊ីនមេបានត្រឡប់ HTTP %1។</translation>
         </message>
         <message>
-            <source>PDF opened in UDrive.</source>
-            <translation>បានបើក PDF ក្នុង UDrive។</translation>
+            <source>PDF opened in Udrive.</source>
+            <translation>បានបើក PDF ក្នុង Udrive។</translation>
         </message>
         <message>
             <source>Saved to %1</source>
@@ -1466,8 +1466,8 @@
     <context>
         <name>UDriveSidebar</name>
         <message>
-            <source>UDrive navigation</source>
-            <translation>ការរុករក UDrive</translation>
+            <source>Udrive navigation</source>
+            <translation>ការរុករក Udrive</translation>
         </message>
         <message>
             <source>+  New</source>
@@ -1506,8 +1506,8 @@
             <translation>ធ្វើសមកាលកម្ម</translation>
         </message>
         <message>
-            <source>Quit UDrive</source>
-            <translation>Quit UDrive</translation>
+            <source>Quit Udrive</source>
+            <translation>Quit Udrive</translation>
         </message>
         <message>
             <source>Storage</source>

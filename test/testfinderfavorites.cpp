@@ -46,13 +46,13 @@ private Q_SLOTS:
         QTemporaryDir temporary; QVERIFY(temporary.isValid());
         const auto base = QFileInfo(temporary.path()).canonicalFilePath();
         const auto cleanup = qScopeGuard([base] { finderEntries(base, true); });
-        const QString root = base + QStringLiteral("/UDrive"), personal = root + QStringLiteral("/Personal"), shares = root + QStringLiteral("/Shares");
-        const QString other = base + QStringLiteral("/UDrive (2)"), outside = base + QStringLiteral("/Unrelated");
+        const QString root = base + QStringLiteral("/Udrive"), personal = root + QStringLiteral("/Personal"), shares = root + QStringLiteral("/Shares");
+        const QString other = base + QStringLiteral("/Udrive (2)"), outside = base + QStringLiteral("/Unrelated");
         QVERIFY(QDir().mkpath(personal)); QVERIFY(QDir().mkpath(shares)); QVERIFY(QDir().mkpath(other)); QVERIFY(QDir().mkpath(outside));
         Utility::setupFavLink(root); Utility::setupFavLink(personal); Utility::setupFavLink(shares); Utility::setupFavLink(outside);
         QTRY_VERIFY(finderEntries(base).contains(root) && finderEntries(base).contains(personal)
             && finderEntries(base).contains(shares) && finderEntries(base).contains(outside));
-        const auto label = QStringLiteral("UDrive (ratana toch)");
+        const auto label = QStringLiteral("Udrive (ratana toch)");
         QVERIFY(Utility::setupAccountFavLink(root, label, {personal, shares}));
         QTRY_COMPARE(finderEntries(base).value(root), QStringList{label});
         QTRY_VERIFY(!finderEntries(base).contains(personal) && !finderEntries(base).contains(shares));
@@ -61,9 +61,9 @@ private Q_SLOTS:
         QVERIFY(QFileInfo::exists(personal)); QVERIFY(QFileInfo::exists(shares));
         QVERIFY(Utility::setupAccountFavLink(root, label, {personal, shares}, false));
         QTRY_COMPARE(finderEntries(base).value(root), QStringList{label});
-        const auto secondLabel = QStringLiteral("UDrive (Admin)");
+        const auto secondLabel = QStringLiteral("Udrive (Admin)");
         QVERIFY(Utility::setupAccountFavLink(other, secondLabel, {}));
-        const auto updatedLabel = QStringLiteral("UDrive (Updated Name)");
+        const auto updatedLabel = QStringLiteral("Udrive (Updated Name)");
         QVERIFY(Utility::setupAccountFavLink(root, updatedLabel, {personal, shares}, false));
         QTRY_COMPARE(finderEntries(base).value(root), QStringList{updatedLabel});
         QTRY_COMPARE(finderEntries(base).value(other), QStringList{secondLabel});

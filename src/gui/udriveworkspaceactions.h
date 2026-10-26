@@ -29,6 +29,8 @@ public:
     bool busy() const { return _busy; }
     void cancel();
     void refreshPermissions();
+    void refreshCatalog();
+    const QList<OpenAPI::OAIDrive> &disabledDrives() const { return _disabledDrives; }
     void setPermissionDrives(const QList<OpenAPI::OAIDrive> &drives);
     bool canCreate() const;
     bool permissionsReady() const;
@@ -36,6 +38,7 @@ public:
     bool create(const QString &name);
     bool patch(const QList<OpenAPI::OAIDrive> &drives, const QJsonObject &payload);
     bool disable(const QList<OpenAPI::OAIDrive> &drives, bool restore = false);
+    bool remove(const QList<OpenAPI::OAIDrive> &drives);
     bool duplicate(const QList<OpenAPI::OAIDrive> &drives, const QStringList &names);
     bool readDescription(const OpenAPI::OAIDrive &drive);
     bool writeSpecial(const OpenAPI::OAIDrive &drive, const QString &kind, const QByteArray &content);
@@ -46,6 +49,7 @@ Q_SIGNALS:
     void descriptionLoaded(const OpenAPI::OAIDrive &drive, const QString &text);
     void busyChanged();
     void permissionsChanged();
+    void catalogChanged();
 private:
     struct Reply { int status; QByteArray body; QByteArray fileId; };
     using Callback = std::function<void(const Reply &)>;
@@ -59,7 +63,7 @@ private:
         const QList<int> &accepted = {});
     QUrl graph(const QString &driveId = {}) const;
     QUrl archiveUrl() const;
-    void patchNext(const QJsonObject &payload, const QByteArray &verb, bool restore);
+    void patchNext(const QJsonObject &payload, const QByteArray &verb, bool restore, bool purge = false);
     void duplicateNext();
     void copyNext();
     void linkNextSpecial();
@@ -68,6 +72,10 @@ private:
     QPointer<AccountState> _state;
     QPointer<SimpleNetworkJob> _job;
     UDriveAdminApi *_permissions;
+    UDriveAdminApi *_catalog;
+    QList<OpenAPI::OAIDrive> _disabledDrives;
+    bool _catalogAccessPending = false;
+    bool _catalogRefreshPending = false;
     QPointer<SimpleNetworkJob> _permissionJob;
     QElapsedTimer _permissionAge;
     QMap<QString, QSet<QString>> _drivePermissions;

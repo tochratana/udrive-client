@@ -36,9 +36,10 @@ class TestMacRelease(unittest.TestCase):
         return release.Workflow(argparse.Namespace(**values))
 
     def app(self):
-        app = self.root / "udrive.app"
+        app = self.root / release.APP_BUNDLE
         (app / "Contents/MacOS").mkdir(parents=True)
         info = {"CFBundleIdentifier": release.BUNDLE_ID, "CFBundleExecutable": "udrive",
+                "CFBundleName": "Udrive", "CFBundleDisplayName": "Udrive",
                 "CFBundleShortVersionString": "7.1.1", "CFBundleVersion": "7.1.1"}
         (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
         for name in ("udrive", release.PDF_HELPER):
@@ -63,6 +64,18 @@ class TestMacRelease(unittest.TestCase):
             (FINGERPRINT, TEAM, "0 valid identities found"), (FINGERPRINT, "", IDENTITIES)):
             with self.subTest(team=team, fingerprint=fingerprint), self.assertRaises(release.ReleaseError):
                 release.identity_for_team(fingerprint, team, output)
+
+    def test_application_name_uses_exact_product_spelling(self):
+        app = self.app()
+        info_path = app / "Contents/Info.plist"
+        original = plistlib.loads(info_path.read_bytes())
+        self.assertEqual(app.name, "Udrive.app")
+        for key in ("CFBundleName", "CFBundleDisplayName"):
+            info = dict(original)
+            info[key] = "Other product"
+            info_path.write_bytes(plistlib.dumps(info))
+            with self.subTest(key=key), self.assertRaisesRegex(release.ReleaseError, "display name"):
+                release.validate_bundle(app)
 
     def test_missing_identity_stops_before_build_or_upload(self):
         with patch.object(release.Workflow, "tools"), patch.object(release, "run", return_value="0 valid identities found") as runner:
@@ -284,7 +297,7 @@ Load command 4
     def finished_download(self, **overrides):
         directory = self.root / "finished"
         directory.mkdir()
-        image = directory / "UDrive-7.1.1-arm64.dmg"
+        image = directory / "Udrive-7.1.1-arm64.dmg"
         image.write_bytes(b"signed disk image")
         manifest = {"bundle_id": release.BUNDLE_ID, "version": "7.1.1", "architecture": "arm64",
                     "dmg": image.name, "team_id": TEAM, "sha256": release.file_sha256(image),
@@ -324,7 +337,7 @@ Load command 4
 
     def test_export_rejects_modified_disk_image_before_native_checks(self):
         directory = self.finished_download()
-        (directory / "UDrive-7.1.1-arm64.dmg").write_bytes(b"tampered image")
+        (directory / "Udrive-7.1.1-arm64.dmg").write_bytes(b"tampered image")
         with patch.object(release, "run") as runner, self.assertRaises(release.ReleaseError):
             release.export_download(directory, self.root / "public", TEAM, "./")
         runner.assert_not_called()
@@ -333,7 +346,7 @@ Load command 4
     def test_export_rejects_external_image_symlink(self):
         directory = self.finished_download()
         external = self.root / "external.dmg"
-        image = directory / "UDrive-7.1.1-arm64.dmg"
+        image = directory / "Udrive-7.1.1-arm64.dmg"
         image.rename(external)
         image.symlink_to(external)
         with patch.object(release, "run") as runner, self.assertRaises(release.ReleaseError):
@@ -385,9 +398,9 @@ Load command 4
         with self.export_checks() as (_, calls, validate, signature):
             release.export_download(directory, output, TEAM, "https://downloads.example.com/udrive/7.1.1/")
         self.assertEqual({p.name for p in output.iterdir()},
-                         {"UDrive-7.1.1-arm64.dmg", "SHA256SUMS", "download.json", "download-link.html"})
+                         {"Udrive-7.1.1-arm64.dmg", "SHA256SUMS", "download.json", "download-link.html"})
         metadata = json.loads((output / "download.json").read_text())
-        self.assertEqual(metadata["url"], "https://downloads.example.com/udrive/7.1.1/UDrive-7.1.1-arm64.dmg")
+        self.assertEqual(metadata["url"], "https://downloads.example.com/udrive/7.1.1/Udrive-7.1.1-arm64.dmg")
         self.assertEqual(metadata["sha256"], release.file_sha256(output / metadata["filename"]))
         self.assertEqual(metadata["minimum_macos"], "13.0")
         self.assertIn("Apple Silicon", (output / "download-link.html").read_text())
@@ -407,15 +420,15 @@ Load command 4
         self.assertEqual((output / "keep.txt").read_text(), "existing download")
 
     def test_download_urls_require_https_or_a_local_website_path(self):
-        for base, expected in (("./", "./UDrive.dmg"), ("/downloads", "/downloads/UDrive.dmg"),
-                               ("https://example.com/downloads/", "https://example.com/downloads/UDrive.dmg")):
+        for base, expected in (("./", "./Udrive.dmg"), ("/downloads", "/downloads/Udrive.dmg"),
+                               ("https://example.com/downloads/", "https://example.com/downloads/Udrive.dmg")):
             with self.subTest(base=base):
-                self.assertEqual(release.download_url(base, "UDrive.dmg"), expected)
+                self.assertEqual(release.download_url(base, "Udrive.dmg"), expected)
         for base in ("http://example.com", "//example.com", "javascript:alert(1)",
                      "https://user:secret@example.com", "https://example.com/?token=secret",
                      "https://example.com/#download", "https://example.com:invalid", "downloads"):
             with self.subTest(base=base), self.assertRaises((release.ReleaseError, ValueError)):
-                release.download_url(base, "UDrive.dmg")
+                release.download_url(base, "Udrive.dmg")
 
 
 if __name__ == "__main__":

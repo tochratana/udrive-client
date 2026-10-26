@@ -160,8 +160,8 @@ private:
 QByteArray TestAdaptersAM::ValidWebFingerResponse = QByteArrayLiteral(
     "{\"subject\":\"https://demo.test\",\"links\":[{\"rel\":\"http://openid.net/specs/connect/1.0/issuer\",\"href\":\"https://demo.test/realms/test\"}]}");
 QByteArray TestAdaptersAM::ValidWebFingerLookupResponse =
-    QByteArrayLiteral("{\"links\":[{\"rel\":\"http://webfinger.owncloud/rel/server-instance\",\"href\":\"one.demo.test\"},{\"rel\":\"http://webfinger.owncloud/"
-                      "rel/server-instance\",\"href\":\"two.demo.test\"}]}");
+    QByteArrayLiteral("{\"links\":[{\"rel\":\"http://webfinger.owncloud/rel/server-instance\",\"href\":\"https://one.demo.test\"},{\"rel\":\"http://webfinger.owncloud/"
+                      "rel/server-instance\",\"href\":\"https://two.demo.test\"}]}");
 QByteArray TestAdaptersAM::ValidFetchCapabilitiesResponse = QByteArrayLiteral(
     "{\"ocs\":{\"data\":{\"capabilities\":{\"checksums\":{\"preferredUploadType\":\"SHA3-256\",\"supportedTypes\":[\"SHA3-256\"]},\"core\":{\"pollinterval\":"
     "30000,\"status\":{\"edition\":\"Enterprise\",\"installed\":true,\"maintenance\":false,\"needsDbUpgrade\":false,\"product\":\"test\",\"productname\":"
@@ -270,6 +270,29 @@ private Q_SLOTS:
         WebFingerLookupResult result = adapter.getResult();
         QVERIFY(result.success());
         QCOMPARE(result.urls.size(), 2);
+        QCOMPARE(result.urls.at(0), QUrl(QStringLiteral("https://one.demo.test")));
+        QCOMPARE(result.urls.at(1), QUrl(QStringLiteral("https://two.demo.test")));
+    }
+
+    void testWebFingerLookupAdapter_RejectsRemoteHttp()
+    {
+        class HttpAM : public TestAdaptersAM
+        {
+        public:
+            using TestAdaptersAM::TestAdaptersAM;
+        protected:
+            QNetworkReply *handleWebFingerLookupRequest(QNetworkAccessManager::Operation op, const QNetworkRequest &req) override
+            {
+                auto response = ValidWebFingerLookupResponse;
+                response.replace("https://", "http://");
+                return new AdapterJSonReply(op, req, response, this);
+            }
+        } fakeAM(testUrl(), testToken());
+
+        WebFingerLookupAdapter adapter(&fakeAM, testToken(), testUrl(), nullptr);
+        const auto result = adapter.getResult();
+        QVERIFY(!result.success());
+        QVERIFY(result.urls.isEmpty());
     }
 
 private:

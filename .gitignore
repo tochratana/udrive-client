@@ -1,4 +1,4 @@
-# UDrive branding is part of this fork and is committed with the source.
+# Udrive branding is part of this fork and is committed with the source.
 .gitmodules
 *build*/
 *flymake*
@@ -183,3 +183,6 @@ test/gui/reports
 test/gui/users.json
 scripts
 DEVELOPMENT.md
+
+# Local application documentation (not published with the source).
+/local-docs/

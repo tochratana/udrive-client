@@ -970,19 +970,35 @@ public:
             painter->drawLine(check.topLeft() + QPoint(8, 13), check.topLeft() + QPoint(14, 5));
         }
 
+        const QString subtitle = index.data(UDriveFileBrowser::SpaceDescriptionRole).toString().simplified();
+        const QRect titleRect(card.left() + 14, card.bottom() - (subtitle.isEmpty() ? 32 : 48), card.width() - 76, 22);
         const QRect iconRect(card.center().x() - 22, card.top() + 48, 44, 44);
         const QColor gridColor = dark ? QColor("#C8D0D8") : QColor("#4A525A");
         const QIcon image = index.data(Qt::DecorationRole).value<QIcon>();
-        if (image.isNull()) UDriveIcons::icon(UDriveIcons::Symbol::Grid, false, gridColor).paint(painter, iconRect);
-        else image.paint(painter, QRect(card.left() + 12, card.top() + 34, card.width() - 24, 98));
+        if (image.isNull()) {
+            UDriveIcons::icon(UDriveIcons::Symbol::Grid, false, gridColor).paint(painter, iconRect);
+        } else {
+            painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+            const int imageTop = check.bottom() + 10;
+            const QRect imageArea(card.left() + 16, imageTop, card.width() - 32, titleRect.top() - 10 - imageTop);
+            image.paint(painter, imageArea, Qt::AlignCenter);
+        }
 
-        const QRect titleRect(card.left() + 14, card.bottom() - 32, card.width() - 76, 22);
         painter->setPen(QColor(dark ? "#FFFFFF" : "#1A201C"));
         auto font = option.font;
         font.setWeight(QFont::Normal);
         font.setPointSizeF(qMax(10.0, font.pointSizeF()));
         painter->setFont(font);
         painter->drawText(titleRect, Qt::AlignVCenter | Qt::AlignLeft, painter->fontMetrics().elidedText(index.data().toString(), Qt::ElideRight, titleRect.width()));
+
+        if (!subtitle.isEmpty()) {
+            painter->setPen(QColor(dark ? "#B9C1BC" : "#626E66"));
+            font.setPointSizeF(qMax(9.0, font.pointSizeF() - 1.0));
+            painter->setFont(font);
+            const QRect subtitleRect(card.left() + 14, card.bottom() - 25, card.width() - 76, 18);
+            painter->drawText(subtitleRect, Qt::AlignVCenter | Qt::AlignLeft,
+                painter->fontMetrics().elidedText(subtitle, Qt::ElideRight, subtitleRect.width()));
+        }
 
         if (disabled) {
             const QString label = QCoreApplication::translate("OCC::UDriveFileBrowser", "Disabled");
@@ -1105,7 +1121,9 @@ public:
             }
             const auto image = index.data(Qt::DecorationRole).value<QIcon>();
             (image.isNull() ? UDriveIcons::icon(UDriveIcons::Symbol::Grid) : image).paint(painter, QRect(option.rect.left() + 44, option.rect.center().y() - 10, 20, 20));
-            const QRect text = option.rect.adjusted(78, 0, -8, 0);
+            QRect text = option.rect.adjusted(78, 0, -8, 0);
+            const QString subtitle = index.data(UDriveFileBrowser::SpaceDescriptionRole).toString().simplified();
+            if (!subtitle.isEmpty()) text.setBottom(option.rect.center().y());
             painter->setPen(option.palette.color(QPalette::Text));
             QString label = index.data().toString();
             if (index.data(UDriveFileBrowser::SpaceDisabledRole).toBool()) {
@@ -1113,6 +1131,12 @@ public:
                 painter->setPen(option.palette.color(QPalette::Disabled, QPalette::Text));
             }
             painter->drawText(text, Qt::AlignLeft | Qt::AlignVCenter, option.fontMetrics.elidedText(label, Qt::ElideRight, text.width()));
+            if (!subtitle.isEmpty()) {
+                painter->setPen(option.palette.color(QPalette::Disabled, QPalette::Text));
+                const QRect subtitleRect(text.left(), text.bottom(), text.width(), option.rect.bottom() - text.bottom());
+                painter->drawText(subtitleRect, Qt::AlignLeft | Qt::AlignVCenter,
+                    option.fontMetrics.elidedText(subtitle, Qt::ElideRight, subtitleRect.width()));
+            }
         } else {
             UDriveIcons::icon(UDriveIcons::Symbol::MoreVertical).paint(painter, QRect(option.rect.center() - QPoint(10, 10), QSize(20, 20)));
         }
@@ -1276,7 +1300,7 @@ UDriveInputDialog::UDriveInputDialog(const QString &title, const QString &label,
     setWindowTitle(title);
     setModal(true);
     setWindowFlags((windowFlags() | Qt::Dialog) & ~Qt::WindowContextHelpButtonHint);
-    setMinimumWidth(440);
+    setFixedWidth(400);
 
     const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
     const QString bg = dark ? QStringLiteral("#242528") : QStringLiteral("#FFFFFF");
@@ -1286,28 +1310,29 @@ UDriveInputDialog::UDriveInputDialog(const QString &title, const QString &label,
     const QString inputBg = dark ? QStringLiteral("#1B1C1E") : QStringLiteral("#FAFCFB");
     const QString cancelBg = dark ? QStringLiteral("#2E3135") : QStringLiteral("#F3F4F6");
     const QString cancelHover = dark ? QStringLiteral("#383B40") : QStringLiteral("#E5E7EB");
-    const QString primaryDisabled = dark ? QStringLiteral("#2A4733") : QStringLiteral("#A3E4B8");
-    const QString primaryDisabledText = dark ? QStringLiteral("#587864") : QStringLiteral("#FFFFFF");
+    const QString primaryDisabled = dark ? QStringLiteral("#1F382B") : QStringLiteral("#A3E4B8");
+    const QString primaryDisabledText = dark ? QStringLiteral("#4D735C") : QStringLiteral("#FFFFFF");
 
     setStyleSheet(QStringLiteral(
         "QDialog#udriveInputDialog { background-color: %1; }"
         "QLabel#inputDialogTitle { color: %3; font-size: 15px; font-weight: 600; }"
-        "QLabel#inputDialogLabel { color: %4; font-size: 13px; }"
-        "QLineEdit#inputDialogField { min-height: 20px; padding: 8px 12px; border: 1px solid %2; border-radius: 8px; background: %5; color: %3; font-size: 13px; selection-background-color: #2E4436; }"
-        "QLineEdit#inputDialogField:focus { border: 1px solid #22C55E; }"
-        "QLineEdit#inputDialogField QToolButton { border: none; border-radius: 12px; padding: 0; background: transparent; }"
-        "QPushButton#inputCancelButton { background-color: %6; color: %3; border: 1px solid %2; border-radius: 8px; padding: 7px 16px; font-size: 13px; font-weight: 500; min-width: 80px; min-height: 20px; }"
+        "QLabel#inputDialogLabel { color: %4; font-size: 13px; line-height: 1.4; }"
+        "QLineEdit#inputDialogField { min-height: 22px; padding: 8px 12px; border: 1px solid %2; border-radius: 8px; background-color: %5; color: %3; font-size: 13px; selection-background-color: #00856B; selection-color: #FFFFFF; }"
+        "QLineEdit#inputDialogField:focus { border: 1.5px solid #00856B; }"
+        "QLineEdit#inputDialogField QToolButton { border: none; border-radius: 10px; padding: 2px; background: transparent; }"
+        "QLineEdit#inputDialogField QToolButton:hover { background-color: %7; }"
+        "QPushButton#inputCancelButton { background-color: %6; color: %3; border: 1px solid %2; border-radius: 8px; padding: 7px 18px; font-size: 13px; font-weight: 500; min-width: 80px; min-height: 22px; }"
         "QPushButton#inputCancelButton:hover { background-color: %7; }"
-        "QPushButton#inputCancelButton:focus { border: 1px solid #22C55E; }"
-        "QPushButton#inputConfirmButton { background-color: #22C55E; color: #FFFFFF; border: none; border-radius: 8px; padding: 7px 18px; font-size: 13px; font-weight: 600; min-width: 80px; min-height: 20px; }"
-        "QPushButton#inputConfirmButton:hover { background-color: #2AD564; }"
-        "QPushButton#inputConfirmButton:pressed { background-color: #16A34A; }"
+        "QPushButton#inputCancelButton:focus { border: 1.5px solid #00856B; outline: none; }"
+        "QPushButton#inputConfirmButton { background-color: #00856B; color: #FFFFFF; border: none; border-radius: 8px; padding: 7px 20px; font-size: 13px; font-weight: 600; min-width: 80px; min-height: 22px; }"
+        "QPushButton#inputConfirmButton:hover { background-color: #00997B; }"
+        "QPushButton#inputConfirmButton:pressed { background-color: #00705A; }"
         "QPushButton#inputConfirmButton:disabled { background-color: %8; color: %9; }"
-        "QPushButton#inputConfirmButton:focus { border: 2px solid #86EFAC; }"
+        "QPushButton#inputConfirmButton:focus { border: 2px solid #5EEAD4; outline: none; }"
     ).arg(bg, border, text, subtext, inputBg, cancelBg, cancelHover, primaryDisabled, primaryDisabledText));
 
     auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(20, 20, 20, 16);
+    mainLayout->setContentsMargins(24, 22, 24, 20);
     mainLayout->setSpacing(16);
 
     auto *headerLayout = new QVBoxLayout;
@@ -1330,6 +1355,13 @@ UDriveInputDialog::UDriveInputDialog(const QString &title, const QString &label,
     _lineEdit = new QLineEdit(initialText, this);
     _lineEdit->setObjectName(QStringLiteral("inputDialogField"));
     _lineEdit->setClearButtonEnabled(true);
+    if (!label.isEmpty()) {
+        QString placeholder = label;
+        if (placeholder.endsWith(QLatin1Char(':'))) {
+            placeholder.chop(1);
+        }
+        _lineEdit->setPlaceholderText(placeholder.trimmed());
+    }
     if (!initialText.isEmpty()) {
         _lineEdit->selectAll();
     }
@@ -1385,6 +1417,538 @@ QString UDriveInputDialog::getText(QWidget *parent, const QString &title, const 
     if (ok)
         *ok = (result == QDialog::Accepted);
     return (result == QDialog::Accepted) ? dialog.text() : QString();
+}
+
+UDriveEmojiDialog::UDriveEmojiDialog(const QString &spaceName, QWidget *parent)
+    : QDialog(parent)
+{
+    setObjectName(QStringLiteral("udriveEmojiDialog"));
+    const QString title = spaceName.isEmpty() ? tr("Set icon") : tr("Set icon for %1").arg(spaceName);
+    setWindowTitle(title);
+    setModal(true);
+    setWindowFlags((windowFlags() | Qt::Dialog) & ~Qt::WindowContextHelpButtonHint);
+    setFixedWidth(380);
+    setFixedHeight(500);
+
+    const bool dark = QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
+    const QString bg = dark ? QStringLiteral("#242528") : QStringLiteral("#FFFFFF");
+    const QString text = dark ? QStringLiteral("#EDEDED") : QStringLiteral("#1F2328");
+    const QString subtext = dark ? QStringLiteral("#9BA3AF") : QStringLiteral("#59636E");
+    const QString border = dark ? QStringLiteral("#3E4146") : QStringLiteral("#D0D7DE");
+    const QString inputBg = dark ? QStringLiteral("#1B1C1E") : QStringLiteral("#FAFCFB");
+    const QString cancelBg = dark ? QStringLiteral("#2E3135") : QStringLiteral("#F3F4F6");
+    const QString cancelHover = dark ? QStringLiteral("#383B40") : QStringLiteral("#E5E7EB");
+    const QString pressedBg = dark ? QStringLiteral("#242528") : QStringLiteral("#D1D5DB");
+
+    setStyleSheet(QStringLiteral(
+        "QDialog#udriveEmojiDialog { background-color: %1; }"
+        "QLabel#emojiDialogTitle { color: %3; font-size: 15px; font-weight: 600; }"
+        "QFrame#emojiDialogDivider { color: %2; background-color: %2; max-height: 1px; min-height: 1px; }"
+        "QPushButton#emojiCatButton { background: transparent; border: none; font-size: 16px; padding: 4px 6px; border-radius: 4px; border-bottom: 2px solid transparent; }"
+        "QPushButton#emojiCatButton:hover { background-color: %7; }"
+        "QPushButton#emojiCatButton[active=\"true\"] { border-bottom: 2px solid #00856B; }"
+        "QLineEdit#emojiSearchField { min-height: 22px; padding: 6px 10px; border: 1px solid %2; border-radius: 8px; background-color: %5; color: %3; font-size: 13px; }"
+        "QLineEdit#emojiSearchField:focus { border: 1.5px solid #00856B; }"
+        "QScrollArea#emojiScrollArea { border: none; background: transparent; }"
+        "QScrollArea#emojiScrollArea > QWidget > QWidget { background: transparent; }"
+        "QScrollBar:vertical { width: 6px; background: transparent; margin: 0; border: none; }"
+        "QScrollBar::handle:vertical { background: %2; border-radius: 3px; min-height: 20px; }"
+        "QScrollBar::handle:vertical:hover { background: %7; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; width: 0px; background: transparent; border: none; }"
+        "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; border: none; }"
+        "QLabel.emojiSectionHeader { color: %4; font-size: 12px; font-weight: 600; padding-top: 6px; }"
+        "QPushButton#emojiGridButton { background: transparent; border: none; border-radius: 6px; font-size: 20px; min-width: 34px; max-width: 34px; min-height: 34px; max-height: 34px; }"
+        "QPushButton#emojiGridButton:hover { background-color: %7; }"
+        "QPushButton#emojiGridButton:pressed { background-color: %8; }"
+        "QLabel#emojiPreviewLabel { color: %4; font-size: 13px; }"
+        "QLabel#emojiNoResults { color: %4; font-size: 13px; padding: 24px; }"
+        "QPushButton#emojiCancelButton { background-color: %6; color: %3; border: 1px solid %2; border-radius: 8px; padding: 7px 18px; font-size: 13px; font-weight: 500; min-width: 80px; min-height: 22px; }"
+        "QPushButton#emojiCancelButton:hover { background-color: %7; }"
+        "QPushButton#emojiCancelButton:focus { border: 1.5px solid #00856B; outline: none; }"
+    ).arg(bg, border, text, subtext, inputBg, cancelBg, cancelHover, pressedBg));
+
+    auto *mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(18, 16, 18, 16);
+    mainLayout->setSpacing(10);
+
+    auto *titleLabel = new QLabel(title, this);
+    titleLabel->setObjectName(QStringLiteral("emojiDialogTitle"));
+    mainLayout->addWidget(titleLabel);
+
+    auto *divider = new QFrame(this);
+    divider->setObjectName(QStringLiteral("emojiDialogDivider"));
+    divider->setFrameShape(QFrame::HLine);
+    divider->setFrameShadow(QFrame::Plain);
+    mainLayout->addWidget(divider);
+
+    auto *catLayout = new QHBoxLayout;
+    catLayout->setSpacing(2);
+    catLayout->setContentsMargins(0, 0, 0, 0);
+
+    const QStringList tabIcons = {
+        QString::fromUtf8("🕒"), QString::fromUtf8("😃"), QString::fromUtf8("🐶"),
+        QString::fromUtf8("🍔"), QString::fromUtf8("🏈"), QString::fromUtf8("🚗"),
+        QString::fromUtf8("💡"), QString::fromUtf8("🔣"), QString::fromUtf8("🚩")
+    };
+    const QStringList tabTooltips = {
+        tr("Frequently used"), tr("Smileys & People"), tr("Animals & Nature"),
+        tr("Food & Drink"), tr("Activities"), tr("Travel & Places"),
+        tr("Objects"), tr("Symbols"), tr("Flags")
+    };
+
+    for (int i = 0; i < tabIcons.size(); ++i) {
+        auto *btn = new QPushButton(tabIcons[i], this);
+        btn->setObjectName(QStringLiteral("emojiCatButton"));
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setToolTip(tabTooltips[i]);
+        btn->setProperty("active", i == 0);
+        connect(btn, &QPushButton::clicked, this, [this, i] {
+            scrollToCategory(i);
+        });
+        catLayout->addWidget(btn);
+        _categoryButtons.append(btn);
+    }
+    mainLayout->addLayout(catLayout);
+
+    _searchEdit = new QLineEdit(this);
+    _searchEdit->setObjectName(QStringLiteral("emojiSearchField"));
+    _searchEdit->setPlaceholderText(tr("Search"));
+    _searchEdit->setClearButtonEnabled(true);
+    connect(_searchEdit, &QLineEdit::textChanged, this, &UDriveEmojiDialog::filterEmojis);
+    connect(_searchEdit, &QLineEdit::returnPressed, this, [this] {
+        const QString q = _searchEdit->text().trimmed();
+        if (!q.isEmpty()) {
+            QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, q);
+            if (finder.toNextBoundary() == q.size() && q.size() <= 8) {
+                selectEmoji(q);
+                return;
+            }
+        }
+        for (const auto &item : _emojiItems) {
+            if (item.button && item.button->isVisible()) {
+                selectEmoji(item.emoji);
+                return;
+            }
+        }
+    });
+    mainLayout->addWidget(_searchEdit);
+
+    _scrollArea = new QScrollArea(this);
+    _scrollArea->setObjectName(QStringLiteral("emojiScrollArea"));
+    _scrollArea->setWidgetResizable(true);
+    _scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    auto *contentWidget = new QWidget(_scrollArea);
+    auto *contentLayout = new QVBoxLayout(contentWidget);
+    contentLayout->setContentsMargins(2, 2, 6, 2);
+    contentLayout->setSpacing(8);
+
+    QStringList recent = ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"))
+        ->value(QStringLiteral("recentEmojis"))
+        .toStringList();
+    if (recent.isEmpty()) {
+        recent = {
+            QString::fromUtf8("👍"), QString::fromUtf8("😃"), QString::fromUtf8("😍"),
+            QString::fromUtf8("😚"), QString::fromUtf8("😜"), QString::fromUtf8("😆"),
+            QString::fromUtf8("😅"), QString::fromUtf8("😂"), QString::fromUtf8("😇"),
+            QString::fromUtf8("😱"), QString::fromUtf8("🤔"), QString::fromUtf8("😋"),
+            QString::fromUtf8("🚀"), QString::fromUtf8("📁"), QString::fromUtf8("💡"),
+            QString::fromUtf8("⭐")
+        };
+    }
+
+    struct EmojiData {
+        const char *emoji;
+        const char *name;
+    };
+
+    struct CategoryDef {
+        QString title;
+        QList<EmojiData> emojis;
+    };
+
+    QList<CategoryDef> categories;
+
+    // 0: Frequently used
+    QList<EmojiData> recentData;
+    for (const auto &e : recent) {
+        recentData.append({strdup(e.toUtf8().constData()), "frequently used"});
+    }
+    categories.append({tr("Frequently used"), recentData});
+
+    // 1: Smileys & People
+    categories.append({tr("Smileys & People"), {
+        {"😀", "grinning face"}, {"😃", "smiling face with big eyes"}, {"😄", "smiling face with smiling eyes"}, {"😁", "beaming face"},
+        {"😆", "grinning squinting face"}, {"😅", "grinning face with sweat"}, {"😂", "face with tears of joy"}, {"🤣", "rolling on floor laughing"},
+        {"😊", "smiling face with smiling eyes"}, {"😇", "smiling face with halo"}, {"🙂", "slightly smiling face"}, {"🙃", "upside-down face"},
+        {"😉", "winking face"}, {"😌", "relieved face"}, {"😍", "smiling face with heart-eyes"}, {"🥰", "smiling face with hearts"},
+        {"😘", "face blowing a kiss"}, {"😗", "kissing face"}, {"😙", "kissing face with smiling eyes"}, {"😚", "kissing face with closed eyes"},
+        {"😋", "face savoring food"}, {"😛", "face with tongue"}, {"😜", "winking face with tongue"}, {"🤪", "zany face"},
+        {"😝", "squinting face with tongue"}, {"🤑", "money-mouth face"}, {"🤗", "smiling face with open hands"}, {"🤭", "face with hand over mouth"},
+        {"🤫", "shushing face"}, {"🤔", "thinking face"}, {"🤐", "zipper-mouth face"}, {"🤨", "face with raised eyebrow"},
+        {"😐", "neutral face"}, {"😑", "expressionless face"}, {"😶", "face without mouth"}, {"😏", "smirking face"},
+        {"😒", "unamused face"}, {"🙄", "face with rolling eyes"}, {"😬", "grimacing face"}, {"🤥", "lying face"},
+        {"😴", "sleeping face"}, {"😷", "face with medical mask"}, {"🤒", "face with thermometer"}, {"🤕", "face with head-bandage"},
+        {"🤢", "nauseated face"}, {"🤮", "face vomiting"}, {"🥵", "hot face"}, {"🥶", "cold face"},
+        {"🥴", "woozy face"}, {"😵", "dizzy face"}, {"🤯", "exploding head"}, {"🤠", "cowboy hat face"},
+        {"🥳", "partying face"}, {"😎", "smiling face with sunglasses"}, {"🤓", "nerd face"}, {"🧐", "face with monocle"},
+        {"😕", "confused face"}, {"😟", "worried face"}, {"🙁", "slightly frowning face"}, {"😮", "face with open mouth"},
+        {"😲", "astonished face"}, {"😳", "flushed face"}, {"🥺", "pleading face"}, {"😦", "frowning face with open mouth"},
+        {"😨", "fearful face"}, {"😰", "anxious face with sweat"}, {"😥", "sad face"}, {"😢", "crying face"},
+        {"😭", "loudly crying face"}, {"😱", "face screaming in fear"}, {"😖", "confounded face"}, {"😣", "persevering face"},
+        {"😞", "disappointed face"}, {"😓", "downcast face with sweat"}, {"😩", "weary face"}, {"😫", "tired face"},
+        {"🥱", "yawning face"}, {"😤", "face with steam"}, {"😡", "enraged face"}, {"😠", "angry face"},
+        {"🤬", "cursing face"}, {"😈", "smiling face with horns"}, {"👿", "angry face with horns"}, {"💀", "skull"},
+        {"💩", "pile of poo"}, {"🤡", "clown face"}, {"👻", "ghost"}, {"👽", "alien"},
+        {"🤖", "robot"}, {"😺", "grinning cat"}, {"😸", "grinning cat with smiling eyes"}, {"😻", "smiling cat with heart-eyes"},
+        {"🤲", "palms up"}, {"👐", "open hands"}, {"🙌", "raising hands"}, {"👏", "clapping hands"},
+        {"🤝", "handshake"}, {"👍", "thumbs up"}, {"👎", "thumbs down"}, {"👊", "oncoming fist"},
+        {"✊", "raised fist"}, {"🤛", "left fist"}, {"🤜", "right fist"}, {"🤞", "crossed fingers"},
+        {"✌️", "victory hand"}, {"🤟", "love-you"}, {"🤘", "rock on"}, {"👌", "OK hand"},
+        {"🤏", "pinching hand"}, {"👈", "point left"}, {"👉", "point right"}, {"👆", "point up"},
+        {"👇", "point down"}, {"☝️", "index pointing up"}, {"✋", "raised hand"}, {"🤚", "raised back of hand"},
+        {"🖐️", "hand splayed"}, {"🖖", "vulcan salute"}, {"👋", "waving hand"}, {"🤙", "call me"},
+        {"💪", "flexed biceps"}, {"🙏", "folded hands"}, {"👀", "eyes"}, {"🧠", "brain"}
+    }});
+
+    // 2: Animals & Nature
+    categories.append({tr("Animals & Nature"), {
+        {"🐶", "dog face"}, {"🐱", "cat face"}, {"🐭", "mouse face"}, {"🐹", "hamster"},
+        {"🐰", "rabbit face"}, {"🦊", "fox"}, {"🐻", "bear"}, {"🐼", "panda"},
+        {"🐨", "koala"}, {"🐯", "tiger face"}, {"🦁", "lion"}, {"🐮", "cow face"},
+        {"🐷", "pig face"}, {"🐸", "frog"}, {"🐵", "monkey face"}, {"🐔", "chicken"},
+        {"🐧", "penguin"}, {"🐦", "bird"}, {"🐤", "baby chick"}, {"🦆", "duck"},
+        {"🦅", "eagle"}, {"🦉", "owl"}, {"🦇", "bat"}, {"🐺", "wolf"},
+        {"🐗", "boar"}, {"🐴", "horse face"}, {"🦄", "unicorn"}, {"🐝", "honeybee"},
+        {"🐛", "bug"}, {"🦋", "butterfly"}, {"🐌", "snail"}, {"🐞", "lady beetle"},
+        {"🐜", "ant"}, {"🦗", "cricket"}, {"🕷️", "spider"}, {"🦂", "scorpion"},
+        {"🐢", "turtle"}, {"🐍", "snake"}, {"🦎", "lizard"}, {"🦖", "T-Rex"},
+        {"🐙", "octopus"}, {"🦑", "squid"}, {"🦐", "shrimp"}, {"🦞", "lobster"},
+        {"🦀", "crab"}, {"🐡", "blowfish"}, {"🐠", "tropical fish"}, {"🐟", "fish"},
+        {"🐬", "dolphin"}, {"🐳", "whale"}, {"🦈", "shark"}, {"🐊", "crocodile"},
+        {"🐅", "tiger"}, {"🦓", "zebra"}, {"🦍", "gorilla"}, {"🦧", "orangutan"},
+        {"🐘", "elephant"}, {"🦛", "hippo"}, {"🦏", "rhino"}, {"🐪", "camel"},
+        {"🦒", "giraffe"}, {"🦘", "kangaroo"}, {"🐂", "ox"}, {"🐎", "horse"},
+        {"🐖", "pig"}, {"🐏", "ram"}, {"🐑", "ewe"}, {"🐐", "goat"},
+        {"🦌", "deer"}, {"🐕", "dog"}, {"🐩", "poodle"}, {"🐈", "cat"},
+        {"🐓", "rooster"}, {"🦃", "turkey"}, {"🦚", "peacock"}, {"🦜", "parrot"},
+        {"🦢", "swan"}, {"🦩", "flamingo"}, {"🕊️", "dove"}, {"🐇", "rabbit"},
+        {"🦝", "raccoon"}, {"🦨", "skunk"}, {"🦡", "badger"}, {"🦫", "beaver"},
+        {"🦦", "otter"}, {"🦥", "sloth"}, {"🐁", "mouse"}, {"🐀", "rat"},
+        {"🐿️", "chipmunk"}, {"🦔", "hedgehog"}, {"🌲", "evergreen tree"}, {"🌳", "deciduous tree"},
+        {"🌴", "palm tree"}, {"🌵", "cactus"}, {"🌾", "rice"}, {"🌿", "herb"},
+        {"☘️", "shamrock"}, {"🍀", "four leaf clover"}, {"🍁", "maple leaf"}, {"🍂", "fallen leaf"},
+        {"🍃", "fluttering leaf"}, {"🍄", "mushroom"}, {"🌰", "chestnut"}, {"💐", "bouquet"},
+        {"🌸", "cherry blossom"}, {"💮", "white flower"}, {"🌹", "rose"}, {"🌺", "hibiscus"},
+        {"🌻", "sunflower"}, {"🌼", "blossom"}, {"🌷", "tulip"}, {"🌱", "seedling"}, {"🪴", "potted plant"}
+    }});
+
+    // 3: Food & Drink
+    categories.append({tr("Food & Drink"), {
+        {"🍏", "green apple"}, {"🍎", "red apple"}, {"🍐", "pear"}, {"🍊", "tangerine"},
+        {"🍋", "lemon"}, {"🍌", "banana"}, {"🍉", "watermelon"}, {"🍇", "grapes"},
+        {"🍓", "strawberry"}, {"🫐", "blueberries"}, {"🍈", "melon"}, {"🍒", "cherries"},
+        {"🍑", "peach"}, {"🥭", "mango"}, {"🍍", "pineapple"}, {"🥥", "coconut"},
+        {"🥝", "kiwi fruit"}, {"🍅", "tomato"}, {"🥑", "avocado"}, {"🍆", "eggplant"},
+        {"🥔", "potato"}, {"🥕", "carrot"}, {"🌽", "corn"}, {"🌶️", "hot pepper"},
+        {"🫑", "bell pepper"}, {"🥒", "cucumber"}, {"🥬", "leafy green"}, {"🥦", "broccoli"},
+        {"🧄", "garlic"}, {"🧅", "onion"}, {"🥜", "peanuts"}, {"🍞", "bread"},
+        {"🥐", "croissant"}, {"🥖", "baguette"}, {"🥯", "bagel"}, {"🥞", "pancakes"},
+        {"🧇", "waffle"}, {"🧀", "cheese"}, {"🍖", "meat"}, {"🍗", "poultry leg"},
+        {"🥩", "cut of meat"}, {"🥓", "bacon"}, {"🍔", "hamburger"}, {"🍟", "french fries"},
+        {"🍕", "pizza"}, {"🌭", "hot dog"}, {"🥪", "sandwich"}, {"🌮", "taco"},
+        {"🌯", "burrito"}, {"🥙", "flatbread"}, {"🧆", "falafel"}, {"🥚", "egg"},
+        {"🍳", "cooking"}, {"🥘", "pan of food"}, {"🍲", "pot of food"}, {"🫕", "fondue"},
+        {"🥣", "bowl"}, {"🥗", "salad"}, {"🍿", "popcorn"}, {"🧈", "butter"},
+        {"🧂", "salt"}, {"🥫", "canned food"}, {"🍱", "bento"}, {"🍙", "rice ball"},
+        {"🍚", "cooked rice"}, {"🍛", "curry"}, {"🍜", "ramen noodles"}, {"🍝", "spaghetti"},
+        {"🍣", "sushi"}, {"🍤", "fried shrimp"}, {"🥟", "dumpling"}, {"🥡", "takeout"},
+        {"🍦", "soft ice cream"}, {"🍧", "shaved ice"}, {"🍨", "ice cream"}, {"🍩", "doughnut"},
+        {"🍪", "cookie"}, {"🎂", "birthday cake"}, {"🍰", "cake"}, {"🧁", "cupcake"},
+        {"🥧", "pie"}, {"🍫", "chocolate"}, {"🍬", "candy"}, {"🍭", "lollipop"},
+        {"🍮", "custard"}, {"🍯", "honey"}, {"🥛", "milk"}, {"☕", "coffee"},
+        {"🫖", "teapot"}, {"🍵", "tea"}, {"🍶", "sake"}, {"🍾", "champagne"},
+        {"🍷", "wine"}, {"🍸", "cocktail"}, {"🍹", "tropical drink"}, {"🍺", "beer"},
+        {"🍻", "clinking beer mugs"}, {"🥂", "clinking glasses"}, {"🥃", "whiskey tumbler"}, {"🥤", "cup with straw"},
+        {"🧋", "bubble tea"}, {"🧃", "beverage box"}, {"🧊", "ice cube"}
+    }});
+
+    // 4: Activities
+    categories.append({tr("Activities"), {
+        {"⚽", "soccer"}, {"🏀", "basketball"}, {"🏈", "football"}, {"⚾", "baseball"},
+        {"🥎", "softball"}, {"🎾", "tennis"}, {"🏐", "volleyball"}, {"🏉", "rugby"},
+        {"🥏", "frisbee disc"}, {"🎱", "pool 8 ball"}, {"🪀", "yo-yo"}, {"🏓", "ping pong"},
+        {"🏸", "badminton"}, {"🏒", "ice hockey"}, {"🏑", "field hockey"}, {"🥍", "lacrosse"},
+        {"🏏", "cricket"}, {"🪃", "boomerang"}, {"🥅", "goal net"}, {"⛳", "golf flag"},
+        {"🪁", "kite"}, {"🏹", "bow and arrow"}, {"🎣", "fishing"}, {"🤿", "diving mask"},
+        {"🥊", "boxing glove"}, {"🥋", "martial arts"}, {"🛹", "skateboard"}, {"🛼", "roller skate"},
+        {"🛷", "sled"}, {"⛸️", "ice skate"}, {"🎿", "skis"}, {"🏋️", "weight lifter"},
+        {"🤸", "gymnastics"}, {"⛹️", "basketball player"}, {"🤺", "fencing"}, {"🧘", "yoga meditation"},
+        {"🏄", "surfing"}, {"🏊", "swimming"}, {"🚴", "biking"}, {"🏆", "trophy"},
+        {"🥇", "gold medal"}, {"🥈", "silver medal"}, {"🥉", "bronze medal"}, {"🏅", "sports medal"},
+        {"🎖️", "military medal"}, {"🎫", "ticket"}, {"🎟️", "admission tickets"}, {"🎪", "circus"},
+        {"🤹", "juggling"}, {"🎭", "performing arts"}, {"🎨", "artist palette"}, {"🎬", "clapper board"},
+        {"🎤", "microphone"}, {"🎧", "headphone"}, {"🎼", "musical score"}, {"🎹", "musical keyboard"},
+        {"🥁", "drum"}, {"🎷", "saxophone"}, {"🎺", "trumpet"}, {"🎸", "guitar"},
+        {"🎻", "violin"}, {"🎲", "game die"}, {"♟️", "chess pawn"}, {"🎯", "bullseye target"},
+        {"🎳", "bowling"}, {"🎮", "video game controller"}, {"🎰", "slot machine"}, {"🧩", "puzzle piece"}
+    }});
+
+    // 5: Travel & Places
+    categories.append({tr("Travel & Places"), {
+        {"🚗", "car automobile"}, {"🚙", "suv"}, {"🛻", "pickup truck"}, {"🚚", "delivery truck"},
+        {"🚛", "semi truck"}, {"🚜", "tractor"}, {"🏎️", "racing car"}, {"🏍️", "motorcycle"},
+        {"🛵", "motor scooter"}, {"🚲", "bicycle bike"}, {"🛴", "kick scooter"}, {"🚨", "police light"},
+        {"🚔", "police car"}, {"🚌", "bus"}, {"🚘", "car"}, {"🚕", "taxi cab"},
+        {"🚃", "train car"}, {"🚋", "tram"}, {"🚄", "high-speed bullet train"}, {"🚅", "bullet train"},
+        {"🚈", "light rail"}, {"🚂", "locomotive"}, {"🚆", "train"}, {"🚇", "metro subway"},
+        {"🚁", "helicopter"}, {"🛩️", "airplane"}, {"✈️", "flight airplane"}, {"🛫", "departure"},
+        {"🛬", "arrival"}, {"🪂", "parachute"}, {"🛰️", "satellite"}, {"🚀", "rocket space"},
+        {"🛸", "flying saucer ufo"}, {"🛶", "canoe"}, {"⛵", "sailboat"}, {"🚤", "speedboat"},
+        {"🛳️", "cruise ship"}, {"⛴️", "ferry"}, {"🚢", "ship"}, {"⚓", "anchor"},
+        {"⛽", "fuel gas pump"}, {"🚧", "construction barrier"}, {"🚦", "traffic light"}, {"🗺️", "world map"},
+        {"🗿", "moai statue"}, {"🗽", "statue of liberty"}, {"🗼", "tokyo tower"}, {"🏰", "castle"},
+        {"🏯", "japanese castle"}, {"🏟️", "stadium"}, {"🎡", "ferris wheel"}, {"🎢", "roller coaster"},
+        {"⛲", "fountain"}, {"🏖️", "beach"}, {"🏝️", "desert island"}, {"🏜️", "desert"},
+        {"🌋", "volcano"}, {"⛰️", "mountain"}, {"🏔️", "snow mountain"}, {"🏕️", "camping"},
+        {"⛺", "tent"}, {"🏠", "house home"}, {"🏡", "house garden"}, {"🏘️", "houses"},
+        {"🏗️", "building construction"}, {"🏭", "factory"}, {"🏢", "office building"}, {"🏬", "department store"},
+        {"🏥", "hospital"}, {"🏦", "bank"}, {"🏨", "hotel"}, {"🏪", "convenience store"},
+        {"🏫", "school"}, {"🏛️", "classical building"}, {"⛪", "church"}, {"🕌", "mosque"}, {"🕍", "synagogue"}
+    }});
+
+    // 6: Objects
+    categories.append({tr("Objects"), {
+        {"💡", "light bulb idea"}, {"🔦", "flashlight"}, {"🏮", "red lantern"}, {"💻", "laptop computer"},
+        {"🖥️", "desktop computer monitor"}, {"🖨️", "printer"}, {"⌨️", "keyboard"}, {"🖱️", "computer mouse"},
+        {"💽", "minidisc"}, {"💾", "floppy disk save"}, {"💿", "cd optical disk"}, {"📀", "dvd"},
+        {"📷", "camera photo"}, {"📸", "camera flash"}, {"📹", "video camera"}, {"🎥", "movie camera"},
+        {"📞", "telephone"}, {"☎️", "phone"}, {"📺", "tv television"}, {"📻", "radio"},
+        {"🎙️", "studio microphone"}, {"🧭", "compass"}, {"⏱️", "stopwatch timer"}, {"⏲️", "timer clock"},
+        {"⏰", "alarm clock"}, {"⌛", "hourglass"}, {"⏳", "hourglass sand"}, {"📡", "satellite antenna"},
+        {"🔋", "battery"}, {"🔌", "electric plug power"}, {"🕯️", "candle"}, {"🧯", "fire extinguisher"},
+        {"💸", "money with wings"}, {"💵", "dollar cash"}, {"💴", "yen"}, {"💶", "euro"},
+        {"💷", "pound"}, {"🪙", "coin"}, {"💰", "money bag"}, {"💳", "credit card payment"},
+        {"💎", "gem diamond"}, {"⚖️", "balance scale law"}, {"🪜", "ladder"}, {"🧰", "toolbox"},
+        {"🪛", "screwdriver"}, {"🔧", "wrench tool"}, {"🔨", "hammer"}, {"⚒️", "hammer and pick"},
+        {"🛠️", "hammer and wrench tools"}, {"⛏️", "pickaxe"}, {"🔩", "nut and bolt"}, {"⚙️", "gear settings"},
+        {"⛓️", "chains link"}, {"🧲", "magnet"}, {"💣", "bomb"}, {"🧨", "firecracker"},
+        {"🪓", "axe"}, {"🔪", "kitchen knife"}, {"🗡️", "dagger sword"}, {"⚔️", "crossed swords"},
+        {"🛡️", "shield defense security"}, {"🔮", "crystal ball magic"}, {"🧪", "test tube science"}, {"🧬", "dna"},
+        {"🔬", "microscope research"}, {"🔭", "telescope stars"}, {"💊", "pill medicine"}, {"🩺", "stethoscope health"},
+        {"🚪", "door exit"}, {"🪟", "window"}, {"🛏️", "bed sleep"}, {"🛋️", "couch sofa"},
+        {"🪑", "chair seat"}, {"🚿", "shower"}, {"🛁", "bathtub"}, {"🛒", "shopping cart store"},
+        {"🔑", "key access"}, {"🗝️", "old key password"}, {"📦", "package box delivery"}, {"📫", "mailbox"},
+        {"📮", "postbox mail"}, {"📜", "scroll document"}, {"📄", "page document file"}, {"📑", "bookmark tabs"},
+        {"🧾", "receipt bill"}, {"📊", "bar chart stats"}, {"📈", "chart trend up growth"}, {"📉", "chart trend down"},
+        {"🗒️", "spiral notepad notes"}, {"🗓️", "spiral calendar schedule"}, {"📅", "calendar date"}, {"🗃️", "card file box archive"},
+        {"🗄️", "file cabinet storage"}, {"📋", "clipboard task checklist"}, {"📁", "folder directory"}, {"📂", "open folder"},
+        {"🗂️", "card index dividers"}, {"📰", "newspaper article"}, {"📓", "notebook journal"}, {"📕", "closed book red"},
+        {"📗", "green book"}, {"📘", "blue book"}, {"📙", "orange book"}, {"📚", "books library study"},
+        {"📖", "open book read"}, {"🔖", "bookmark favorite"}, {"🔗", "link url"}, {"📎", "paperclip attach"},
+        {"🖇️", "linked paperclips"}, {"📐", "triangular ruler"}, {"📏", "straight ruler"}, {"📌", "pushpin pin"},
+        {"📍", "round pushpin map location"}, {"✂️", "scissors cut"}, {"🖊️", "pen write"}, {"🖋️", "fountain pen"},
+        {"✒️", "black nib"}, {"🖌️", "paintbrush art"}, {"📝", "memo note text"}, {"✏️", "pencil draft"},
+        {"🔍", "magnifying glass search"}, {"🔎", "search find"}, {"🔒", "locked secure private"}, {"🔓", "unlocked open public"}
+    }});
+
+    // 7: Symbols
+    categories.append({tr("Symbols"), {
+        {"❤️", "red heart love"}, {"🧡", "orange heart"}, {"💛", "yellow heart"}, {"💚", "green heart"},
+        {"💙", "blue heart"}, {"💜", "purple heart"}, {"🖤", "black heart"}, {"🤍", "white heart"},
+        {"🤎", "brown heart"}, {"💔", "broken heart"}, {"❣️", "heart exclamation"}, {"💕", "two hearts"},
+        {"💞", "revolving hearts"}, {"💓", "beating heart"}, {"💗", "growing heart"}, {"💖", "sparkling heart"},
+        {"💘", "heart with arrow"}, {"💝", "heart with ribbon"}, {"☮️", "peace symbol"}, {"✝️", "latin cross"},
+        {"☯️", "yin yang"}, {"🕉️", "om"}, {"✡️", "star of david"}, {"♈", "aries"},
+        {"♉", "taurus"}, {"♊", "gemini"}, {"♋", "cancer"}, {"♌", "leo"},
+        {"♍", "virgo"}, {"♎", "libra"}, {"♏", "scorpio"}, {"♐", "sagittarius"},
+        {"♑", "capricorn"}, {"♒", "aquarius"}, {"♓", "pisces"}, {"⚛️", "atom symbol"},
+        {"☣️", "biohazard warning"}, {"☢️", "radioactive"}, {"✴️", "eight-pointed star"}, {"🆒", "cool button"},
+        {"🆓", "free button"}, {"🆔", "id button"}, {"🆕", "new button"}, {"🆖", "ng button"},
+        {"🆗", "ok button"}, {"🆘", "sos button help"}, {"🆙", "up button"}, {"🔴", "red circle"},
+        {"🟠", "orange circle"}, {"🟡", "yellow circle"}, {"🟢", "green circle"}, {"🔵", "blue circle"},
+        {"🟣", "purple circle"}, {"⚫", "black circle"}, {"⚪", "white circle"}, {"🟥", "red square"},
+        {"🟧", "orange square"}, {"🟨", "yellow square"}, {"🟩", "green square"}, {"🟦", "blue square"},
+        {"🟪", "purple square"}, {"⬛", "black large square"}, {"⬜", "white large square"}, {"🔶", "large orange diamond"},
+        {"🔷", "large blue diamond"}, {"🔸", "small orange diamond"}, {"🔹", "small blue diamond"}, {"🔺", "red triangle up"},
+        {"🔻", "red triangle down"}, {"💠", "diamond with a dot"}, {"🔘", "radio button"}, {"🔔", "bell notification"},
+        {"🔕", "bell mute quiet"}, {"🎵", "musical note sound"}, {"🎶", "musical notes audio"}, {"💤", "zzz sleep"},
+        {"💢", "anger symbol"}, {"💬", "speech balloon message chat"}, {"💭", "thought balloon"}, {"🛑", "stop sign"},
+        {"⭐", "star favorite"}, {"🌟", "glowing star"}, {"✨", "sparkles clean new"}, {"⚡", "high voltage lightning flash"}, {"🔥", "fire flame trending hot"}
+    }});
+
+    // 8: Flags
+    categories.append({tr("Flags"), {
+        {"🏁", "chequered flag finish"}, {"🚩", "triangular flag red"}, {"🎌", "crossed flags"}, {"🏴", "black flag"},
+        {"🏳️", "white flag"}, {"🏳️‍🌈", "rainbow flag pride"}, {"🏴‍☠️", "pirate flag skull"}, {"🇰🇭", "flag Cambodia Khmer"},
+        {"🇺🇸", "flag United States America USA"}, {"🇬🇧", "flag United Kingdom Britain UK"}, {"🇨🇦", "flag Canada"}, {"🇦🇺", "flag Australia"},
+        {"🇩🇪", "flag Germany"}, {"🇫🇷", "flag France"}, {"🇯🇵", "flag Japan"}, {"🇨🇳", "flag China"},
+        {"🇰🇷", "flag South Korea"}, {"🇸🇬", "flag Singapore"}, {"🇹🇭", "flag Thailand"}, {"🇻🇳", "flag Vietnam"},
+        {"🇲🇾", "flag Malaysia"}, {"🇵🇭", "flag Philippines"}, {"🇮🇩", "flag Indonesia"}, {"🇮🇳", "flag India"},
+        {"🇧🇷", "flag Brazil"}, {"🇲🇽", "flag Mexico"}, {"🇪🇸", "flag Spain"}, {"🇮🇹", "flag Italy"},
+        {"🇳🇱", "flag Netherlands"}, {"🇨🇭", "flag Switzerland"}, {"🇸🇪", "flag Sweden"}, {"🇳🇴", "flag Norway"},
+        {"🇩🇰", "flag Denmark"}, {"🇫🇮", "flag Finland"}, {"🇵🇱", "flag Poland"}, {"🇺🇦", "flag Ukraine"},
+        {"🇦🇪", "flag United Arab Emirates Dubai"}, {"🇸🇦", "flag Saudi Arabia"}, {"🇿🇦", "flag South Africa"}, {"🇳🇿", "flag New Zealand"}
+    }});
+
+#ifdef Q_OS_MACOS
+    QFont emojiFont(QStringLiteral("Apple Color Emoji"));
+#else
+    QFont emojiFont = font();
+#endif
+    emojiFont.setPixelSize(20);
+
+    for (int catIdx = 0; catIdx < categories.size(); ++catIdx) {
+        const auto &cat = categories[catIdx];
+
+        auto *header = new QLabel(cat.title, contentWidget);
+        header->setProperty("class", QStringLiteral("emojiSectionHeader"));
+        contentLayout->addWidget(header);
+        _categoryHeaders.append(header);
+
+        auto *gridWidget = new QWidget(contentWidget);
+        auto *grid = new QGridLayout(gridWidget);
+        grid->setContentsMargins(0, 0, 0, 0);
+        grid->setSpacing(3);
+
+        const int colCount = 8;
+        for (int i = 0; i < cat.emojis.size(); ++i) {
+            const QString em = QString::fromUtf8(cat.emojis[i].emoji);
+            const QString nm = QString::fromLatin1(cat.emojis[i].name);
+
+            auto *btn = new QPushButton(em, gridWidget);
+            btn->setObjectName(QStringLiteral("emojiGridButton"));
+            btn->setFixedSize(36, 36);
+            btn->setFont(emojiFont);
+            btn->setCursor(Qt::PointingHandCursor);
+            btn->setToolTip(nm);
+            btn->installEventFilter(this);
+
+            connect(btn, &QPushButton::clicked, this, [this, em] {
+                selectEmoji(em);
+            });
+
+            grid->addWidget(btn, i / colCount, i % colCount);
+            _emojiItems.append({em, nm, catIdx, btn});
+        }
+        contentLayout->addWidget(gridWidget);
+    }
+
+    _noResultsLabel = new QLabel(tr("No emojis found"), contentWidget);
+    _noResultsLabel->setObjectName(QStringLiteral("emojiNoResults"));
+    _noResultsLabel->setAlignment(Qt::AlignCenter);
+    _noResultsLabel->hide();
+    contentLayout->addWidget(_noResultsLabel);
+
+    contentLayout->addStretch(1);
+    _scrollArea->setWidget(contentWidget);
+    mainLayout->addWidget(_scrollArea, 1);
+
+    auto *footerLayout = new QHBoxLayout;
+    footerLayout->setContentsMargins(0, 4, 0, 0);
+
+    _previewLabel = new QLabel(QString::fromUtf8("☝️ ") + tr("Pick an emoji…"), this);
+    _previewLabel->setObjectName(QStringLiteral("emojiPreviewLabel"));
+    footerLayout->addWidget(_previewLabel, 1);
+
+    auto *cancelButton = new QPushButton(tr("Cancel"), this);
+    cancelButton->setObjectName(QStringLiteral("emojiCancelButton"));
+    cancelButton->setCursor(Qt::PointingHandCursor);
+    connect(cancelButton, &QPushButton::clicked, this, &QDialog::reject);
+    footerLayout->addWidget(cancelButton);
+
+    mainLayout->addLayout(footerLayout);
+}
+
+bool UDriveEmojiDialog::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() == QEvent::Enter) {
+        if (auto *btn = qobject_cast<QPushButton *>(watched)) {
+            const QString tip = btn->toolTip();
+            const QString emoji = btn->text();
+            if (!tip.isEmpty()) {
+                _previewLabel->setText(QStringLiteral("%1  %2").arg(emoji, tip));
+            }
+        }
+    } else if (event->type() == QEvent::Leave) {
+        _previewLabel->setText(QString::fromUtf8("☝️ ") + tr("Pick an emoji…"));
+    }
+    return QDialog::eventFilter(watched, event);
+}
+
+void UDriveEmojiDialog::scrollToCategory(int index)
+{
+    for (int i = 0; i < _categoryButtons.size(); ++i) {
+        _categoryButtons[i]->setProperty("active", i == index);
+        _categoryButtons[i]->style()->unpolish(_categoryButtons[i]);
+        _categoryButtons[i]->style()->polish(_categoryButtons[i]);
+    }
+    if (index >= 0 && index < _categoryHeaders.size() && _categoryHeaders[index]->isVisible()) {
+        const int targetY = _categoryHeaders[index]->y();
+        _scrollArea->verticalScrollBar()->setValue(targetY);
+    }
+}
+
+void UDriveEmojiDialog::filterEmojis(const QString &query)
+{
+    const QString trimmed = query.trimmed();
+    const bool searching = !trimmed.isEmpty();
+
+    int visibleCount = 0;
+    for (const auto &item : _emojiItems) {
+        if (searching && item.categoryIndex == 0) {
+            item.button->hide();
+            continue;
+        }
+        const bool match = !searching ||
+            item.name.contains(trimmed, Qt::CaseInsensitive) ||
+            item.emoji.contains(trimmed);
+        item.button->setVisible(match);
+        if (match) {
+            ++visibleCount;
+        }
+    }
+
+    for (int i = 0; i < _categoryHeaders.size(); ++i) {
+        if (searching) {
+            _categoryHeaders[i]->hide();
+        } else {
+            _categoryHeaders[i]->show();
+        }
+    }
+
+    _noResultsLabel->setVisible(searching && visibleCount == 0);
+}
+
+void UDriveEmojiDialog::selectEmoji(const QString &emoji)
+{
+    QStringList recent = ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"))
+        ->value(QStringLiteral("recentEmojis"))
+        .toStringList();
+    recent.removeAll(emoji);
+    recent.prepend(emoji);
+    while (recent.size() > 16) {
+        recent.removeLast();
+    }
+    ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"))
+        ->setValue(QStringLiteral("recentEmojis"), recent);
+
+    _selectedEmoji = emoji;
+    accept();
+}
+
+QString UDriveEmojiDialog::selectedEmoji() const
+{
+    return _selectedEmoji;
+}
+
+QString UDriveEmojiDialog::getEmoji(QWidget *parent, const QString &spaceName, bool *ok)
+{
+    UDriveEmojiDialog dialog(spaceName, parent);
+    const int result = dialog.exec();
+    if (ok)
+        *ok = (result == QDialog::Accepted);
+    return (result == QDialog::Accepted) ? dialog.selectedEmoji() : QString();
 }
 
 UDriveMoveDialog::UDriveMoveDialog(AccountState *accountState, const QUrl &rootUrl, const QString &spaceName,
@@ -3968,10 +4532,15 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _refreshButton->setIcon(UDriveIcons::icon(UDriveIcons::Symbol::Refresh));
     _refreshButton->setIconSize(QSize(20, 20));
     _workspaceActions = new UDriveWorkspaceActions(_state, this);
+    connect(_workspaceActions, &UDriveWorkspaceActions::catalogChanged, this, [this] {
+        if (isWorkspacesOverview()) updateSpaces();
+    });
     connect(_workspaceActions, &UDriveWorkspaceActions::permissionsChanged, this, &UDriveFileBrowser::updateActions);
     connect(_workspaceActions, &UDriveWorkspaceActions::busyChanged, this, &UDriveFileBrowser::updateActions);
     connect(_workspaceActions, &UDriveWorkspaceActions::finished, this, [this](bool success, const QString &message) {
-        if (canBrowse() && !message.isEmpty()) _state->account()->spacesManager()->refresh();
+        if (canBrowse() && !message.isEmpty()) {
+            _state->account()->spacesManager()->refresh();
+        }
         if (!message.isEmpty()) showResult(message, success);
         updateActions();
     });
@@ -3996,6 +4565,8 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         auto *action = new QAction(UDriveIcons::icon(icon), label, this);
         action->setObjectName(QStringLiteral("driveWorkspaceBulk_") + key);
         auto *button = new QToolButton(_workspaceBulkActions); button->setDefaultAction(action);
+        button->setObjectName(action->objectName() + QStringLiteral("Button"));
+        connect(action, &QAction::changed, button, [action, button] { button->setVisible(action->isVisible()); });
         button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon); button->setAutoRaise(true); button->setIconSize(QSize(18, 18));
         bulk->addWidget(button);
         connect(action, &QAction::triggered, this, [this, key] {
@@ -4009,6 +4580,8 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _workspaceDuplicateAction = bulkAction(tr("Duplicate"), QStringLiteral("duplicate"), UDriveIcons::Symbol::Copy);
     _workspaceQuotaAction = bulkAction(tr("Edit quota"), QStringLiteral("quota"), UDriveIcons::Symbol::Cloud);
     _workspaceDisableAction = bulkAction(tr("Disable"), QStringLiteral("disable"), UDriveIcons::Symbol::Disable);
+    _workspaceEnableAction = bulkAction(tr("Enable"), QStringLiteral("restore"), UDriveIcons::Symbol::Enable);
+    _workspaceDeleteAction = bulkAction(tr("Delete"), QStringLiteral("delete"), UDriveIcons::Symbol::Trash);
     _workspaceCancelButton = new QToolButton(_workspaceBulkActions); _workspaceCancelButton->setText(tr("Cancel"));
     connect(_workspaceCancelButton, &QToolButton::clicked, _workspaceActions, &UDriveWorkspaceActions::cancel);
     bulk->addWidget(_workspaceCancelButton);
@@ -4262,12 +4835,18 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
     _includeDisabledButton = new QPushButton(tr("Include disabled"), _workspaceControls);
     _includeDisabledButton->setObjectName(QStringLiteral("driveIncludeDisabled"));
     _includeDisabledButton->setCheckable(true);
+    _includeDisabledButton->setAccessibleName(tr("Include disabled"));
+    _includeDisabledButton->setIconSize(QSize(16, 16));
     _includeDisabledButton->setCursor(Qt::PointingHandCursor);
     filters->addWidget(_includeDisabledButton, 0, Qt::AlignVCenter);
     connect(_includeDisabledButton, &QPushButton::toggled, this, [this](bool included) {
+        _includeDisabledButton->setIcon(included
+            ? UDriveIcons::icon(UDriveIcons::Symbol::Check, false, QColor("#102418")) : QIcon());
+        _includeDisabledButton->setText(included ? tr("Include disabled") + QStringLiteral("   ×") : tr("Include disabled"));
         _includeDisabledWorkspaces = included;
         _workspaceNotice = false;
         if (isWorkspacesOverview()) updateSpaces();
+        if (included) _workspaceActions->refreshCatalog();
     });
     filters->addStretch(1);
 
@@ -4656,7 +5235,7 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
         updateFileDetails();
         showFileDetailsActions(false);
     });
-    _versionsAction = new QAction(UDriveIcons::icon(UDriveIcons::Symbol::Restore), tr("Version history"), this);
+    _versionsAction = new QAction(UDriveIcons::icon(UDriveIcons::Symbol::History), tr("Version history"), this);
     _versionsAction->setObjectName(QStringLiteral("driveMenuVersions"));
     _versionsAction->setToolTip(tr("View and restore previous versions of this file"));
     connect(_versionsAction, &QAction::triggered, this, [this] {
@@ -4885,7 +5464,10 @@ UDriveFileBrowser::UDriveFileBrowser(AccountState *state, QWidget *parent)
 
     if (_state && _state->account()) {
         auto *manager = _state->account()->spacesManager();
-        connect(manager, &GraphApi::SpacesManager::updated, this, &UDriveFileBrowser::updateSpaces);
+        connect(manager, &GraphApi::SpacesManager::updated, this, [this] {
+            updateSpaces();
+            if (_includeDisabledWorkspaces && canBrowse()) _workspaceActions->refreshCatalog();
+        });
         connect(_state, &AccountState::stateChanged, this, [this] {
             if (!canBrowse()) {
                 if (_deleteConfirmation) _deleteConfirmation->reject();
@@ -5336,7 +5918,7 @@ void UDriveFileBrowser::buildFileDetails()
     sharesHeader->setObjectName(QStringLiteral("driveDetailsShares"));
     connect(sharesHeader, &QPushButton::clicked, this, [this] { _shareAction->trigger(); });
 
-    _detailsVersionsHeader = makeAccordionHeader(UDriveIcons::Symbol::Restore, tr("Versions"), nullptr);
+    _detailsVersionsHeader = makeAccordionHeader(UDriveIcons::Symbol::History, tr("Versions"), nullptr);
     _detailsVersionsHeader->setObjectName(QStringLiteral("driveDetailsVersions"));
     connect(_detailsVersionsHeader, &QPushButton::clicked, this, [this] { showFileDetailsVersions(true, true); });
 
@@ -6004,7 +6586,7 @@ void UDriveFileBrowser::setSortMode(SortMode mode, bool save)
     const auto *action = actions.at(int(mode));
     _sortButton->setText(action->text());
     _sortButton->setAccessibleName(tr("Sort by: %1").arg(action->text()));
-    _sortButton->setToolTip(mode == SortMode::Recent ? tr("Files opened most recently in UDrive; unopened files follow by modified date.")
+    _sortButton->setToolTip(mode == SortMode::Recent ? tr("Files opened most recently in Udrive; unopened files follow by modified date.")
                                                   : tr("Sort by: %1").arg(action->text()));
     if (save) {
         ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowser"))->setValue(QStringLiteral("sortMode"), action->data());
@@ -6178,6 +6760,9 @@ void UDriveFileBrowser::appendWorkspace(const OpenAPI::OAIDrive &drive, const QS
     item->setData(drive.getDescription(), SpaceDescriptionRole);
     item->setData(QVariant::fromValue(drive), SpaceDriveRole);
     if (auto *space = _state->account()->spacesManager()->space(drive.getId())) {
+        if (space->image()->image().isNull()) {
+            space->image()->update();
+        }
         item->setData(space->image()->image(), Qt::DecorationRole);
         connect(space, &GraphApi::Space::imageChanged, this, &UDriveFileBrowser::updateWorkspaceImages, Qt::UniqueConnection);
     }
@@ -6267,7 +6852,7 @@ void UDriveFileBrowser::workspaceAction(const QString &action, const QList<OpenA
     for (const auto &drive : drives) if (!_workspaceActions->can(action, drive)) return;
     const auto drive = drives.first();
     const bool active = std::all_of(drives.cbegin(), drives.cend(), [](const auto &d) { return d.getRoot().getDeleted().getState() != QStringLiteral("trashed"); });
-    if (!active && action != QStringLiteral("restore") && action != QStringLiteral("details") && action != QStringLiteral("web") && action != QStringLiteral("link")) return;
+    if (!active && action != QStringLiteral("restore") && action != QStringLiteral("delete") && action != QStringLiteral("quota") && action != QStringLiteral("details") && action != QStringLiteral("web") && action != QStringLiteral("link")) return;
     const QPointer<UDriveFileBrowser> guard(this);
     if (action == QStringLiteral("members")) {
         for (int row = 0; row < _workspacesModel->rowCount(); ++row) {
@@ -6310,7 +6895,28 @@ void UDriveFileBrowser::workspaceAction(const QString &action, const QList<OpenA
     } else if (action == QStringLiteral("rename") || action == QStringLiteral("subtitle") || action == QStringLiteral("quota")) {
         bool ok = false;
         const bool quota = action == QStringLiteral("quota"), rename = action == QStringLiteral("rename");
-        const QString initial = quota ? QLocale().toString(drive.getQuota().getTotal() / 1000000000.0, 'f', 3) : rename ? drive.getName() : drive.getDescription();
+        QString initial;
+        if (quota) {
+            const double gb = drive.getQuota().getTotal() / 1000000000.0;
+            if (std::abs(gb - std::round(gb)) < 0.0001) {
+                initial = QLocale().toString(static_cast<qint64>(std::round(gb)));
+            } else {
+                initial = QLocale().toString(gb, 'f', 3);
+                const QString dec = QLocale().decimalPoint();
+                if (initial.contains(dec)) {
+                    while (initial.endsWith(QLatin1Char('0'))) {
+                        initial.chop(1);
+                    }
+                    if (initial.endsWith(dec)) {
+                        initial.chop(dec.length());
+                    }
+                }
+            }
+        } else if (rename) {
+            initial = drive.getName();
+        } else {
+            initial = drive.getDescription();
+        }
         const QString value = UDriveInputDialog::getText(this, quota ? tr("Edit quota") : rename ? tr("Rename") : tr("Edit subtitle"),
             quota ? tr("Quota in GB (minimum 0.001):") : rename ? tr("Workspace name:") : tr("Subtitle:"), initial, tr("Save"), &ok, !rename && !quota);
         if (!guard || !ok || !canBrowse()) return;
@@ -6324,6 +6930,15 @@ void UDriveFileBrowser::workspaceAction(const QString &action, const QList<OpenA
             payload.insert(QStringLiteral("name"), value.trimmed());
         } else payload.insert(QStringLiteral("description"), value);
         if (_workspaceActions->patch(drives, payload)) setMessage(tr("Working…"));
+    } else if (action == QStringLiteral("delete")) {
+        UDriveInputDialog confirmation(tr("Delete workspaces"),
+            tr("Permanently delete %1 workspace(s) and all their files? This cannot be undone.").arg(drives.size()),
+            QString(), tr("Delete"), this, true);
+        confirmation.setObjectName(QStringLiteral("driveWorkspaceDeleteConfirmation"));
+        confirmation.setProperty("udriveWorkspaceDialog", true);
+        confirmation.findChild<QLineEdit *>()->hide();
+        if (confirmation.exec() != QDialog::Accepted || !guard || !canBrowse()) return;
+        if (_workspaceActions->remove(drives)) setMessage(tr("Working…"));
     } else if (action == QStringLiteral("disable") || action == QStringLiteral("restore")) {
         const bool restore = action == QStringLiteral("restore");
         if (!restore) {
@@ -6359,8 +6974,8 @@ void UDriveFileBrowser::workspaceAction(const QString &action, const QList<OpenA
             if (!image.isNull()) image = image.scaled(1024, 1024, Qt::KeepAspectRatio, Qt::SmoothTransformation);
         } else {
             bool ok = false;
-            const QString emoji = UDriveInputDialog::getText(this, tr("Set icon"), tr("Enter one emoji:"), QString::fromUtf8("📁"), tr("Save"), &ok);
-            if (!guard || !ok || !canBrowse()) return;
+            const QString emoji = UDriveEmojiDialog::getEmoji(this, drive.getName(), &ok);
+            if (!guard || !ok || emoji.isEmpty() || !canBrowse()) return;
             QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, emoji);
             if (emoji.size() > 32 || finder.toNextBoundary() != emoji.size()) { showResult(tr("Enter one emoji."), false); return; }
             image = QImage(128, 128, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::transparent);
@@ -6372,7 +6987,9 @@ void UDriveFileBrowser::workspaceAction(const QString &action, const QList<OpenA
         }
         if (image.isNull()) { showResult(tr("Could not read this image."), false); return; }
         QByteArray png; QBuffer buffer(&png); buffer.open(QIODevice::WriteOnly);
-        if (image.save(&buffer, "PNG") && _workspaceActions->writeSpecial(drive, QStringLiteral("image"), png)) setMessage(tr("Working…"));
+        if (image.save(&buffer, "PNG") && _workspaceActions->writeSpecial(drive, QStringLiteral("image"), png)) {
+            setMessage(tr("Working…"));
+        }
     }
 }
 
@@ -6404,8 +7021,9 @@ void UDriveFileBrowser::showWorkspaceCardMenu(const QModelIndex &index)
     add(tr("Edit image"), QStringLiteral("image"), UDriveIcons::Symbol::Image, active);
     add(tr("Set icon"), QStringLiteral("icon"), UDriveIcons::Symbol::Grid, active);
     menu->addSeparator();
-    add(tr("Edit quota"), QStringLiteral("quota"), UDriveIcons::Symbol::Cloud, active);
-    add(active ? tr("Disable") : tr("Restore workspace"), active ? QStringLiteral("disable") : QStringLiteral("restore"), active ? UDriveIcons::Symbol::Disable : UDriveIcons::Symbol::Restore);
+    add(tr("Edit quota"), QStringLiteral("quota"), UDriveIcons::Symbol::Cloud);
+    add(active ? tr("Disable") : tr("Enable"), active ? QStringLiteral("disable") : QStringLiteral("restore"), active ? UDriveIcons::Symbol::Disable : UDriveIcons::Symbol::Enable);
+    if (!active) add(tr("Delete"), QStringLiteral("delete"), UDriveIcons::Symbol::Trash);
     add(tr("Show deleted files"), QStringLiteral("trash"), UDriveIcons::Symbol::Trash, active);
     menu->addSeparator();
     add(tr("Details"), QStringLiteral("details"), UDriveIcons::Symbol::Help);
@@ -6775,9 +7393,15 @@ void UDriveFileBrowser::updateSpaces()
             }
         }
         if (_includeDisabledWorkspaces && canBrowse()) {
-            for (const auto &drive : _state->account()->spacesManager()->disabledDrives()) {
-                if (drive.getDriveType() != QStringLiteral("project") || !validName(drive.getId())
-                    || !validName(drive.getRoot().getId())) continue;
+            // Catalog-only disabled drives must never enter the sync-space list.
+            auto disabled = _state->account()->spacesManager()->disabledDrives();
+            for (const auto &drive : _workspaceActions->disabledDrives()) {
+                auto existing = std::find_if(disabled.begin(), disabled.end(), [&drive](const auto &item) { return item.getId() == drive.getId(); });
+                if (existing == disabled.end()) disabled.append(drive);
+                else *existing = drive;
+            }
+            for (const auto &drive : disabled) {
+                if (drive.getDriveType() != QStringLiteral("project") || !validName(drive.getId())) continue;
                 appendWorkspace(drive, drive.getName());
                 ++count;
             }
@@ -7218,16 +7842,23 @@ void UDriveFileBrowser::updateActions()
     if (isWorkspacesOverview()) {
         const bool idle = !_workspaceActions->busy();
         const auto rows = selectedWorkspaces();
-        const bool allActive = !rows.isEmpty() && std::all_of(rows.cbegin(), rows.cend(), [](const auto &row) { return !row.data(SpaceDisabledRole).toBool(); });
         _workspaceBulkActions->setVisible(!rows.isEmpty() || !idle);
         _heading->setVisible(rows.isEmpty() && idle);
         _learnWorkspacesButton->setVisible(rows.isEmpty() && idle);
         _workspaceTitleDivider->setVisible(rows.isEmpty() && idle);
-        auto allowed = [this, &rows, idle, allActive](const QString &action) {
-            return canBrowse() && idle && allActive && std::all_of(rows.cbegin(), rows.cend(), [this, &action](const auto &row) {
+        const bool allDisabled = !rows.isEmpty() && std::all_of(rows.cbegin(), rows.cend(), [](const auto &row) { return row.data(SpaceDisabledRole).toBool(); });
+        auto allowed = [this, &rows, idle](const QString &action) {
+            return canBrowse() && idle && !rows.isEmpty() && std::all_of(rows.cbegin(), rows.cend(), [this, &action](const auto &row) {
                 return _workspaceActions->can(action, row.data(SpaceDriveRole).template value<OpenAPI::OAIDrive>());
             });
         };
+        _workspaceDownloadAction->setVisible(!allDisabled);
+        _workspaceDuplicateAction->setVisible(!allDisabled);
+        _workspaceDisableAction->setVisible(!allDisabled);
+        _workspaceEnableAction->setVisible(allDisabled);
+        _workspaceDeleteAction->setVisible(allDisabled);
+        _workspaceEnableAction->setEnabled(allowed(QStringLiteral("restore")));
+        _workspaceDeleteAction->setEnabled(allowed(QStringLiteral("delete")));
         _workspaceDownloadAction->setEnabled(allowed(QStringLiteral("download")) && _workspaceActions->archiveAvailable());
         _workspaceDuplicateAction->setEnabled(allowed(QStringLiteral("duplicate")));
         _workspaceQuotaAction->setEnabled(allowed(QStringLiteral("quota")));
@@ -7239,7 +7870,7 @@ void UDriveFileBrowser::updateActions()
         _openButton->setEnabled(canBrowse() && idle && hasSel && selected.size() == 1 && !selected.first().data(SpaceDisabledRole).toBool());
         _workspacesView->setEnabled(canBrowse() && idle);
         _workspacesTable->setEnabled(canBrowse() && idle);
-        _openButton->setVisible(hasSel);
+        _openButton->setVisible(hasSel && !allDisabled);
         _downloadButton->setVisible(false);
         _shareButton->setVisible(false);
         _restoreButton->setVisible(false);
@@ -7273,9 +7904,9 @@ void UDriveFileBrowser::updateActions()
     const bool external = UDriveFilePreview::kindForName(index.data().toString()) == UDriveFilePreview::Kind::External;
     _openButton->setText(directory ? tr("Open folder") : pdf ? tr("Open PDF") : external ? tr("Open in app") : tr("Preview"));
     _openButton->setEnabled(valid && !trash && !_download);
-    _openButton->setToolTip(pdf  ? tr("Preview this PDF inside UDrive.")
+    _openButton->setToolTip(pdf  ? tr("Preview this PDF inside Udrive.")
             : directory ? QString() : external ? tr("Open this file with its installed application. Files outside a sync folder open as read-only copies.")
-                                 : tr("Preview this file inside UDrive."));
+                                 : tr("Preview this file inside Udrive."));
     _downloadButton->setEnabled(valid && !trash && !directory && !_download);
     const bool navigate = canBrowse() && !_root.isEmpty() && _section != Section::Favorites && !overview && !trash && !_operation;
     _breadcrumbs->setEnabled(navigate);
@@ -8772,7 +9403,7 @@ bool UDriveFileBrowser::startDownload(const QString &destination, bool preview, 
             _pdfPreview->findChild<QPushButton *>(QStringLiteral("pdfBack"))->setFocus();
         } else if (preview) _previewStorage.reset();
 #endif
-        QString message = success ? preview ? tr("PDF opened in UDrive.") : tr("Saved to %1").arg(QDir::toNativeSeparators(destination)) : tr("Download failed: %1").arg(error);
+        QString message = success ? preview ? tr("PDF opened in Udrive.") : tr("Saved to %1").arg(QDir::toNativeSeparators(destination)) : tr("Download failed: %1").arg(error);
         if (success && openAfterDownload) {
             const QPointer<UDriveFileBrowser> guard(this);
             const bool opened = QDesktopServices::openUrl(QUrl::fromLocalFile(destination));
@@ -8864,7 +9495,7 @@ void UDriveIncomingSharesNotifier::loadReadState()
 {
     if (!_accountState || !_accountState->account())
         return;
-    const QString key = QStringLiteral("UDrive/ReadShareIds/") + _accountState->account()->uuid().toString(QUuid::WithoutBraces);
+    const QString key = QStringLiteral("Udrive/ReadShareIds/") + _accountState->account()->uuid().toString(QUuid::WithoutBraces);
     auto settings = ConfigFile::makeQSettings();
     const auto list = settings.value(key).toStringList();
     _readShareIds = QSet<QString>(list.begin(), list.end());
@@ -8874,7 +9505,7 @@ void UDriveIncomingSharesNotifier::saveReadState()
 {
     if (!_accountState || !_accountState->account())
         return;
-    const QString key = QStringLiteral("UDrive/ReadShareIds/") + _accountState->account()->uuid().toString(QUuid::WithoutBraces);
+    const QString key = QStringLiteral("Udrive/ReadShareIds/") + _accountState->account()->uuid().toString(QUuid::WithoutBraces);
     auto settings = ConfigFile::makeQSettings();
     QStringList list;
     for (const auto &id : _readShareIds) {
@@ -9055,8 +9686,22 @@ void UDriveIncomingSharesNotifier::onJobFinished()
         const auto creators = shareCreators(item, true);
         const QString sharer = creators.isEmpty() ? QString() : creators.values().first();
         const auto remote = item.value(QStringLiteral("remoteItem")).toObject();
-        const auto modified = QDateTime::fromString(remote.value(QStringLiteral("lastModifiedDateTime")).toString(), Qt::ISODate);
-        const QDateTime timestamp = modified.isValid() ? modified.toUTC() : QDateTime::currentDateTimeUtc();
+        // A notification describes the share event, not the age of the file.
+        // sharedWithMe exposes each received grant's creation time here.
+        QDateTime timestamp;
+        for (const auto &permission : remote.value(QStringLiteral("permissions")).toArray()) {
+            const auto created = QDateTime::fromString(permission.toObject().value(QStringLiteral("createdDateTime")).toString(), Qt::ISODate);
+            if (created.isValid() && (!timestamp.isValid() || created > timestamp)) timestamp = created.toUTC();
+        }
+        if (!timestamp.isValid()) {
+            for (const auto &source : {item, remote}) {
+                const auto shared = QDateTime::fromString(source.value(QStringLiteral("shared")).toObject()
+                    .value(QStringLiteral("sharedDateTime")).toString(), Qt::ISODate);
+                if (shared.isValid() && (!timestamp.isValid() || shared > timestamp)) timestamp = shared.toUTC();
+            }
+        }
+        // Leave missing event times unknown rather than substituting a file
+        // timestamp or resetting an old notification to 'now' on every poll.
 
         UDriveShareNotification notif;
         notif.id = id;
@@ -9075,6 +9720,7 @@ void UDriveIncomingSharesNotifier::onJobFinished()
     }
 
     std::sort(parsedNotifications.begin(), parsedNotifications.end(), [](const auto &a, const auto &b) {
+        if (a.timestamp.isValid() != b.timestamp.isValid()) return a.timestamp.isValid();
         return a.timestamp > b.timestamp;
     });
     _notifications = parsedNotifications;

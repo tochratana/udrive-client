@@ -19,8 +19,8 @@ public:
 
     QString about() const override
     {
-        return tr("<p>UDrive brings your Unity Workspace files to your desktop.</p>"
-                  "<p><a href=\"https://drive.unity-workspace.com\">Open UDrive online</a></p>"
+        return tr("<p>Udrive brings your Unity Workspace files to your desktop.</p>"
+                  "<p><a href=\"https://drive.unity-workspace.com\">Open Udrive online</a></p>"
                   "<p>Built on the ownCloud Desktop Client. Copyright Unity Workspace "
                   "and contributors.</p>"
                   "<p>Distributed under the GNU General Public License (GPL), version 2 or later.</p>");

@@ -1,4 +1,4 @@
-# UDrive macOS releases
+# Udrive macOS releases
 
 The local release workflow is `python3 admin/osx/release.py`. It does not use
 GitHub Actions, change the development app, or weaken Keychain access controls.
@@ -15,7 +15,7 @@ architectures and a clean customer Mac still require separate verification.
 
 An Apple Developer Program account is Apple's publisher account for distributing
 Mac apps. A **Developer ID Application** certificate identifies the publisher of
-apps downloaded outside the Mac App Store. It is different from a user's UDrive
+apps downloaded outside the Mac App Store. It is different from a user's Udrive
 login or the GitHub organization's Actions allowance.
 
 1. The publisher enrolls through the [Apple Developer Program](https://developer.apple.com/programs/enroll/).
@@ -88,8 +88,8 @@ new `--output-dir` when retrying a failed run.
 
 Successful output includes:
 
-- A signed, notarized, stapled `udrive.app`.
-- `UDrive-VERSION-ARCH.dmg`, with an Applications shortcut for drag-and-drop installation.
+- A signed, notarized, stapled `Udrive.app`.
+- `Udrive-VERSION-ARCH.dmg`, with an Applications shortcut for drag-and-drop installation.
 - `release.json` with the app identifier, publisher Team ID, source commit,
   working-tree status, architecture, and disk-image SHA-256.
 - Apple's app and disk-image notarization responses.
@@ -137,7 +137,7 @@ If any check fails, no website download folder is created.
 
 The exported folder contains only these public files:
 
-- `UDrive-VERSION-ARCH.dmg`: the verified installer.
+- `Udrive-VERSION-ARCH.dmg`: the verified installer.
 - `SHA256SUMS`: its SHA-256 checksum.
 - `download.json`: version, architecture, minimum macOS, file size, checksum,
   source revision and download URL for a website to consume.
@@ -172,7 +172,7 @@ Verify a finished app independently:
 
 ```bash
 python3 admin/osx/release.py verify \
-  --app '/absolute/path/to/udrive.app' \
+  --app '/absolute/path/to/Udrive.app' \
   --team-id 'YOUR_TEAM_ID'
 ```
 

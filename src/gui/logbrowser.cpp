@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Klaas Freitag <freitag@owncloud.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -54,7 +57,7 @@ LogBrowser::LogBrowser(QWidget *parent)
     closeButton->setDefault(true);
     ui->openFolderButton->setAutoDefault(false);
 
-    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+    if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive")) {
         const auto mode = ConfigFile().themeMode();
         const bool dark = mode == ConfigFile::ThemeMode::Dark
             || (mode == ConfigFile::ThemeMode::System && palette().color(QPalette::Window).lightness() < 128);

@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Daniel Molkentin <danimo@owncloud.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -78,7 +81,7 @@ NetworkSettings::NetworkSettings(QWidget *parent)
         this, &NetworkSettings::checkAccountLocalhost);
 
     loadProxySettings();
-    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+    if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive")) {
         setProperty("udriveNetwork", true);
         _ui->verticalLayout_5->setContentsMargins(0, 0, 0, 0);
         _ui->verticalLayout_4->setSpacing(10);
@@ -239,7 +242,7 @@ void NetworkSettings::saveMeteredSettings()
 
 void NetworkSettings::checkEmptyProxyHost()
 {
-    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+    if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive")) {
         const bool missing = _ui->hostLineEdit->isEnabled() && _ui->hostLineEdit->text().trimmed().isEmpty();
         if (_ui->hostLineEdit->property("proxyHostMissing").toBool() != missing) {
             _ui->hostLineEdit->setProperty("proxyHostMissing", missing);

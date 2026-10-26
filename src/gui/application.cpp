@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Duncan Mac-Vicar P. <duncan@kde.org>
  * Copyright (C) by Klaas Freitag <freitag@owncloud.com>
  * Copyright (C) by Daniel Molkentin <danimo@owncloud.com>
@@ -89,7 +92,7 @@ Application::Application(Platform *platform, const QString &displayLanguage, boo
     qApp->setQuitOnLastWindowClosed(false);
 
 #ifdef Q_OS_MAC
-    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+    if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive")) {
         ConfigFile cfgFile;
         auto settings = ConfigFile::makeQSettings();
         if (!settings.contains(QStringLiteral("monoIconsMacMigrated"))) {

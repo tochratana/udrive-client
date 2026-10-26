@@ -35,7 +35,7 @@ int main(int argc, char **argv)
     font.setBold(true);
     painter.setFont(font);
     painter.setPen(Qt::white);
-    painter.drawText(QRect(335, 0, 665, 320), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("UDrive"));
+    painter.drawText(QRect(335, 0, 665, 320), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Udrive"));
     painter.end();
     for (const char *name : {"wizard_logo", "wizard_logo_dark", "wizard_footer_logo"}) {
         if (!wordmark.save(theme.filePath(QStringLiteral("universal/%1.png").arg(QString::fromLatin1(name)))))

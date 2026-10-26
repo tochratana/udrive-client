@@ -2,13 +2,15 @@ include(owncloud_add_test.cmake)
 
 add_subdirectory(testutils)
 
+find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
 if(APPLE)
-    find_package(Python3 3.9 QUIET COMPONENTS Interpreter)
-    if(Python3_Interpreter_FOUND)
-        add_test(NAME MacOSReleasePolicyTest
-            COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR} -p test_macos_release.py -v)
-    endif()
+    add_test(NAME MacOSReleasePolicyTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR} -p test_macos_release.py -v)
 endif()
+add_test(NAME WindowsReleasePolicyTest
+    COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR} -p test_windows_release.py -v)
+add_test(NAME ProductionCheckPolicyTest
+    COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR} -p test_production_checks.py -v)
 
 owncloud_add_test(JHash)
 

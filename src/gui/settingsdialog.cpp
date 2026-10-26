@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Daniel Molkentin <danimo@owncloud.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -421,6 +424,7 @@ public:
                                   QWidget *parent = nullptr)
         : QWidget(parent)
         , _notificationId(item.id)
+        , _timestamp(item.timestamp)
         , _isRead(item.isRead)
         , _onClicked(std::move(onClicked))
     {
@@ -458,18 +462,33 @@ public:
         descLabel->setText(richText);
         textLayout->addWidget(descLabel);
 
-        const QString timeAgo = Utility::timeAgoInWords(item.timestamp);
-        auto *timeLabel = new QLabel(timeAgo, this);
-        timeLabel->setTextFormat(Qt::PlainText);
-        timeLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
-        timeLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 12px; }").arg(mutedColor));
-        textLayout->addWidget(timeLabel);
+        _timeLabel = new QLabel(this);
+        _timeLabel->setObjectName(QStringLiteral("driveNotificationTime"));
+        _timeLabel->setTextFormat(Qt::PlainText);
+        _timeLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+        _timeLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 12px; }").arg(mutedColor));
+        if (_timestamp.isValid()) _timeLabel->setToolTip(QLocale().toString(_timestamp.toLocalTime(), QLocale::LongFormat));
+        refreshTime();
+        textLayout->addWidget(_timeLabel);
 
         rowLayout->addLayout(textLayout, 1);
 
         _unreadDot = new UnreadDotWidget(this);
         _unreadDot->setVisible(!_isRead);
         rowLayout->addWidget(_unreadDot, 0, Qt::AlignCenter);
+    }
+
+    void refreshTime()
+    {
+        if (!_timestamp.isValid()) {
+            _timeLabel->setText(tr("Time unavailable"));
+            return;
+        }
+        const auto seconds = qMax<qint64>(0, _timestamp.secsTo(QDateTime::currentDateTimeUtc()));
+        _timeLabel->setText(seconds == 0 ? tr("now")
+            : seconds == 1 ? tr("1 second ago")
+            : seconds < 60 ? tr("%1 seconds ago").arg(seconds)
+            : Utility::timeAgoInWords(_timestamp));
     }
 
     void markRead()
@@ -550,6 +569,8 @@ protected:
 
 private:
     QString _notificationId;
+    QDateTime _timestamp;
+    QLabel *_timeLabel = nullptr;
     bool _isRead = false;
     std::function<void(const QString &)> _onClicked;
     UnreadDotWidget *_unreadDot = nullptr;
@@ -572,6 +593,11 @@ public:
         setAttribute(Qt::WA_NoMouseReplay);
 
         setupUI();
+        auto *timer = new QTimer(this);
+        connect(timer, &QTimer::timeout, this, [this] {
+            for (auto *row : _rows) row->refreshTime();
+        });
+        timer->start(1000);
     }
 
 protected:
@@ -729,7 +755,7 @@ SettingsDialog::SettingsDialog(ownCloudGui *gui, QWidget *parent)
     setWindowTitle(Theme::instance()->appNameGUI());
     _ui->setupUi(this);
 
-    const bool udrive = Theme::instance()->appNameGUI() == QStringLiteral("UDrive");
+    const bool udrive = Theme::instance()->appNameGUI() == QStringLiteral("Udrive");
     setMinimumSize(::minimumSizeHint(this, udrive));
     if (udrive) {
         _ui->verticalLayout_2->setDirection(QBoxLayout::LeftToRight);
@@ -777,14 +803,14 @@ SettingsDialog::SettingsDialog(ownCloudGui *gui, QWidget *parent)
     _ui->stack->addWidget(_activityPage);
 
     _generalSettings = new GeneralSettings;
-    _settingsPage = udrive ? workspacePage(_generalSettings, tr("Settings"), tr("Choose how UDrive works on this computer.")) : _generalSettings;
+    _settingsPage = udrive ? workspacePage(_generalSettings, tr("Settings"), tr("Choose how Udrive works on this computer.")) : _generalSettings;
     _ui->stack->addWidget(_settingsPage);
     connect(_generalSettings, &GeneralSettings::showAbout, gui, &ownCloudGui::slotAbout);
     connect(_generalSettings, &GeneralSettings::syncOptionsChanged, FolderMan::instance(), &FolderMan::slotReloadSyncOptions);
 
     ConfigFile().restoreGeometry(this);
 #ifdef Q_OS_MAC
-    // UDrive is a desktop app from startup. Temporarily switching to Accessory
+    // Udrive is a desktop app from startup. Temporarily switching to Accessory
     // removes its Dock entry, then showing the window adds it back as a new launch.
     setActivationPolicy(udrive ? ActivationPolicy::Regular : ActivationPolicy::Accessory);
 #endif
@@ -939,7 +965,7 @@ void SettingsDialog::createWorkspaceHeader()
     connect(this, &SettingsDialog::currentAccountChanged, this, &SettingsDialog::updateWorkspaceHeader);
 
     auto settings = ConfigFile::makeQSettings();
-    if (!settings.value(QStringLiteral("UDrive/sidebarVisible"), true).toBool()) {
+    if (!settings.value(QStringLiteral("Udrive/sidebarVisible"), true).toBool()) {
         setSidebarVisible(false);
     }
 }
@@ -1143,20 +1169,13 @@ void SettingsDialog::updateWorkspaceHeader()
     // Search fields live in the header after integration; retain account identity on each page.
     for (int i = 1; files && i < _searchStack->count(); ++i) {
         auto *field = _searchStack->widget(i);
-        if (!field->property("administrationSearch").toBool() && field->property("accountId").toUuid() == files->accountState()->account()->uuid()) {
+        if (field->property("accountId").toUuid() == files->accountState()->account()->uuid()) {
             search = qobject_cast<QLineEdit *>(field);
             break;
         }
     }
-    if (_currentPage == SettingsPage::Administration && _lastAccount) {
-        if (auto *admin = _adminForAccount.value(_lastAccount->uuid())) {
-            search = admin->searchField();
-            if (_searchStack->indexOf(search) < 0) {
-                admin->takeSearchField(); search->setProperty("accountId", _lastAccount->uuid()); search->setProperty("administrationSearch", true);
-                _searchStack->addWidget(search);
-            }
-        }
-    }
+    if (auto *placeholder = qobject_cast<QLineEdit *>(_searchStack->widget(0)))
+        placeholder->setPlaceholderText(_lastAccount ? tr("Search in Drive") : tr("Select an account to search files"));
     _searchStack->setCurrentIndex(search ? _searchStack->indexOf(search) : 0);
     _profileButton->setText(_lastAccount ? _lastAccount->initials().toUpper().left(3) : QStringLiteral("+"));
     updateNotificationBadge();
@@ -1246,7 +1265,7 @@ double SettingsDialog::storageFraction() const
 
 void SettingsDialog::updateUDriveAppearance()
 {
-    if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive"))
+    if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive"))
         return;
 
     // Scope these styles to the content area; OAuth wizards and native dialogs
@@ -1354,7 +1373,9 @@ void SettingsDialog::updateUDriveAppearance()
         "QStackedWidget#stack QPushButton#driveLearnWorkspaces:hover { background: %6; color: %2; }"
         "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled { border: 1px solid %5; border-radius: 14px; padding: 4px 14px; min-height: 20px; background: transparent; color: %2; font-weight: 400; font-size: 13px; }"
         "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled:hover { background: %4; }"
-        "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled:checked { background: %4; border-color: %11; color: %11; }"
+        "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled:checked { background: #40D979; border-color: #40D979; color: #102418; }"
+        "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled:checked:hover { background: #4DE184; border-color: #4DE184; }"
+        "QWidget#driveWorkspaceControls QPushButton#driveIncludeDisabled:checked:pressed { background: #34CA6D; border-color: #34CA6D; }"
         "QWidget#driveWorkspaceControls QLineEdit#driveWorkspaceSearch { border: 1px solid %5; border-radius: 5px; padding: 4px 10px; background: %12; color: %2; }"
         "QWidget#driveWorkspaceControls QLineEdit#driveWorkspaceSearch:focus { border-color: %11; }"
         "QWidget#driveWorkspaceControls QComboBox#driveWorkspaceSort { border: 1px solid %5; border-radius: 5px; padding: 6px 30px 6px 10px; background: %12; color: %2; }"
@@ -1439,13 +1460,31 @@ void SettingsDialog::updateUDriveAppearance()
         "QStackedWidget#stack QWidget[udriveSync=\"true\"] QPushButton[syncAction=\"true\"]:disabled { background: transparent; color: %5; border-color: %3; }"
         "QWidget#driveAdministration, QWidget#driveAdministration QLabel { background: transparent; color: %2; }"
         "QTreeView#driveAdminTable { border: none; background: %1; color: %2; outline: none; }"
-        "QTreeView#driveAdminTable::item { padding: 10px 8px; border-bottom: 1px solid %3; }"
+        "QTreeView#driveAdminTable::item { padding: 5px 8px; border-bottom: 1px solid %3; }"
         "QTreeView#driveAdminTable::item:selected { background: %4; color: %2; }"
         "QTreeView#driveAdminTable QHeaderView::section { background: %1; color: %2; border: none; border-bottom: 1px solid %3; padding: 10px 8px; }"
         "QTabBar#driveAdminTabs::tab { background: transparent; color: %5; border-bottom: 2px solid transparent; padding: 8px 14px; }"
         "QTabBar#driveAdminTabs::tab:selected { color: %2; border-bottom-color: %11; }"
-        "QComboBox#driveAdminGroupFilter, QComboBox#driveAdminRoleFilter { background: transparent; color: %2; border: 1px solid %3; border-radius: 8px; padding: 7px 28px 7px 10px; }"
+        "QComboBox#driveAdminGroupFilter, QComboBox#driveAdminRoleFilter { background: transparent; color: %2; border: 1px solid %3; border-radius: 14px; padding: 4px 26px 4px 12px; }"
+        "QLineEdit#driveAdminSearch { background: %12; color: %2; border: 1px solid %10; border-radius: 7px; padding: 9px 10px; }"
+        "QLineEdit#driveAdminSearch:focus { border-color: %11; }"
+        "QTreeView#driveAdminTable::indicator { width: 18px; height: 18px; border: 1.5px solid %10; border-radius: 4px; background: transparent; }"
+        "QTreeView#driveAdminTable::indicator:checked { border-color: #40D979; background: #40D979; image: url(:/client/resources/core/checkbox-check.svg); }"
+        "QTreeView#driveAdminTable::indicator:indeterminate { border-color: #40D979; background: #40D979; image: url(:/client/resources/core/checkbox-partial.svg); }"
         "QLabel#driveAdminCount { color: %5; font-size: 12px; }"
+        "QWidget#driveAdminDetailsBody { background: %1; }"
+        "QScrollArea#driveAdminDetails { background: %1; border: none; border-left: 1px solid %3; }"
+        "QFrame#driveAdminDetailsRule { background: %3; border: none; }"
+        "QWidget#driveAdminUserEditor { background: %12; border-radius: 8px; }"
+        "QWidget#driveAdminUserEditor QLineEdit, QWidget#driveAdminUserEditor QComboBox { background: %1; color: %2; border: 1px solid %10; border-radius: 5px; padding: 8px; min-width: 0; }"
+        "QWidget#driveAdminUserEditor QComboBox { padding-right: 26px; }"
+        "QWidget#driveAdminUserEditor QLineEdit:focus, QWidget#driveAdminUserEditor QComboBox:focus { border-color: %11; }"
+        "QWidget#driveAdminUserEditor QLineEdit:disabled, QWidget#driveAdminUserEditor QComboBox:disabled { color: %5; background: %8; }"
+        "QPushButton#driveAdminUserCancel, QPushButton#driveAdminUserSave { border: 1px solid %10; border-radius: 6px; padding: 9px 10px; }"
+        "QPushButton#driveAdminUserSave { background: #40D979; color: #102418; border-color: #40D979; }"
+        "QPushButton#driveAdminUserSave:disabled { background: %8; color: %5; border-color: %3; }"
+        "QLabel#driveAdminUserEditError { color: #C74848; }"
+        "QPushButton#driveAdminDetailsEdit { text-align: left; padding: 10px 6px; }"
         "QTreeView#accountFoldersTreeView { border: none; border-radius: 0; background: %1; color: %2; padding: 0; }"
         "QLabel#syncedFolderCount { padding-top: 8px; font-size: 12px; }"
         "QTabWidget#activityTabWidget { background: transparent; border: none; }"
@@ -1486,7 +1525,7 @@ void SettingsDialog::onAccountAdded(AccountState *state)
     auto accountView = new AccountView(state, this);
     _ui->stack->addWidget(accountView);
     _viewForAccount.insert(state->account()->uuid(), accountView);
-    if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+    if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive")) {
         auto *files = new UDriveFileBrowser(state, this);
         _ui->stack->addWidget(files);
         _filesForAccount.insert(state->account()->uuid(), files);
@@ -1548,8 +1587,6 @@ void SettingsDialog::onAccountRemoved(AccountState *state)
     Account *acc = state->account();
     if (auto *admin = _adminForAccount.take(acc->uuid())) {
         admin->api()->clear();
-        auto *search = admin->searchField();
-        if (_searchStack && _searchStack->indexOf(search) >= 0) { _searchStack->removeWidget(search); search->deleteLater(); }
         _ui->stack->removeWidget(admin); admin->deleteLater();
     }
     ConfigFile::settingsWithGroup(QStringLiteral("UDriveFileBrowserRecent/") + acc->uuid().toString(QUuid::WithoutBraces))->remove(QString());
@@ -1641,9 +1678,9 @@ void SettingsDialog::setVisible(bool visible)
     }
 
 #ifdef Q_OS_MAC
-    // Keep the UDrive workspace's Dock entry when its window is closed.
+    // Keep the Udrive workspace's Dock entry when its window is closed.
     // Switching back to Accessory makes every reopen look like a new launch.
-    if (visible || Theme::instance()->appNameGUI() == QStringLiteral("UDrive")) {
+    if (visible || Theme::instance()->appNameGUI() == QStringLiteral("Udrive")) {
         setActivationPolicy(ActivationPolicy::Regular);
     } else {
         setActivationPolicy(ActivationPolicy::Accessory);
@@ -1796,7 +1833,7 @@ void SettingsDialog::setSidebarVisible(bool visible)
         _brandWidget->setFixedWidth(visible ? 224 : 140);
     }
     auto settings = ConfigFile::makeQSettings();
-    settings.setValue(QStringLiteral("UDrive/sidebarVisible"), visible);
+    settings.setValue(QStringLiteral("Udrive/sidebarVisible"), visible);
     Q_EMIT sidebarVisibilityChanged(visible);
 }
 

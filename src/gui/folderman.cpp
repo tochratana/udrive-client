@@ -1,4 +1,7 @@
 /*
+ * Udrive Desktop — Unity Workspace
+ * Udrive customization updated: 2026-10-26.
+ *
  * Copyright (C) by Klaas Freitag <freitag@owncloud.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -318,7 +321,7 @@ void FolderMan::loadSpacesAndCreateFolders(AccountState *accountState, bool useV
             return;
         }
 
-        if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive") && Utility::isMac()) updateAccountFavorite(accountState, true);
+        if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive") && Utility::isMac()) updateAccountFavorite(accountState, true);
         else Utility::setupFavLink(localDir);
 
         for (auto *space : std::as_const(spaces)) {
@@ -1187,7 +1190,7 @@ Folder *FolderMan::addFolderFromScratch(AccountState *accountState, FolderDefini
 
     if (newFolder) {
         if (newFolder->vfs().mode() != Vfs::WindowsCfApi) {
-            if (Theme::instance()->appNameGUI() == QStringLiteral("UDrive") && Utility::isMac()) {
+            if (Theme::instance()->appNameGUI() == QStringLiteral("Udrive") && Utility::isMac()) {
                 const QString root = QFileInfo(accountState->account()->defaultSyncRoot()).canonicalFilePath();
                 const QString local = QFileInfo(folderDefinition.localPath()).canonicalFilePath();
                 if (!root.isEmpty() && local.startsWith(root + QLatin1Char('/'))) updateAccountFavorite(accountState, true);
@@ -1245,7 +1248,7 @@ void FolderMan::addFolderFromGui(AccountState *accountState, const SyncConnectio
 QString FolderMan::accountFolderLabel(const QString &displayName, const QUrl &serverUrl)
 {
     QString name = Theme::instance()->appNameGUI();
-    if (name != QStringLiteral("UDrive")) return name;
+    if (name != QStringLiteral("Udrive")) return name;
     const auto user = displayName.simplified();
     const auto identity = user.isEmpty() ? serverUrl.host() : user;
     if (!identity.isEmpty()) name += QStringLiteral(" (%1)").arg(identity);
@@ -1263,7 +1266,7 @@ QString FolderMan::suggestSyncFolder(NewFolderType folderType, const QUuid &acco
 void FolderMan::updateAccountFavorite(AccountState *state, bool addIfMissing)
 {
 #ifdef Q_OS_MACOS
-    if (Theme::instance()->appNameGUI() != QStringLiteral("UDrive") || !state || !state->account()) return;
+    if (Theme::instance()->appNameGUI() != QStringLiteral("Udrive") || !state || !state->account()) return;
     const auto *account = state->account();
     QString name = account->davDisplayName();
     const auto baseLabel = accountFolderLabel(name, account->url());
