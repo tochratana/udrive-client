@@ -20,7 +20,15 @@ ROOT = Path(__file__).resolve().parents[2]
 TARGET = "windows-cl-msvc2022-x86_64"
 PACKAGE = "owncloud/owncloud-client"
 CRAFTMASTER_REVISION = "8a19d8fcab223b8b27126d98a46ed824b5948665"
-WINDOWS_CRAFT_OVERRIDE = """[GeneralSettings]
+CRAFT_SOURCES = {
+    "craft/craft-core": ("craft-clone", "https://github.com/owncloud/craft.git"),
+    "craft/craft-blueprints-kde": ("blueprints/craft-blueprints-kde", "https://invent.kde.org/packaging/craft-blueprints-kde.git"),
+    "craft/craft-blueprints-owncloud": ("blueprints/craft-blueprints-owncloud", "https://github.com/owncloud/craft-blueprints-owncloud.git"),
+}
+WINDOWS_CRAFT_OVERRIDE = """[General]
+CraftRevision = ${Variables:CraftCoreRevision}
+
+[GeneralSettings]
 Paths/Python = ${Variables:PythonExecutable}
 Packager/Destination = ${Variables:PackageOutput}
 Packager/CreateCache = False
@@ -36,6 +44,8 @@ Compile/BuildType = RelWithDebInfo
 ShortPath/DriveLetter = Z:/
 
 [BlueprintSettings]
+# CraftMaster is pinned separately; unshelving must not update its controller.
+craft/craftmaster.ignored = True
 libs/qt6/qtmultimedia.version = ${Variables:QtVersion}
 libs/ffmpeg.ignored = True
 libs/pulseaudio.ignored = True
@@ -85,6 +95,44 @@ def version():
             raise BuildError("Could not read application version from VERSION.cmake.")
         parts.append(match[1])
     return ".".join(parts)
+
+
+def prepare_craft_sources(work_root, shelf_path=None, sources=None):
+    """Pin the bootstrap sources before Craft can parse any blueprint metadata."""
+    shelf_path = shelf_path or ROOT / ".craft.shelf"
+    sources = CRAFT_SOURCES if sources is None else sources
+    shelf = configparser.ConfigParser(interpolation=None)
+    shelf.read(shelf_path, encoding="utf-8")
+    revisions = {}
+    for section in sources:
+        revision = shelf.get(section, "revision", fallback="")
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", revision):
+            raise BuildError(f"Expected a full pinned commit for {section} in {shelf_path}.")
+        revisions[section] = revision.lower()
+
+    for section, (relative, url) in sources.items():
+        checkout = work_root / relative
+        if not checkout.exists():
+            checkout.parent.mkdir(parents=True, exist_ok=True)
+            run("git", "clone", "--no-checkout", url, checkout)
+        revision = revisions[section]
+        run("git", "-C", checkout, "fetch", "--no-tags", "origin", revision)
+        # Keep known local Qt/branding overlays on a reused pinned checkout.
+        # Git stops rather than discarding conflicting local edits.
+        run("git", "-C", checkout, "checkout", "--detach", revision)
+        actual = run("git", "-C", checkout, "rev-parse", "HEAD", capture=True).strip()
+        if actual != revision:
+            raise BuildError(f"Unexpected {section} revision after bootstrap checkout.")
+
+    # unShelve adds General.blueprintrepositories before applying the revisions.
+    # Its add-repository step fetches master, reintroducing incompatible metadata.
+    # These repositories already exist at their pins and Craft discovers them
+    # under BlueprintRoot, so omit only that step in an isolated shelf copy.
+    shelf.remove_option("General", "blueprintrepositories")
+    pinned_shelf = work_root / "udrive-pinned.craft.shelf"
+    with pinned_shelf.open("w", encoding="utf-8") as stream:
+        shelf.write(stream)
+    return revisions["craft/craft-core"], pinned_shelf
 
 
 def brand_blueprint(path):
@@ -265,6 +313,7 @@ def build(args):
     actual_revision = run("git", "-C", master, "rev-parse", "HEAD", capture=True).strip()
     if actual_revision != CRAFTMASTER_REVISION:
         raise BuildError("Unexpected CraftMaster revision. Use a new --work-root for the pinned Windows build.")
+    core_revision, pinned_shelf = prepare_craft_sources(work_root)
     packages = Path(tempfile.mkdtemp(prefix="windows-packages-", dir=work_root))
     override = work_root / "udrive-windows.ini"
     override.write_text(WINDOWS_CRAFT_OVERRIDE)
@@ -273,13 +322,13 @@ def build(args):
     base = [sys.executable, str(master / "CraftMaster.py"), "--config", str(ROOT / ".craft.ini"),
             "--config-override", str(ROOT / ".github/workflows/craft_override.ini"), "--config-override", str(override),
             "--variables", f"Root={work_root}", f"WORKSPACE={work_root}", f"PythonExecutable={sys.executable}",
-            f"PackageOutput={packages}", "CiBuild=False", "CreateCache=False", "--targets", TARGET]
+            f"PackageOutput={packages}", f"CraftCoreRevision={core_revision}", "CiBuild=False", "CreateCache=False", "--targets", TARGET]
 
     def craft(*commands):
         run(*base, *commands, env=env)
 
     craft("--setup")
-    craft("-c", "--unshelve", ROOT / ".craft.shelf")
+    craft("-c", "--unshelve", pinned_shelf)
     use_archived_qt_sources(work_root / "blueprints/craft-blueprints-kde/libs/qt6")
     craft("-c", "--set", f"srcDir={ROOT}", PACKAGE)
     craft("-c", "--set", "args=-DBUILD_TESTING=OFF -DBUILD_SHELL_INTEGRATION=OFF -DWITH_AUTO_UPDATER=OFF", PACKAGE)

@@ -10,6 +10,7 @@ import json
 from pathlib import Path, PureWindowsPath
 import shutil
 import struct
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -96,6 +97,11 @@ class TestWindowsRelease(unittest.TestCase):
                 if "CraftMaster" in strings[2]:
                     return windows.CRAFTMASTER_REVISION + "\n"
                 if "rev-parse" in strings:
+                    shelf = configparser.ConfigParser(interpolation=None)
+                    shelf.read(windows.ROOT / ".craft.shelf")
+                    for section, (relative, _) in windows.CRAFT_SOURCES.items():
+                        if Path(strings[2]).resolve() == (self.root / "craft" / relative).resolve():
+                            return shelf[section]["revision"] + "\n"
                     return "f" * 40 + "\n"
             if "--package" in strings:
                 output = Path(next(a.split("=", 1)[1] for a in strings if a.startswith("PackageOutput=")))
@@ -300,8 +306,11 @@ class TestWindowsRelease(unittest.TestCase):
         config.read([windows.ROOT / '.craft.ini', windows.ROOT / '.github/workflows/craft_override.ini'])
         config['Variables'].update(Root='C:/udrive-build', WORKSPACE='C:/udrive-build',
                                    PythonExecutable='C:/Python312/python.exe',
-                                   PackageOutput='C:/udrive-build/packages', CiBuild='False', CreateCache='False')
+                                   PackageOutput='C:/udrive-build/packages', CiBuild='False', CreateCache='False',
+                                   CraftCoreRevision='a' * 40)
         config.read_string(windows.WINDOWS_CRAFT_OVERRIDE)
+        self.assertEqual(config['General']['CraftRevision'], 'a' * 40)
+        self.assertEqual(config['BlueprintSettings']['craft/craftmaster.ignored'], 'True')
         settings = dict(config['GeneralSettings'])
         self.assertEqual(settings['CodeSigning/MacDeveloperId'], '')
         self.assertEqual(settings['CodeSigning/MacKeychainPath'], '')
@@ -321,6 +330,71 @@ class TestWindowsRelease(unittest.TestCase):
         self.assertEqual(drive.drive, 'Z:')
         self.assertTrue(drive.is_absolute())
 
+    @unittest.skipUnless(shutil.which("git"), "Git is required for the bootstrap regression")
+    def test_new_native_metadata_is_pinned_before_any_craft_parsing(self):
+        # Reproduce an incompatible repository HEAD without any network access:
+        # the pinned older runtime only understands the Windows platform token.
+        sources, revisions = {}, {}
+        shelf = configparser.ConfigParser(interpolation=None)
+        shelf.read(windows.ROOT / ".craft.shelf")
+        for section, (relative, _) in windows.CRAFT_SOURCES.items():
+            repository = self.root / "origins" / Path(relative).name
+            repository.mkdir(parents=True)
+
+            def git(*args):
+                return subprocess.run(["git", "-C", str(repository), *args], check=True,
+                                      text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.strip()
+
+            git("init", "--initial-branch=master")
+            info = repository / "info.ini"
+            info.write_text("[General]\nplatforms = windows\n")
+            git("add", "info.ini")
+            git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Compatible metadata")
+            revisions[section] = git("rev-parse", "HEAD")
+            info.write_text("[General]\nplatforms = native\n")
+            git("add", "info.ini")
+            git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "New incompatible metadata")
+            latest = configparser.ConfigParser(interpolation=None)
+            latest.read(info)
+            with self.assertRaises(KeyError):
+                {"windows": 1}[latest["General"]["platforms"]]
+            sources[section] = (relative, str(repository))
+            shelf[section]["revision"] = revisions[section]
+
+        original_shelf = self.root / "original.shelf"
+        with original_shelf.open("w") as stream:
+            shelf.write(stream)
+        original = original_shelf.read_bytes()
+        work = self.root / "bootstrap"
+        core, pinned_shelf = windows.prepare_craft_sources(work, original_shelf, sources)
+        self.assertEqual(core, revisions["craft/craft-core"])
+        self.assertEqual(original_shelf.read_bytes(), original)
+        pinned = configparser.ConfigParser(interpolation=None)
+        pinned.read(pinned_shelf)
+        self.assertFalse(pinned.has_option("General", "blueprintrepositories"))
+        self.assertEqual(pinned["libs/qt6/qtbase"]["version"], shelf["libs/qt6/qtbase"]["version"])
+        for section, (relative, _) in sources.items():
+            info = configparser.ConfigParser(interpolation=None)
+            info.read(work / relative / "info.ini")
+            # This is the lookup that fails in the screenshot when master is
+            # parsed before the pinned checkout has been selected.
+            self.assertEqual({"windows": 1}[info["General"]["platforms"]], 1)
+            self.assertEqual(pinned[section]["revision"], revisions[section])
+
+    def test_invalid_bootstrap_pin_stops_before_git_or_craft(self):
+        shelf = self.root / "invalid.shelf"
+        shelf.write_text("[General]\nversion=2\n[craft/craft-core]\nrevision=master\n")
+        with patch.object(windows, "run") as run, self.assertRaisesRegex(windows.BuildError, "full pinned commit"):
+            windows.prepare_craft_sources(self.root / "bootstrap", shelf)
+        run.assert_not_called()
+
+    def test_unexpected_bootstrap_checkout_stops_before_unshelving(self):
+        work = self.root / "bootstrap"
+        with patch.object(windows, "run", return_value="0" * 40) as run, self.assertRaisesRegex(windows.BuildError, "Unexpected craft/craft-core"):
+            windows.prepare_craft_sources(work)
+        self.assertFalse((work / "udrive-pinned.craft.shelf").exists())
+        self.assertFalse(any("--unshelve" in call.args for call in run.call_args_list))
+
     def test_test_installer_metadata_does_not_claim_signing_or_install_validation(self):
         args = self.fixture()
         calls = []
@@ -337,6 +411,11 @@ class TestWindowsRelease(unittest.TestCase):
         self.assertTrue(any("--install-deps" in call for call in calls))
         self.assertTrue(any("--package" in call for call in calls))
         self.assertTrue((args.work_root / "blueprints/craft-blueprints-kde/libs/qt6/version_udrive_archive.ini").is_file())
+        unshelve = next(call for call in calls if "--unshelve" in call)
+        self.assertEqual(Path(unshelve[-1]), args.work_root.resolve() / "udrive-pinned.craft.shelf")
+        self.assertLess(next(i for i, call in enumerate(calls) if "checkout" in call and "craft-blueprints-kde" in call[2]),
+                        calls.index(unshelve))
+        self.assertTrue(any(arg.startswith("CraftCoreRevision=") for arg in unshelve))
 
     def test_wrong_payload_architecture_never_produces_a_download(self):
         args = self.fixture(machine=0x014C)

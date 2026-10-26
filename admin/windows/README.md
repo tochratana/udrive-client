@@ -34,6 +34,23 @@ This is an unsigned test package. Production Windows distribution needs the
 publisher's Windows code-signing setup and clean-machine acceptance testing.
 Apple Developer credentials are not used for Windows.
 
+## Dependency bootstrap compatibility
+
+The helper checks out the exact Craft core and blueprint repository commits
+from `.craft.shelf` before running Craft. CraftMaster receives the same core
+revision on every invocation. This prevents newer blueprint metadata (including
+the `native` platform token) from being parsed by the older pinned runtime.
+
+Unshelving uses `udrive-pinned.craft.shelf` inside the build directory. This copy
+keeps the dependency versions/revisions and omits the repository-add step that
+would otherwise fetch `master` before applying those pins. The project's shelf
+is not modified by the helper. Reused checkouts preserve local overlays; if Git
+reports conflicting local edits, use a fresh `--work-root`.
+
+If GitHub Actions previously failed with `KeyError: 'native'`, run the workflow
+against a commit containing this bootstrap fix. Rerunning the old commit uses
+the old helper and does not apply the fix.
+
 ## Build from this Mac using GitHub Actions
 
 The `.github/workflows/windows-build.yml` workflow runs on a Windows 2022 x64

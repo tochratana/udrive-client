@@ -7,6 +7,9 @@ on:
       - '.github/workflows/windows-build.yml'
       - 'admin/windows/**'
       - 'test/test_windows_release.py'
+      - '.craft.ini'
+      - '.craft.shelf'
+      - '.github/workflows/craft_override.ini'
 
 permissions:
   contents: read

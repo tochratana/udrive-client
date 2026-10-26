@@ -7,11 +7,11 @@ version = 2025-09-09
 
 [craft/craft-blueprints-kde]
 version = master
-revision = 945d9fa
+revision = 945d9fab40d1bc8624efe9fc102d4b81e6eee29b
 
 [craft/craft-blueprints-owncloud]
 version = master
-revision = d28bcaf
+revision = d28bcaf7c12dd76385951e95fca8e32e96874609
 
 [craft/craft-core]
 version = master
