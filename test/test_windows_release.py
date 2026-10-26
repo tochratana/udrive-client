@@ -21,6 +21,7 @@ windows = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(windows)
 
 BLUEPRINT = '''
+import os
 class Subinfo:
     def targets(self):
         self.description = "ownCloud Desktop Client"
@@ -104,6 +105,10 @@ class TestWindowsRelease(unittest.TestCase):
                             return shelf[section]["revision"] + "\n"
                     return "f" * 40 + "\n"
             if "--package" in strings:
+                template = Path(kwargs["env"]["UDRIVE_NSIS_SCRIPT"])
+                self.assertTrue(template.is_file())
+                self.assertIn('StrCpy $INSTDIR $UDriveRequestedInstallDir', template.read_text())
+                self.assertFalse(template.is_relative_to(self.root / "craft/craft-clone"))
                 output = Path(next(a.split("=", 1)[1] for a in strings if a.startswith("PackageOutput=")))
                 self.executable(output / "upstream-installer.exe", 0x014C)
                 if extra_installer:
@@ -215,6 +220,7 @@ class TestWindowsRelease(unittest.TestCase):
         self.assertIn('"Unity Workspace"', result)
         self.assertIn('"src/gui/udrive.ico"', result)
         self.assertIn('self.sourceDir() / "COPYING"', result)
+        self.assertIn('self.scriptname = os.environ["UDRIVE_NSIS_SCRIPT"]', result)
         windows.brand_blueprint(path)
         self.assertEqual(path.read_text(), result)
 
@@ -289,6 +295,45 @@ class TestWindowsRelease(unittest.TestCase):
         with self.assertRaises(windows.BuildError):
             windows.preserve_nsis_install_directory(path)
         self.assertEqual(path.read_text(), source)
+
+    def test_selected_nsis_overlay_survives_craftmaster_forced_checkout(self):
+        work = self.root / 'work with spaces'
+        core = work / 'craft-clone'
+        original = core / 'bin/Packager/Nsis/NullsoftInstaller.nsi'
+        original.parent.mkdir(parents=True)
+        original.write_text(NSIS_TEMPLATE)
+
+        def git(*args):
+            subprocess.run(['git', '-C', str(core), *args], check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        git('init')
+        git('add', '.')
+        git('-c', 'user.name=Udrive Test', '-c', 'user.email=test@example.invalid',
+            'commit', '-m', 'Pinned Craft template')
+        # Reproduce the old failure: CraftMaster._init calls checkout -f even
+        # when HEAD is already at the requested pin, erasing tracked overlays.
+        windows.preserve_nsis_install_directory(original)
+        selected = windows.prepare_nsis_template(work)
+        git('checkout', '-f', 'HEAD')
+        self.assertEqual(original.read_text(), NSIS_TEMPLATE)
+
+        blueprint = work / 'blueprints/package.py'
+        blueprint.parent.mkdir(parents=True)
+        blueprint.write_text(BLUEPRINT)
+        windows.brand_blueprint(blueprint)
+        namespace = {}
+        exec(compile(blueprint.read_text(), str(blueprint), 'exec'), namespace)
+        package = namespace['Package']()
+        package.defines = {}
+        package.sourceDir = lambda: self.root
+        package.buildDir = lambda: self.root
+        with patch.dict(windows.os.environ, UDRIVE_NSIS_SCRIPT=str(selected)):
+            package.package()
+        self.assertEqual(Path(package.scriptname), selected)
+        self.assertIn('StrCpy $INSTDIR $UDriveRequestedInstallDir', selected.read_text())
+        windows.prepare_nsis_template(work)
+        self.assertIn('StrCpy $INSTDIR $UDriveRequestedInstallDir', selected.read_text())
 
     def test_non_windows_host_stops_before_downloads_or_output(self):
         args = argparse.Namespace(work_root=self.root / "craft", output_dir=self.root / "output", smoke_test=False)

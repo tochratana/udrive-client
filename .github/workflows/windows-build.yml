@@ -64,7 +64,7 @@ jobs:
           if (Test-Path 'C:\udrive-build\logs') {
             Copy-Item 'C:\udrive-build\logs' -Destination (Join-Path $diagnostics 'craft-logs') -Recurse
           }
-          $template = 'C:\udrive-build\craft-clone\bin\Packager\Nsis\NullsoftInstaller.nsi'
+          $template = 'C:\udrive-build\udrive-nsis\NullsoftInstaller.nsi'
           if (Test-Path $template) {
             Copy-Item $template -Destination $diagnostics
           }

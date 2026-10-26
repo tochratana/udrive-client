@@ -157,6 +157,12 @@ def brand_blueprint(path):
         if source.count(old) != 1:
             raise BuildError("The pinned Craft blueprint has changed; stopped before packaging another product.")
         source = source.replace(old, new)
+    # CraftMaster forcibly checks out craft-core on every invocation. Keep the
+    # installer overlay outside that repository and select it in the blueprint.
+    license_line = '        self.defines["license"] = self.sourceDir() / "COPYING"'
+    script_line = '        self.scriptname = os.environ["UDRIVE_NSIS_SCRIPT"]'
+    if script_line not in source:
+        source = source.replace(license_line, license_line + "\n" + script_line)
     compile(source, str(path), "exec")
     path.write_text(source)
 
@@ -206,6 +212,15 @@ Function .onInit
     if source.count(original) != 1:
         raise BuildError("The Craft NSIS initialization has changed; cannot preserve the requested install folder.")
     path.write_text(source.replace(original, replacement))
+
+
+def prepare_nsis_template(work_root):
+    """Create an overlay that survives CraftMaster's forced core checkout."""
+    template = work_root / "udrive-nsis/NullsoftInstaller.nsi"
+    template.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(work_root / "craft-clone/bin/Packager/Nsis/NullsoftInstaller.nsi", template)
+    preserve_nsis_install_directory(template)
+    return template
 
 
 def smoke_test(installer, prefix, work_root, expected_version):
@@ -318,7 +333,8 @@ def build(args):
     override = work_root / "udrive-windows.ini"
     override.write_text(WINDOWS_CRAFT_OVERRIDE)
     env = os.environ.copy()
-    env.update(APPLICATION_EXECUTABLE="udrive", APPLICATION_SHORTNAME="Udrive", SIGN_PACKAGE="False")
+    env.update(APPLICATION_EXECUTABLE="udrive", APPLICATION_SHORTNAME="Udrive", SIGN_PACKAGE="False",
+               UDRIVE_NSIS_SCRIPT=str(work_root / "udrive-nsis/NullsoftInstaller.nsi"))
     base = [sys.executable, str(master / "CraftMaster.py"), "--config", str(ROOT / ".craft.ini"),
             "--config-override", str(ROOT / ".github/workflows/craft_override.ini"), "--config-override", str(override),
             "--variables", f"Root={work_root}", f"WORKSPACE={work_root}", f"PythonExecutable={sys.executable}",
@@ -336,7 +352,7 @@ def build(args):
     brand_blueprint(work_root / "blueprints/craft-blueprints-owncloud/owncloud/owncloud-client/owncloud-client.py")
     craft("-c", "--set", "args=-DQT_FEATURE_ffmpeg=OFF -DQT_FEATURE_wmf=ON -DQT_DEFAULT_MEDIA_BACKEND=windows", "libs/qt6/qtmultimedia")
     craft("-c", "--install-deps", PACKAGE)
-    preserve_nsis_install_directory(work_root / "craft-clone/bin/Packager/Nsis/NullsoftInstaller.nsi")
+    prepare_nsis_template(work_root)
     craft("-c", "--no-cache", PACKAGE)
     prefix = work_root / TARGET
     if pe_machine(prefix / "bin/udrive.exe") != 0x8664:
