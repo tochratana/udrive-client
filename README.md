@@ -211,9 +211,11 @@ On a Windows x64 machine with Visual Studio 2022 C++ tools, Git and Python
 python admin/windows/build.py --work-root C:\udrive-build
 ```
 
-The helper produces an unsigned test installer and checksum under
+The helper produces a versioned unsigned installer and checksum under
 `build-release-artifacts/windows/`. The included Windows GitHub Actions workflow
-can build it on a Windows runner when started from a Mac. See the
+can build it on a Windows runner when started from a Mac. Pushing a matching
+`windows-vVERSION` tag builds, checks and publishes a GitHub Release with the
+installer. See the
 [Windows build guide](admin/windows/README.md) for prerequisites, installation
 checks and download hosting. The Windows build has not yet been run or validated
 on a Windows machine.

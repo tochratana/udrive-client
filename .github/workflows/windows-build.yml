@@ -2,6 +2,9 @@ name: Udrive Windows installer
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'windows-v*'
   pull_request:
     paths:
       - '.github/workflows/windows-build.yml'
@@ -23,6 +26,8 @@ jobs:
     name: Build and check Windows x64 installer
     runs-on: windows-2022
     timeout-minutes: 180
+    outputs:
+      version: ${{ steps.package.outputs.version }}
     defaults:
       run:
         shell: pwsh
@@ -43,13 +48,20 @@ jobs:
             C:\udrive-build\downloads
           key: udrive-windows-x64-${{ hashFiles('.craft.ini', '.craft.shelf') }}
       - name: Build, package and test installation
+        id: package
         run: |
-          python admin/windows/build.py --work-root C:\udrive-build --output-dir build-release-artifacts/windows --smoke-test 2>&1 | Tee-Object -FilePath windows-build.log
+          $releaseArgs = @()
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $releaseArgs = @('--release-tag', $env:GITHUB_REF_NAME)
+          }
+          python admin/windows/build.py --work-root C:\udrive-build --output-dir build-release-artifacts/windows --smoke-test @releaseArgs 2>&1 | Tee-Object -FilePath windows-build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $metadata = Get-Content 'build-release-artifacts/windows/download.json' -Raw | ConvertFrom-Json
+          "version=$($metadata.version)" >> $env:GITHUB_OUTPUT
       - name: Upload installer and checksum
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: Udrive-Windows-x64-testing
+          name: Udrive-${{ steps.package.outputs.version }}-Windows-x64
           path: build-release-artifacts/windows/*
           if-no-files-found: error
           retention-days: 14
@@ -82,3 +94,29 @@ jobs:
           path: build-release-artifacts/windows-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
+
+  publish-release:
+    name: Publish versioned Windows release
+    needs: windows-installer
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/windows-v')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_VERSION: ${{ needs.windows-installer.outputs.version }}
+    steps:
+      - name: Download the checked installer
+        run: |
+          gh run download "$GITHUB_RUN_ID" --name "Udrive-${RELEASE_VERSION}-Windows-x64" --dir installer
+          cd installer
+          sha256sum --check SHA256SUMS
+      - name: Publish installer and checksum on GitHub Releases
+        working-directory: installer
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "Udrive-${RELEASE_VERSION}-Windows-x64.exe" SHA256SUMS download.json RELEASE-NOTES.md \
+            --verify-tag --draft --title "Udrive ${RELEASE_VERSION} for Windows" --notes-file RELEASE-NOTES.md
+          gh release edit "$GITHUB_REF_NAME" --draft=false

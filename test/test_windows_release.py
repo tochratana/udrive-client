@@ -81,7 +81,7 @@ class TestWindowsRelease(unittest.TestCase):
         nsis.write_text(NSIS_TEMPLATE)
         self.qt_fixture(work)
         self.executable(work / windows.TARGET / "bin/udrive.exe", machine)
-        return argparse.Namespace(work_root=work, output_dir=self.root / "output", smoke_test=False)
+        return argparse.Namespace(work_root=work, output_dir=self.root / "output", smoke_test=False, release_tag="")
 
     def qt_fixture(self, work=None):
         qt_root = (work or self.root) / "blueprints/craft-blueprints-kde/libs/qt6"
@@ -336,7 +336,7 @@ class TestWindowsRelease(unittest.TestCase):
         self.assertIn('StrCpy $INSTDIR $UDriveRequestedInstallDir', selected.read_text())
 
     def test_non_windows_host_stops_before_downloads_or_output(self):
-        args = argparse.Namespace(work_root=self.root / "craft", output_dir=self.root / "output", smoke_test=False)
+        args = argparse.Namespace(work_root=self.root / "craft", output_dir=self.root / "output", smoke_test=False, release_tag="")
         with patch.object(windows.sys, "platform", "darwin"), patch.object(windows, "run") as runner:
             with self.assertRaises(windows.BuildError):
                 windows.build(args)
@@ -440,19 +440,21 @@ class TestWindowsRelease(unittest.TestCase):
         self.assertFalse((work / "udrive-pinned.craft.shelf").exists())
         self.assertFalse(any("--unshelve" in call.args for call in run.call_args_list))
 
-    def test_test_installer_metadata_does_not_claim_signing_or_install_validation(self):
+    def test_versioned_installer_metadata_does_not_claim_signing_or_install_validation(self):
         args = self.fixture()
         calls = []
         with patch.object(windows.sys, "platform", "win32"), patch.object(windows.shutil, "which", return_value="git"), \
              patch.object(windows, "run", side_effect=self.fake_build(calls)):
             windows.build(args)
         metadata = json.loads((args.output_dir / "download.json").read_text())
-        self.assertEqual(metadata["channel"], "testing")
+        self.assertEqual(metadata["channel"], "build")
+        self.assertEqual(metadata["filename"], f"Udrive-{windows.version()}-Windows-x64.exe")
         self.assertEqual(metadata["signature"], "unsigned")
         self.assertFalse(metadata["installed_smoke_test"])
         self.assertEqual(metadata["architecture"], "x86_64")
         self.assertEqual(metadata["sha256"], windows.sha256(args.output_dir / metadata["filename"]))
-        self.assertTrue((args.output_dir / "TESTING-ONLY.txt").is_file())
+        self.assertTrue((args.output_dir / "RELEASE-NOTES.md").is_file())
+        self.assertFalse((args.output_dir / "TESTING-ONLY.txt").exists())
         self.assertTrue(any("--install-deps" in call for call in calls))
         self.assertTrue(any("--package" in call for call in calls))
         self.assertTrue((args.work_root / "blueprints/craft-blueprints-kde/libs/qt6/version_udrive_archive.ini").is_file())
@@ -461,6 +463,46 @@ class TestWindowsRelease(unittest.TestCase):
         self.assertLess(next(i for i, call in enumerate(calls) if "checkout" in call and "craft-blueprints-kde" in call[2]),
                         calls.index(unshelve))
         self.assertTrue(any(arg.startswith("CraftCoreRevision=") for arg in unshelve))
+
+    def test_release_tag_must_match_version_before_building(self):
+        with patch.object(windows, "run") as run:
+            with self.assertRaisesRegex(windows.BuildError, "must match VERSION.cmake"):
+                windows.validate_release("windows-v0.0.0", True)
+        run.assert_not_called()
+
+    def test_release_requires_install_validation_and_clean_checkout(self):
+        tag = f"windows-v{windows.version()}"
+        with patch.object(windows, "run", return_value=" M src/gui/main.cpp\n"):
+            with self.assertRaisesRegex(windows.BuildError, "require --smoke-test"):
+                windows.validate_release(tag, False)
+            with self.assertRaisesRegex(windows.BuildError, "clean source checkout"):
+                windows.validate_release(tag, True)
+
+    def test_tagged_installer_records_stable_version_and_passed_smoke_test(self):
+        args = self.fixture()
+        args.release_tag = f"windows-v{windows.version()}"
+        args.smoke_test = True
+        with patch.object(windows.sys, "platform", "win32"), patch.object(windows.shutil, "which", return_value="git"), \
+             patch.object(windows, "run", side_effect=self.fake_build([])), patch.object(windows, "smoke_test") as smoke:
+            windows.build(args)
+        smoke.assert_called_once()
+        metadata = json.loads((args.output_dir / "download.json").read_text())
+        self.assertEqual(metadata["channel"], "stable")
+        self.assertEqual(metadata["release_tag"], args.release_tag)
+        self.assertEqual(metadata["signature"], "unsigned")
+        self.assertTrue(metadata["installed_smoke_test"])
+        self.assertIn("checks: passed", (args.output_dir / "RELEASE-NOTES.md").read_text())
+
+    def test_failed_release_smoke_test_does_not_export_installer(self):
+        args = self.fixture()
+        args.release_tag = f"windows-v{windows.version()}"
+        args.smoke_test = True
+        with patch.object(windows.sys, "platform", "win32"), patch.object(windows.shutil, "which", return_value="git"), \
+             patch.object(windows, "run", side_effect=self.fake_build([])), \
+             patch.object(windows, "smoke_test", side_effect=windows.BuildError("Startup failed")):
+            with self.assertRaisesRegex(windows.BuildError, "Startup failed"):
+                windows.build(args)
+        self.assertFalse(args.output_dir.exists())
 
     def test_wrong_payload_architecture_never_produces_a_download(self):
         args = self.fixture(machine=0x014C)

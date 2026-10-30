@@ -25,13 +25,15 @@ It does not sign in to accounts or start file synchronization.
 
 Outputs appear under `build-release-artifacts/windows/run-.../`:
 
-- `Udrive-VERSION-Windows-x64-TESTING-ONLY.exe` — unsigned NSIS test installer.
+- `Udrive-VERSION-Windows-x64.exe` — versioned unsigned NSIS installer.
 - `SHA256SUMS` — SHA-256 checksum.
 - `download.json` — version, size, architecture and installation-test result.
-- `TESTING-ONLY.txt` — package status.
+- `RELEASE-NOTES.md` — installation requirements, signing status and checks.
 
-This is an unsigned test package. Production Windows distribution needs the
-publisher's Windows code-signing setup and clean-machine acceptance testing.
+This is an unsigned installer. Windows code signing is recommended for public
+distribution, but is not required to offer this `.exe` for download. Windows may
+show SmartScreen or unknown-publisher warnings. Run clean-machine acceptance
+checks, including sign-in and synchronization, before distributing it to customers.
 Apple Developer credentials are not used for Windows.
 
 ## Dependency bootstrap compatibility
@@ -55,8 +57,10 @@ the old helper and does not apply the fix.
 
 The `.github/workflows/windows-build.yml` workflow runs on a Windows 2022 x64
 runner. It builds the installer, checks installation and startup, and uploads
-the installer/checksum as the `Udrive-Windows-x64-testing` artifact. It does not
-publish a release or change the download website.
+the installer/checksum as the `Udrive-VERSION-Windows-x64` artifact. Manual and
+pull-request builds do not publish a release or change the download website.
+Existing workflow runs retain their old artifact names; start a new run from
+the updated commit to get versioned names.
 
 If a run fails, download `Udrive-Windows-build-diagnostics` from its Artifacts
 section. It contains the build transcript, installed-file list (when installation
@@ -76,6 +80,41 @@ gh workflow run windows-build.yml --repo tochratana/udrive-client
 GitHub authentication is needed to upload/run the workflow and retrieve its
 artifact. It is not needed by the download website or by customers downloading
 an installer. GitHub runner usage follows the repository's Actions plan.
+
+## Publish a versioned GitHub Release
+
+The version comes from `VERSION.cmake` (currently `7.1.1`). After committing and
+pushing the updated workflow and build helper, tag that commit:
+
+```bash
+git tag -a windows-v7.1.1 -m "Udrive 7.1.1 for Windows"
+git push ratana windows-v7.1.1
+```
+
+In this checkout, `ratana` points to `tochratana/udrive-client`; check `git remote -v`
+before pushing from another checkout. The upstream `origin` is not the Udrive fork.
+Use a new version in `VERSION.cmake` and a matching tag for each subsequent release.
+Do not move or replace an existing published tag.
+
+Pushing `windows-v*` starts the Windows workflow. The helper rejects a version
+mismatch, a dirty checkout or a release without the installation smoke test.
+After the build and checks pass, a separate publishing job verifies the checksum
+and creates a regular GitHub Release named **Udrive VERSION for Windows** with
+the `.exe`, `SHA256SUMS`, `download.json` and release notes. The release starts as
+a draft during asset upload and is published only after upload succeeds.
+If publishing fails and leaves a draft, inspect that draft and finish publishing
+it from GitHub after verifying all four assets; rerunning will not overwrite an
+existing release. The repository must allow the publishing job's `GITHUB_TOKEN`
+to write repository contents; no personal token secret is required.
+
+Tagged downloads use `channel: stable`; other builds use `channel: build`.
+Both retain the true `signature: unsigned` status. A release tag does not sign
+the executable or imply that every application feature was tested.
+
+Users download the installer from the repository's **Releases** page. This
+workflow does not upload to the Udrive website. For a private repository, release
+downloads also require repository access; use your download website for public
+distribution.
 
 ## Add the finished installer to the website
 

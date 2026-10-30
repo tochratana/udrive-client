@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Build a Udrive x64 test installer on Windows with the pinned Craft dependencies."""
+"""Build a versioned Udrive x64 installer with the pinned Craft dependencies."""
 
 import argparse
 import configparser
@@ -308,7 +308,20 @@ def smoke_test(installer, prefix, work_root, expected_version):
                         raise BuildError(f"Application validation passed, but test uninstall failed: {error}") from error
 
 
+def validate_release(tag, smoke_test):
+    if not tag:
+        return
+    expected = f"windows-v{version()}"
+    if tag != expected:
+        raise BuildError(f"Release tag must match VERSION.cmake: expected {expected}.")
+    if not smoke_test:
+        raise BuildError("Tagged releases require --smoke-test.")
+    if run("git", "-C", ROOT, "status", "--porcelain", capture=True).strip():
+        raise BuildError("Tagged releases require a clean source checkout.")
+
+
 def build(args):
+    validate_release(args.release_tag, args.smoke_test)
     if sys.platform != "win32":
         raise BuildError("This build needs Windows x64 (a Windows PC, VM, or GitHub Actions Windows runner). This Mac has only Mac build dependencies.")
     if sys.version_info < (3, 12):
@@ -365,18 +378,26 @@ def build(args):
     if args.smoke_test:
         smoke_test(installers[0], prefix, work_root, app_version)
     output.mkdir(parents=True)
-    filename = f"Udrive-{app_version}-Windows-x64-TESTING-ONLY.exe"
+    filename = f"Udrive-{app_version}-Windows-x64.exe"
     destination = output / filename
     shutil.copy2(installers[0], destination)
-    metadata = {"schema_version": 1, "platform": "windows", "channel": "testing", "version": app_version,
+    metadata = {"schema_version": 1, "platform": "windows", "channel": "stable" if args.release_tag else "build", "version": app_version,
+                "release_tag": args.release_tag,
                 "architecture": "x86_64", "minimum_windows": "10.1809", "filename": filename,
                 "size_bytes": destination.stat().st_size, "sha256": sha256(destination), "signature": "unsigned",
                 "installed_smoke_test": args.smoke_test, "source_commit": run("git", "-C", ROOT, "rev-parse", "HEAD", capture=True).strip(),
                 "source_dirty": bool(run("git", "-C", ROOT, "status", "--porcelain", capture=True).strip())}
     (output / "download.json").write_text(json.dumps(metadata, indent=2) + "\n")
     (output / "SHA256SUMS").write_text(f'{metadata["sha256"]}  {filename}\n')
-    (output / "TESTING-ONLY.txt").write_text("Unsigned Udrive Windows x64 test installer. Not a signed production release.\n")
-    print(f"Windows test installer: {destination}")
+    (output / "RELEASE-NOTES.md").write_text(
+        f"# Udrive {app_version} for Windows\n\n"
+        "Download the `.exe` installer for Windows 10 (1809) or later, x64.\n\n"
+        "This installer is unsigned. Windows may display SmartScreen or unknown-publisher warnings.\n\n"
+        f"Automated install, runtime/version and uninstall checks: {'passed' if args.smoke_test else 'not run'}.\n"
+        "These checks do not cover every application feature or live-server integration.\n\n"
+        "SHA256SUMS contains the installer checksum; download.json records the source commit and build details.\n",
+        encoding="utf-8")
+    print(f"Windows installer: {destination}")
 
 
 def main(argv=None):
@@ -384,6 +405,7 @@ def main(argv=None):
     parser.add_argument("--work-root", type=Path, default=ROOT / "build-windows")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build-release-artifacts/windows" / datetime.now(timezone.utc).strftime("run-%Y%m%d-%H%M%S"))
     parser.add_argument("--smoke-test", action="store_true", help="Install and test on a clean Windows machine, then uninstall")
+    parser.add_argument("--release-tag", default="", help="Publishable Windows tag matching windows-vVERSION; requires --smoke-test")
     args = parser.parse_args(argv)
     try:
         build(args)
